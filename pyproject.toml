@@ -85,7 +85,3 @@ warn_unused_ignores = true
 [[tool.mypy.overrides]]
 module = "tests.*"
 warn_unused_ignores = false
-
-[[tool.mypy.overrides]]
-module = ["provider.auth", "provider.provider"]
-disallow_subclassing_any = false
