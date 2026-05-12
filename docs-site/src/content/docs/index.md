@@ -16,7 +16,7 @@ description: Documentation for the FastMCP Server provider for Music Assistant
 [![Stars](https://img.shields.io/github/stars/trudenboy/ma-provider-mcp?style=flat&logo=github)](https://github.com/trudenboy/ma-provider-mcp/stargazers)
 
 
-<div class="topic-pills"> <code>music-assistant</code> <code>home-assistant</code> <code>python</code> <code>plugin-provider</code> <code>mcp</code> <code>ai</code> <code>fastmcp</code> <code>mcp-server</code> <code>claude-code</code> <code>codex</code> <code>cursor</code> <code>ai-agents</code> <code>llm-tools</code>
+<div class="topic-pills"> <code>music-assistant</code> <code>home-assistant</code> <code>python</code> <code>plugin-provider</code> <code>mcp</code> <code>ai</code> <code>fastmcp</code> <code>mcp-server</code> <code>claude-code</code> <code>codex</code> <code>cursor</code> <code>chatgpt</code> <code>gemini</code> <code>vscode</code> <code>cline</code> <code>zed</code> <code>ai-agents</code> <code>llm-tools</code>
 </div>
 
 
