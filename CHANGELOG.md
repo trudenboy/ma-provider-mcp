@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.7] — 2026-05-12
+
+### Fixed
+- **Info label rendered an invalid URL when `mount_path` was entered
+  without a leading slash** — a value like `mcp/v1` produced
+  `…:8095mcp/v1` even though the runtime itself normalises it. The label
+  now mirrors the runtime's `"/" + raw.strip("/")` normalisation.
+
 ## [0.3.6] — 2026-05-12
 
 ### Added
@@ -21,10 +29,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the active client's forwarded host + ingress path (the value Music
   Assistant already derives from `X-Forwarded-Host` / `X-Ingress-Path`) so
   the link opens at the same origin the user is on.
-- **Info label rendered an invalid URL when `mount_path` was entered
-  without a leading slash** — a value like `mcp/v1` produced
-  `…:8095mcp/v1` even though the runtime itself normalises it. The label
-  now mirrors the runtime's `"/" + raw.strip("/")` normalisation.
 
 ## [0.3.5] — 2026-05-10
 
