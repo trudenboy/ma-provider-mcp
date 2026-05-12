@@ -1,5 +1,16 @@
 # ma-provider-mcp
 
+
+<!-- >>> ma-provider-tools sync (readme header) — DO NOT EDIT >>> -->
+[![CI](https://github.com/trudenboy/ma-provider-mcp/actions/workflows/test.yml/badge.svg)](https://github.com/trudenboy/ma-provider-mcp/actions/workflows/test.yml)
+[![Release](https://img.shields.io/github/v/release/trudenboy/ma-provider-mcp?display_name=tag)](https://github.com/trudenboy/ma-provider-mcp/releases/latest)
+[![License](https://img.shields.io/github/license/trudenboy/ma-provider-mcp)](LICENSE)
+[![Music Assistant](https://img.shields.io/badge/Music%20Assistant-provider-9070B8?logo=python&logoColor=white)](https://www.music-assistant.io/)
+[![Stars](https://img.shields.io/github/stars/trudenboy/ma-provider-mcp?style=flat&logo=github)](https://github.com/trudenboy/ma-provider-mcp/stargazers)
+
+**📖 [Documentation](https://trudenboy.github.io/ma-provider-mcp/)** · **🔄 [Changelog](CHANGELOG.md)** · **🐛 [Issues](https://github.com/trudenboy/ma-provider-mcp/issues)** · **💬 [Discussions](https://github.com/trudenboy/ma-provider-mcp/discussions)**
+<!-- <<< ma-provider-tools sync (readme header) <<< -->
+
 **MCP Server** plugin provider for [Music Assistant](https://github.com/music-assistant/server).
 
 Exposes MA's library, queue, playback, players, and metadata controllers as a
