@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.6] — 2026-05-12
+
+### Added
+- **Connect Wizard external-URL config (`connect_external_url`)** — optional
+  fallback that prepends an explicit base URL to the wizard link when the
+  reverse-proxy / ingress headers aren't visible to Music Assistant. Use it
+  only when the auto-detection below cannot reach the right URL.
+
+### Fixed
+- **Open Connect Wizard opened the wrong URL behind Home Assistant add-on
+  ingress** — the action emitted a path-only link (`/mcp/v1/connect?…`)
+  which the browser resolved against the HA origin and stripped the
+  `/<addon-slug>` ingress prefix, landing on a 404. The wizard now reuses
+  the active client's forwarded host + ingress path (the value Music
+  Assistant already derives from `X-Forwarded-Host` / `X-Ingress-Path`) so
+  the link opens at the same origin the user is on.
+
 ## [0.3.5] — 2026-05-10
 
 ### Fixed

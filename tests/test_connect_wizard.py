@@ -21,9 +21,11 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
+from provider import _detect_external_base_url, _dispatch_open_connect
 from provider.connect.actions import handle_open_connect_action
 from provider.connect.clients import CLIENTS, lookup_client
 from provider.connect.mount import mount_connect_wizard
+from provider.constants import CONF_CONNECT_EXTERNAL_URL
 
 from .conftest import FakeWebserver, build_aiohttp_app
 
@@ -347,6 +349,231 @@ async def test_action_handler_no_user_signals_plain_url(wizard_mass: MagicMock) 
     url = kwargs.get("data") if "data" in kwargs else args[-1]
     assert isinstance(url, str)
     assert "bootstrap=" not in url
+
+
+async def test_action_handler_external_base_url_prepended(
+    wizard_mass: MagicMock, mock_user: MagicMock
+) -> None:
+    """When ``external_base_url`` is provided, the signalled URL is fully qualified.
+
+    Covers HA add-on ingress, where the path-only URL drops the ingress prefix
+    and the wizard opens at the wrong location.
+    """
+    await handle_open_connect_action(
+        wizard_mass,
+        current_user=mock_user,
+        mount_path="/mcp/v1",
+        external_base_url="https://ha.example.com/d5369777_music_assistant_dev",
+    )
+
+    wizard_mass.signal_event.assert_called_once()
+    args, kwargs = wizard_mass.signal_event.call_args
+    url = kwargs.get("data") if "data" in kwargs else args[-1]
+    assert isinstance(url, str)
+    assert url.startswith("https://ha.example.com/d5369777_music_assistant_dev/mcp/v1/connect")
+    assert "bootstrap=jwt-xyz" in url
+
+
+async def test_action_handler_external_base_url_strips_trailing_slash(
+    wizard_mass: MagicMock,
+) -> None:
+    """A trailing slash on ``external_base_url`` must not produce a double-slash."""
+    await handle_open_connect_action(
+        wizard_mass,
+        current_user=None,
+        mount_path="/mcp/v1",
+        external_base_url="https://ha.example.com/addon/",
+    )
+
+    args, kwargs = wizard_mass.signal_event.call_args
+    url = kwargs.get("data") if "data" in kwargs else args[-1]
+    assert url == "https://ha.example.com/addon/mcp/v1/connect"
+
+
+async def test_action_handler_empty_external_base_url_falls_back_to_path(
+    wizard_mass: MagicMock,
+) -> None:
+    """An empty / ``None`` ``external_base_url`` preserves the legacy path-only URL."""
+    await handle_open_connect_action(
+        wizard_mass,
+        current_user=None,
+        mount_path="/mcp/v1",
+        external_base_url="",
+    )
+
+    args, kwargs = wizard_mass.signal_event.call_args
+    url = kwargs.get("data") if "data" in kwargs else args[-1]
+    assert url == "/mcp/v1/connect"
+
+
+# ── Dispatch: WS-client auto-detect + config-override fallback ───────────────
+
+
+def _matching_user() -> SimpleNamespace:
+    return SimpleNamespace(user_id="u1", username="tester")
+
+
+def test_detect_external_base_url_prefers_matching_client() -> None:
+    """The detector returns the ``base_url`` of the WS client owned by the user."""
+    user = _matching_user()
+    other = SimpleNamespace(user_id="u2", username="someone-else")
+    clients = [
+        SimpleNamespace(
+            _authenticated_user=other,
+            base_url="https://wrong.example.com",
+        ),
+        SimpleNamespace(
+            _authenticated_user=user,
+            base_url="https://ha.example.com/d5369777_music_assistant_dev",
+        ),
+    ]
+    mass = MagicMock()
+    mass.webserver.clients = clients
+
+    assert (
+        _detect_external_base_url(mass, user)
+        == "https://ha.example.com/d5369777_music_assistant_dev"
+    )
+
+
+def test_detect_external_base_url_returns_none_without_match() -> None:
+    """No matching client → ``None`` so the dispatcher can fall through."""
+    user = _matching_user()
+    clients = [
+        SimpleNamespace(
+            _authenticated_user=SimpleNamespace(user_id="other", username="other"),
+            base_url="https://other.example.com",
+        ),
+        SimpleNamespace(_authenticated_user=user, base_url=None),
+    ]
+    mass = MagicMock()
+    mass.webserver.clients = clients
+
+    assert _detect_external_base_url(mass, user) is None
+
+
+def test_detect_external_base_url_handles_no_user() -> None:
+    """No current user → ``None`` (the dispatcher then tries the config override)."""
+    mass = MagicMock()
+    mass.webserver.clients = []
+
+    assert _detect_external_base_url(mass, None) is None
+
+
+def _install_fake_ma_auth_middleware(monkeypatch: pytest.MonkeyPatch, user: object) -> None:
+    """Make ``get_current_user()`` return ``user`` inside ``_dispatch_open_connect``.
+
+    The provider imports ``music_assistant.controllers.webserver.helpers.auth_middleware``
+    lazily; ``music_assistant`` is an optional / dev-only dep, so we inject a
+    stub module tree into ``sys.modules`` rather than importing the real one.
+    """
+    import sys  # noqa: PLC0415
+    import types  # noqa: PLC0415
+
+    pkg = types.ModuleType("music_assistant")
+    pkg.__path__ = []  # type: ignore[attr-defined]
+    controllers = types.ModuleType("music_assistant.controllers")
+    controllers.__path__ = []  # type: ignore[attr-defined]
+    webserver_pkg = types.ModuleType("music_assistant.controllers.webserver")
+    webserver_pkg.__path__ = []  # type: ignore[attr-defined]
+    helpers_pkg = types.ModuleType("music_assistant.controllers.webserver.helpers")
+    helpers_pkg.__path__ = []  # type: ignore[attr-defined]
+    auth_mod = types.ModuleType("music_assistant.controllers.webserver.helpers.auth_middleware")
+    auth_mod.get_current_user = lambda: user  # type: ignore[attr-defined]
+
+    monkeypatch.setitem(sys.modules, "music_assistant", pkg)
+    monkeypatch.setitem(sys.modules, "music_assistant.controllers", controllers)
+    monkeypatch.setitem(sys.modules, "music_assistant.controllers.webserver", webserver_pkg)
+    monkeypatch.setitem(sys.modules, "music_assistant.controllers.webserver.helpers", helpers_pkg)
+    monkeypatch.setitem(
+        sys.modules,
+        "music_assistant.controllers.webserver.helpers.auth_middleware",
+        auth_mod,
+    )
+
+
+async def test_dispatch_detects_ws_client_base_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End-to-end dispatch: the WS client's ingress base_url ends up in the URL."""
+    user = _matching_user()
+    _install_fake_ma_auth_middleware(monkeypatch, user)
+
+    signalled: list[str] = []
+    mass = MagicMock()
+    mass.webserver.clients = [
+        SimpleNamespace(
+            _authenticated_user=user,
+            base_url="https://ha.example.com/d5369777_music_assistant_dev",
+        )
+    ]
+    mass.webserver.auth.create_token = AsyncMock(return_value="jwt-xyz")
+    mass.signal_event = MagicMock(
+        side_effect=lambda _evt, object_id, data: signalled.append(data)  # noqa: ARG005
+    )
+
+    await _dispatch_open_connect(
+        mass,
+        {"mount_path": "/mcp/v1", "session_id": "sess-x"},
+    )
+
+    assert signalled, "expected signal_event to be called"
+    url = signalled[0]
+    assert url.startswith("https://ha.example.com/d5369777_music_assistant_dev/mcp/v1/connect")
+    assert "bootstrap=jwt-xyz" in url
+
+
+async def test_dispatch_falls_back_to_config_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When no WS client matches, an explicit ``connect_external_url`` wins."""
+    user = _matching_user()
+    _install_fake_ma_auth_middleware(monkeypatch, user)
+
+    signalled: list[str] = []
+    mass = MagicMock()
+    mass.webserver.clients = []
+    mass.webserver.auth.create_token = AsyncMock(return_value="jwt-xyz")
+    mass.signal_event = MagicMock(
+        side_effect=lambda _evt, object_id, data: signalled.append(data)  # noqa: ARG005
+    )
+
+    await _dispatch_open_connect(
+        mass,
+        {
+            "mount_path": "/mcp/v1",
+            "session_id": "sess-y",
+            CONF_CONNECT_EXTERNAL_URL: "https://override.example.com",
+        },
+    )
+
+    url = signalled[0]
+    assert url.startswith("https://override.example.com/mcp/v1/connect")
+
+
+async def test_dispatch_falls_back_to_path_only_when_nothing_known(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No WS match and no override → legacy path-only URL (no regression)."""
+    user = _matching_user()
+    _install_fake_ma_auth_middleware(monkeypatch, user)
+
+    signalled: list[str] = []
+    mass = MagicMock()
+    mass.webserver.clients = []
+    mass.webserver.auth.create_token = AsyncMock(return_value="jwt-xyz")
+    mass.signal_event = MagicMock(
+        side_effect=lambda _evt, object_id, data: signalled.append(data)  # noqa: ARG005
+    )
+
+    await _dispatch_open_connect(
+        mass,
+        {"mount_path": "/mcp/v1", "session_id": "sess-z"},
+    )
+
+    url = signalled[0]
+    assert url.startswith("/mcp/v1/connect")
+    assert "://" not in url.split("?", 1)[0]
 
 
 # ── Client template integrity ────────────────────────────────────────────────
