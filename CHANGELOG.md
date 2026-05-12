@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.10] — 2026-05-12
+
+### Fixed
+- **Claude Code wizard snippet used a non-existent `--url` flag** —
+  `claude mcp add` takes the server URL as the positional argument
+  after the name, so the previous template (`claude mcp add ma
+  --transport http --url <URL> …`) silently registered an
+  unreachable server. Snippet now renders `claude mcp add ma <URL>
+  --transport http --header "Authorization: Bearer <TOKEN>"`.
+
 ## [0.3.9] — 2026-05-12
 
 ### Fixed
