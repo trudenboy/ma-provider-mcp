@@ -505,13 +505,13 @@ def _install_fake_ma_auth_middleware(monkeypatch: pytest.MonkeyPatch, user: obje
     import types  # noqa: PLC0415
 
     pkg = types.ModuleType("music_assistant")
-    pkg.__path__ = []  # type: ignore[attr-defined]
+    pkg.__path__ = []
     controllers = types.ModuleType("music_assistant.controllers")
-    controllers.__path__ = []  # type: ignore[attr-defined]
+    controllers.__path__ = []
     webserver_pkg = types.ModuleType("music_assistant.controllers.webserver")
-    webserver_pkg.__path__ = []  # type: ignore[attr-defined]
+    webserver_pkg.__path__ = []
     helpers_pkg = types.ModuleType("music_assistant.controllers.webserver.helpers")
-    helpers_pkg.__path__ = []  # type: ignore[attr-defined]
+    helpers_pkg.__path__ = []
     auth_mod = types.ModuleType("music_assistant.controllers.webserver.helpers.auth_middleware")
     auth_mod.get_current_user = lambda: user  # type: ignore[attr-defined]
 
