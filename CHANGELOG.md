@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.9] — 2026-05-12
+
+### Fixed
+- **Player "state" field always read as `"unknown"`** in MCP tool / resource
+  responses. The brief reader looked up `player.state`, but Music
+  Assistant's `Player` exposes the canonical enum at `player.playback_state`
+  (`state` is only a serialisation alias on the wire). Now reads
+  `playback_state` first and keeps the legacy `state` lookup as a fallback
+  for older shims.
+- **`current_item` rendered the whole `PlayerMedia` dataclass** —
+  responses leaked `PlayerMedia(uri=…, media_type=…, …)` blobs that
+  inflated LLM context for no value. Prefer `PlayerMedia.title`, fall
+  back to `PlayerMedia.uri`.
+- **`get_active_queue` materialised an unbounded queue** when a client
+  passed a large `include_items`. Clamp to 500 (Music Assistant's own
+  queue page size and the `queue://` resource cap).
+
 ## [0.3.8] — 2026-05-12
 
 ### Fixed
