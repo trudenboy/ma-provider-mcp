@@ -21,7 +21,11 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
-from provider import _detect_external_base_url, _dispatch_open_connect
+from provider import (
+    _detect_external_base_url,
+    _dispatch_open_connect,
+    _sanitize_external_base_url,
+)
 from provider.connect.actions import handle_open_connect_action
 from provider.connect.clients import CLIENTS, lookup_client
 from provider.connect.mount import mount_connect_wizard
@@ -460,6 +464,36 @@ def test_detect_external_base_url_handles_no_user() -> None:
     assert _detect_external_base_url(mass, None) is None
 
 
+@pytest.mark.parametrize(
+    "candidate",
+    [
+        "javascript:alert(1)",
+        "//attacker.example.com",
+        "ha.example.com/addon",  # missing scheme — would be treated as path-relative
+        "ftp://example.com",
+        "",
+        "   ",
+        None,
+    ],
+)
+def test_sanitize_external_base_url_rejects_unsafe(candidate: str | None) -> None:
+    """Only ``http(s)://`` values survive — anything else is dropped."""
+    assert _sanitize_external_base_url(candidate) is None
+
+
+@pytest.mark.parametrize(
+    "candidate",
+    [
+        "https://ha.example.com/d5369777_music_assistant_dev",
+        "http://localhost:8095",
+        "HTTPS://Upper.Case.Example.COM",  # case-insensitive scheme check
+    ],
+)
+def test_sanitize_external_base_url_accepts_http_schemes(candidate: str) -> None:
+    """``http://`` and ``https://`` values pass through (whitespace trimmed)."""
+    assert _sanitize_external_base_url(f"  {candidate}  ") == candidate
+
+
 def _install_fake_ma_auth_middleware(monkeypatch: pytest.MonkeyPatch, user: object) -> None:
     """Make ``get_current_user()`` return ``user`` inside ``_dispatch_open_connect``.
 
@@ -549,6 +583,39 @@ async def test_dispatch_falls_back_to_config_override(
 
     url = signalled[0]
     assert url.startswith("https://override.example.com/mcp/v1/connect")
+
+
+async def test_dispatch_rejects_unsafe_override_and_falls_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An override with a non-``http(s)`` scheme is dropped → path-only fallback.
+
+    Guards against an admin pasting ``javascript:…`` into the config; the
+    frontend would otherwise hand that straight to ``window.open``.
+    """
+    user = _matching_user()
+    _install_fake_ma_auth_middleware(monkeypatch, user)
+
+    signalled: list[str] = []
+    mass = MagicMock()
+    mass.webserver.clients = []
+    mass.webserver.auth.create_token = AsyncMock(return_value="jwt-xyz")
+    mass.signal_event = MagicMock(
+        side_effect=lambda _evt, object_id, data: signalled.append(data)  # noqa: ARG005
+    )
+
+    await _dispatch_open_connect(
+        mass,
+        {
+            "mount_path": "/mcp/v1",
+            "session_id": "sess-bad",
+            CONF_CONNECT_EXTERNAL_URL: "javascript:alert(1)",
+        },
+    )
+
+    url = signalled[0]
+    assert url.startswith("/mcp/v1/connect")
+    assert "javascript" not in url
 
 
 async def test_dispatch_falls_back_to_path_only_when_nothing_known(

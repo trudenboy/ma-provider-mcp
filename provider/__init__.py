@@ -52,6 +52,25 @@ async def get_config_entries(
     return build_config_entries(mass, values or {})
 
 
+def _sanitize_external_base_url(value: str | None) -> str | None:
+    """Return ``value`` if it is a plausible ``http(s)://`` base URL, else ``None``.
+
+    Defends against an admin pasting (or a misbehaving proxy injecting) a
+    scheme-less or ``javascript:`` URL into the Connect Wizard link, which
+    the MA frontend would feed straight to ``window.open``.
+    """
+    if not value:
+        return None
+    candidate = value.strip()
+    if not candidate.lower().startswith(("http://", "https://")):
+        LOGGER.warning(
+            "Connect Wizard: ignoring external base URL with unsupported scheme: %r",
+            candidate,
+        )
+        return None
+    return candidate
+
+
 def _detect_external_base_url(mass: MusicAssistant, current_user: Any) -> str | None:
     """Return the external base URL for the current user's active WS client.
 
@@ -124,11 +143,11 @@ async def _dispatch_open_connect(
         LOGGER.debug("Connect Wizard: get_current_user lookup failed", exc_info=True)
         current_user = None
 
-    external_base_url = _detect_external_base_url(mass, current_user)
+    external_base_url = _sanitize_external_base_url(_detect_external_base_url(mass, current_user))
     if not external_base_url:
-        override = str(values.get(CONF_CONNECT_EXTERNAL_URL) or "").strip()
-        if override:
-            external_base_url = override
+        external_base_url = _sanitize_external_base_url(
+            str(values.get(CONF_CONNECT_EXTERNAL_URL) or "")
+        )
 
     try:
         await handle_open_connect_action(
