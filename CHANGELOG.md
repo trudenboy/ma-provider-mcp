@@ -10,15 +10,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - **Connect Wizard login form appeared under Home Assistant add-on
   ingress** even after v0.3.6 made the URL itself ingress-aware — the
-  browser's `Origin: https://<ha>` was never on the strict allowlist (it's
-  built from the Docker-internal `base_url`), so `POST /mcp/v1/connect/
-  exchange` returned 403 and the wizard fell back to the username/password
-  form. Origin checks now accept a request when (a) it arrives on the
-  trusted HA-ingress socket (verified via Music Assistant's
-  `is_request_from_ingress`) and (b) the `Origin` matches the request's
-  `X-Forwarded-Host`. Same fallback applies to the main `/mcp/v1` MCP
-  endpoint. Users no longer need to copy their HA hostname into
-  `extra_allowed_origins`.
+  browser's `Origin: https://<ha>` was never on the strict allowlist
+  (it's built from the Docker-internal `base_url`), so
+  `POST /mcp/v1/connect/exchange` returned 403 and the wizard fell back
+  to the username/password form. Origin checks now accept a request
+  when (a) it arrives on the trusted HA-ingress socket (verified via
+  Music Assistant's `is_request_from_ingress`) and (b) the `Origin`
+  matches the request's `X-Forwarded-Host`. Same fallback applies to
+  the main `/mcp/v1` MCP endpoint. Users no longer need to copy their
+  HA hostname into `extra_allowed_origins`.
 
 ## [0.3.7] — 2026-05-12
 

@@ -178,12 +178,22 @@ def _is_origin_allowed_for_request(
         from music_assistant.controllers.webserver.helpers.auth_middleware import (  # noqa: PLC0415
             is_request_from_ingress,
         )
+    except (ImportError, ModuleNotFoundError):
+        # ``music_assistant`` is a dev-only / test-extras dep here; absent in
+        # the bare provider venv. Fail closed without log noise.
+        return False
     except Exception:
+        # Anything else (e.g. partial module init breakage upstream) is a real
+        # surprise — log so it's debuggable, then fail closed.
+        LOGGER.exception("Connect Wizard: unexpected error importing ingress helper")
         return False
     try:
         if not is_request_from_ingress(request):
             return False
     except Exception:
+        # MA may evolve the request-app shape; log so a future breakage isn't
+        # silently a 403 with no hint as to why.
+        LOGGER.exception("Connect Wizard: is_request_from_ingress raised")
         return False
 
     # Default to the aiohttp transport scheme (canonical aiohttp API) rather
