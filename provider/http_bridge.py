@@ -158,7 +158,8 @@ def _is_origin_allowed_for_request(
       verifies via :func:`is_request_from_ingress` (so we are not trusting
       attacker-supplied headers); and
     * the request carries an ``X-Forwarded-Host`` set by HA; and
-    * the browser's ``Origin`` matches ``<X-Forwarded-Proto>://<X-Forwarded-Host>``.
+    * the browser's ``Origin`` matches
+      ``<X-Forwarded-Proto or request.scheme>://<X-Forwarded-Host>``.
 
     This removes the need for HA add-on users to copy their public hostname
     into the ``extra_allowed_origins`` config every time the URL changes.
@@ -185,7 +186,13 @@ def _is_origin_allowed_for_request(
     except Exception:
         return False
 
-    forwarded_proto = request.headers.get("X-Forwarded-Proto", "https")
+    # Default to the aiohttp transport scheme (canonical aiohttp API) rather
+    # than a hard-coded "https" so an unsecured local HA installation still
+    # works when X-Forwarded-Proto is omitted. Multi-value X-Forwarded-Host
+    # (``ha.example.com, internal.lan``) intentionally fails normalisation
+    # below → reject; supporting it would mean trusting whichever hop the
+    # proxy listed last, which is rarely what you want.
+    forwarded_proto = request.headers.get("X-Forwarded-Proto", request.scheme)
     forwarded_origin = _normalize_origin(f"{forwarded_proto}://{forwarded_host}")
     if forwarded_origin is None:
         return False

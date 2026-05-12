@@ -145,11 +145,14 @@ def test_garbage_origin_rejected() -> None:
 
 def _fake_request(
     headers: dict[str, str] | None = None,
+    *,
+    scheme: str = "http",
 ) -> Any:
     """Build a minimal stand-in for ``aiohttp.web.Request`` for origin checks."""
     return SimpleNamespace(
         headers=headers or {},
         remote="172.30.32.1",
+        scheme=scheme,
     )
 
 
@@ -249,6 +252,44 @@ def test_request_origin_no_forward_header_rejected(
     allow = _compute_origin_allowlist(_fake_mass())
     req = _fake_request({"Origin": "https://ha.example.com"})
     assert _is_origin_allowed_for_request(req, allow) is False
+
+
+def test_request_origin_missing_proto_falls_back_to_transport_scheme(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When ``X-Forwarded-Proto`` is absent, the aiohttp ``scheme`` fills in.
+
+    Inside an HA add-on the transport scheme is plain ``http`` because the
+    container is reached over the docker network. A proxy that forwards the
+    host header but omits the proto header should still validate against the
+    actual transport's scheme rather than guess ``https``.
+    """
+    _install_ingress_stub(monkeypatch, is_ingress=True)
+    allow = _compute_origin_allowlist(_fake_mass())
+    req = _fake_request(
+        {
+            "Origin": "http://ha.local:8123",
+            "X-Forwarded-Host": "ha.local:8123",
+        },
+        scheme="http",
+    )
+    assert _is_origin_allowed_for_request(req, allow) is True
+
+
+def test_request_origin_accepts_case_insensitive_origin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``Origin`` matching is case-insensitive on host (RFC 3986)."""
+    _install_ingress_stub(monkeypatch, is_ingress=True)
+    allow = _compute_origin_allowlist(_fake_mass())
+    req = _fake_request(
+        {
+            "Origin": "HTTPS://Ha.Example.COM",
+            "X-Forwarded-Host": "ha.example.com",
+            "X-Forwarded-Proto": "https",
+        }
+    )
+    assert _is_origin_allowed_for_request(req, allow) is True
 
 
 def test_request_origin_handles_missing_ma_module() -> None:
