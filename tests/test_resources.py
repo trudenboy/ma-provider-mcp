@@ -1,5 +1,4 @@
-"""Tests for ``provider/resources/*`` handlers — verify return values are
-FastMCP-serialisable.
+"""Tests for ``provider/resources/*`` handler return-value serialisation.
 
 FastMCP's resource read API requires handlers to return ``str | bytes |
 list[ResourceContents]``; returning an MA domain object or a provider Brief
