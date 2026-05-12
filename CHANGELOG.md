@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.11] — 2026-05-12
+
+### Fixed
+- **Player `powered` and `current_item` reported stale or inverted values**
+  in MCP tool and resource responses. For some virtual player types
+  (Web, Universal) `powered` showed `false` while playback was active,
+  and `current_item` retained the previous track's title after stop.
+  Brief responses now follow Music Assistant's canonical player state
+  — the same shape its REST API serialises — so the values stay in
+  sync with the server's view of the world.
+- **`resources/read` on every `library://`, `player://`, and `queue://`
+  URI returned `-32002 Resource not found`** even when the matching
+  permission was enabled. The permission middleware resolved a request
+  URI only against statically registered resources and missed all
+  URI-template-backed ones. Concrete URIs are now matched against
+  registered templates as well, so library / player / queue resource
+  reads succeed.
+- **Library resource reads failed with `contents must be str, bytes, or
+  list[ResourceContent]`.** Resource handlers returned the underlying
+  domain objects directly, which FastMCP refuses to serialise. Handlers
+  now emit JSON text so `library://artist/{id}`, `library://album/{id}`,
+  `library://track/{id}`, `library://playlist/{id}`, `library://radio/{id}`,
+  `player://{id}`, and `queue://{id}` actually load.
+
 ## [0.3.10] — 2026-05-12
 
 ### Fixed
