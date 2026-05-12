@@ -11,6 +11,7 @@ Through `ma-provider-tools`:
 
 - **`About` block** (`description`, `homepage`, `topics`) — driven by `providers.yml` (fields `github_description`, `github_topics`, `github_homepage`) and applied by `scripts/sync_repo_settings.py` + the `sync-repo-settings.yml` workflow.
 - **README header block** — between markers `<!-- >>> ma-provider-tools sync (readme header) >>> -->` and `<!-- <<< ma-provider-tools sync (readme header) <<< -->`. Contains badges (CI / Release / License / Music Assistant / Stars), quick-links, and a cross-link row for related providers.
+- **`Music Assistant` badge** — dynamic shields.io endpoint at `https://trudenboy.github.io/ma-provider-tools/badges/fastmcp_server.json`. The `update-ma-version-badges.yml` cron in `ma-provider-tools` refreshes the JSON every 4 hours, showing which MA channel (stable / beta / dev) currently ships the provider and at what MA version.
 - **Docs-site landing page** (this site) — hero block reads `github_description`, followed by a topic-pill row from `github_topics` and the same badge row as the README.
 
 Hand-edits to these blocks are **not preserved**: the next `distribute.yml` run overwrites them. To change a description or topic — open a PR in `ma-provider-tools`.
