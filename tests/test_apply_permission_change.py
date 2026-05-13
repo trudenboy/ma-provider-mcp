@@ -41,6 +41,30 @@ async def test_resource_toggle_triggers_full_restart(
 
 
 @pytest.mark.asyncio
+async def test_empty_changed_keys_does_not_restart(
+    mock_mass: MagicMock, mock_config: MagicMock
+) -> None:
+    """A no-op call (``changed_keys=set()``) must not force a restart.
+
+    MA's ``ConfigController`` short-circuits when there are no diffs, but the
+    guard belongs here too: an empty set is by definition a subset of the
+    permission keys, so classify as permission-only and let the hot-swap
+    path noop-rebuild the tag snapshot.
+    """
+    from provider.server import MCPServerRuntime  # noqa: PLC0415
+
+    runtime = MCPServerRuntime(mock_mass, mock_config, logging.getLogger("t"))
+    runtime._allowed_tags = {"query:library"}
+    runtime.stop = AsyncMock()
+    runtime.start = AsyncMock()
+
+    await runtime.apply_permission_change(mock_config, changed_keys=set())
+
+    runtime.stop.assert_not_awaited()
+    runtime.start.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_permission_only_change_hot_swaps(
     mock_mass: MagicMock, mock_config: MagicMock
 ) -> None:

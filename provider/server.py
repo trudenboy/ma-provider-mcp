@@ -231,7 +231,9 @@ class MCPServerRuntime:
         """
         from .constants import PERMISSION_KEYS  # noqa: PLC0415
 
-        permission_only = bool(changed_keys) and changed_keys.issubset(PERMISSION_KEYS)
+        # ``set().issubset(...)`` is True, so an empty ``changed_keys`` (no-op
+        # call) classifies as permission-only and skips a pointless restart.
+        permission_only = changed_keys.issubset(PERMISSION_KEYS)
 
         self._config = new_config
         if permission_only and hasattr(self, "_allowed_tags"):
