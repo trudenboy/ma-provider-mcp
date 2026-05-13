@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.15] — 2026-05-13
+
+### Changed
+- **Re-generating a per-client token in the Connect Wizard now revokes
+  the previous token automatically.** Previously the old long-lived
+  token remained valid for 10 years and could only be removed manually
+  from Profile → Long-lived access tokens. The wizard now deletes any
+  prior rows with the same client name for the same user before
+  minting; the frontend also tracks the new `token_id` in
+  `sessionStorage` and passes it back on the next re-generate as a
+  fast-path hint. Note: the same client label on two devices against
+  one MA shares a name, so re-generating on one device revokes the
+  other — revoke manually if you need independent tokens.
+
+### Fixed
+- **Stale `MCP — wizard bootstrap` / `MCP — wizard session` rows
+  accumulating in the user's token list.** Every wizard open + every
+  page load was adding ephemeral rows that lingered 30 days. Opening
+  the Connect Wizard now garbage-collects any prior wizard
+  bootstrap/session rows for the same user before minting the new
+  one. Per-client tokens (`MCP — <Client>`) are not touched.
+
+### Security
+- **Connect Wizard bootstrap tokens are now single-use.** Previously a
+  bootstrap (the token embedded in the wizard URL) could be exchanged
+  for session tokens repeatedly for up to 30 days. `/connect/exchange`
+  now deletes the bootstrap immediately after authenticating it and
+  before minting the session, so each bootstrap exchanges at most
+  once.
+
 ## [0.3.14] — 2026-05-13
 
 ### Fixed
