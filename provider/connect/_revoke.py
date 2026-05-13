@@ -60,7 +60,7 @@ except ImportError:
     def _ma_get_current_user() -> User | None:
         return None
 
-    def _ma_set_current_user(_user: User | None) -> None:
+    def _ma_set_current_user(user: User | None) -> None:  # noqa: ARG001
         return None
 
 
