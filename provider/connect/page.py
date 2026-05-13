@@ -138,7 +138,7 @@ HTML: str = """<!doctype html>
         <div id="notes-area" class="hint"></div>
         <div class="banner good" id="token-banner" style="margin-top:12px">
           Token shown once. Visible in MA → Profile → Long-lived access tokens as
-          <code id="token-name">MCP — …</code>. Revoke there.
+          <code id="token-name">MCP — …</code>. Re-generating revokes any prior token for this client automatically.
         </div>
       </div>
     </div>
@@ -178,9 +178,22 @@ HTML: str = """<!doctype html>
     // Cache of minted tokens, keyed by client id, so toggling URL mode or
     // re-clicking a tab does NOT mint a new token each time.
     tokens: {},
+    // Companion cache of MA token_ids (jti), keyed by client id. Persisted to
+    // sessionStorage so an in-tab page reload can still send prev_token_id
+    // on Re-generate; the server also dedupes by name, this is just the fast
+    // path.
+    tokenIds: {},
     lastSnippet: "",
     lastFilename: "snippet.txt",
   };
+  try {
+    const cachedTokens = JSON.parse(SS.getItem("ma_tokens") || "{}");
+    if (cachedTokens && typeof cachedTokens === "object") state.tokens = cachedTokens;
+  } catch (_) { /* ignore malformed cache */ }
+  try {
+    const cachedTokenIds = JSON.parse(SS.getItem("ma_token_ids") || "{}");
+    if (cachedTokenIds && typeof cachedTokenIds === "object") state.tokenIds = cachedTokenIds;
+  } catch (_) { /* ignore malformed cache */ }
 
   function showMsg(text, kind) {
     const el = $("msg");
@@ -286,14 +299,21 @@ HTML: str = """<!doctype html>
       $("login-panel").classList.remove("hidden");
       return;
     }
+    const body = { session_token: state.sessionToken, client_id: c.id };
+    const prevId = state.tokenIds[c.id];
+    if (prevId) body.prev_token_id = prevId;
     const { res, data } = await fetchJSON("./connect/token", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session_token: state.sessionToken, client_id: c.id }),
+      body: JSON.stringify(body),
     });
     if (res.status === 401) {
       SS.removeItem("ma_session_token");
+      SS.removeItem("ma_tokens");
+      SS.removeItem("ma_token_ids");
       state.sessionToken = null;
+      state.tokens = {};
+      state.tokenIds = {};
       showMsg("Session expired — sign in again.", "bad");
       $("wizard-panel").classList.add("hidden");
       $("login-panel").classList.remove("hidden");
@@ -304,6 +324,9 @@ HTML: str = """<!doctype html>
       return;
     }
     state.tokens[c.id] = data.token;
+    state.tokenIds[c.id] = data.token_id || null;
+    SS.setItem("ma_tokens", JSON.stringify(state.tokens));
+    SS.setItem("ma_token_ids", JSON.stringify(state.tokenIds));
     renderSelected();
     showMsg("Generated token for " + c.label + ".", "good");
   }
@@ -347,9 +370,10 @@ HTML: str = """<!doctype html>
 
     $("generate-btn").addEventListener("click", mintForSelected);
     $("regen-btn").addEventListener("click", () => {
-      // Drop the cached token so the next mint replaces it; the previous
-      // token remains valid in MA until the user revokes it from
-      // Profile → Long-lived access tokens.
+      // Drop the cached token locally; mintForSelected sends prev_token_id
+      // so the server revokes the prior row, and also dedups by name as a
+      // safety net (covers the cross-tab / post-reload case where the
+      // tokenIds hint may be missing).
       if (state.selectedClientId) delete state.tokens[state.selectedClientId];
       mintForSelected();
     });

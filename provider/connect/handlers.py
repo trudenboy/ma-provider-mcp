@@ -18,6 +18,7 @@ from urllib.parse import urlsplit
 
 from aiohttp import web
 
+from ._revoke import revoke_token_by_id
 from .clients import clients_to_json, lookup_client
 from .page import HTML
 
@@ -231,17 +232,51 @@ def make_mint_token(ctx: WizardContext) -> Callable[[web.Request], Any]:
         if user is None or not getattr(user, "enabled", True):
             return web.json_response({"error": "session invalid"}, status=401)
 
+        new_name = f"MCP — {spec.label}"
+        prev_id = str(body.get("prev_token_id") or "")
+        revoked_ids: set[str] = set()
+
+        # Fast path: honor the explicit prev_token_id the frontend persists per
+        # client. Lets the in-tab Re-generate revoke without an extra DB round
+        # trip when the hint is available.
+        if prev_id:
+            await revoke_token_by_id(ctx.mass, prev_id)
+            revoked_ids.add(prev_id)
+
+        # Server-side dedup: revoke any other rows with this exact client-token
+        # name for this user. Makes /connect/token idempotent across browser
+        # and server restarts, where the prev_token_id hint cannot survive.
+        try:
+            rows = await ctx.mass.webserver.auth.database.get_rows(
+                "auth_tokens", {"user_id": user.user_id}, limit=500
+            )
+        except Exception:
+            LOGGER.exception("Connect Wizard: prior-name dedup lookup failed for %r", new_name)
+            rows = []
+        for row in rows:
+            tid = row.get("token_id")
+            if row.get("name") == new_name and tid and tid not in revoked_ids:
+                await revoke_token_by_id(ctx.mass, tid)
+                revoked_ids.add(tid)
+
         try:
             token = await ctx.mass.webserver.auth.create_token(
                 user=user,
-                name=f"MCP — {spec.label}",
+                name=new_name,
                 is_long_lived=True,
             )
         except Exception:
             LOGGER.exception("Connect Wizard: per-client token mint failed")
             return web.json_response({"error": "mint failed"}, status=500)
 
-        return web.json_response({"token": token})
+        new_token_id: str | None
+        try:
+            new_token_id = ctx.mass.webserver.auth.jwt_helper.get_token_id(token)
+        except Exception:
+            LOGGER.exception("Connect Wizard: get_token_id failed; response will omit token_id")
+            new_token_id = None
+
+        return web.json_response({"token": token, "token_id": new_token_id})
 
     return handler
 

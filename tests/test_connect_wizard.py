@@ -56,7 +56,15 @@ def wizard_mass(mock_user: MagicMock) -> MagicMock:
         create_token=AsyncMock(return_value="jwt-xyz"),
         authenticate_with_token=AsyncMock(return_value=mock_user),
         get_current_user=MagicMock(return_value=mock_user),
+        database=SimpleNamespace(
+            delete=AsyncMock(),
+            get_rows=AsyncMock(return_value=[]),
+        ),
+        jwt_helper=SimpleNamespace(
+            get_token_id=MagicMock(side_effect=lambda t: f"tid:{t}"),
+        ),
     )
+    fake_ws.disconnect_websockets_for_token = MagicMock()  # type: ignore[attr-defined]
     mass = MagicMock()
     mass.webserver = fake_ws
     mass.signal_event = MagicMock()
@@ -258,6 +266,145 @@ async def test_token_endpoint_invalid_session_401(
     )
     assert resp.status == 401
     wizard_mass.webserver.auth.create_token.assert_not_called()
+
+
+async def test_token_endpoint_returns_token_id(
+    wizard_client: TestClient, wizard_mass: MagicMock
+) -> None:
+    """Mint response carries the new ``token_id`` derived via ``jwt_helper.get_token_id``."""
+    resp = await wizard_client.post(
+        "/mcp/v1/connect/token",
+        json={"session_token": "sess-1", "client_id": "cursor"},
+        headers={"Origin": "http://localhost:8095"},
+    )
+    assert resp.status == 200
+    data = await resp.json()
+    assert data["token"] == "jwt-xyz"
+    assert data["token_id"] == "tid:jwt-xyz"
+
+
+async def test_token_endpoint_server_dedup_revokes_same_name(
+    wizard_client: TestClient, wizard_mass: MagicMock
+) -> None:
+    """Prior rows with the same client-token name for the same user are revoked.
+
+    Rows with other names are left alone; ``create_token`` is still called once.
+    """
+    auth = wizard_mass.webserver.auth
+    auth.database.get_rows = AsyncMock(
+        return_value=[
+            {"token_id": "old-1", "name": "MCP — Cursor", "user_id": "u1"},
+            {"token_id": "old-2", "name": "MCP — Cursor", "user_id": "u1"},
+            {"token_id": "keep", "name": "MCP — Other", "user_id": "u1"},
+        ]
+    )
+
+    resp = await wizard_client.post(
+        "/mcp/v1/connect/token",
+        json={"session_token": "sess-1", "client_id": "cursor"},
+        headers={"Origin": "http://localhost:8095"},
+    )
+    assert resp.status == 200
+
+    deleted_ids = sorted(call.args[1]["token_id"] for call in auth.database.delete.await_args_list)
+    assert deleted_ids == ["old-1", "old-2"]
+    disconnected = sorted(
+        c.args[0] for c in wizard_mass.webserver.disconnect_websockets_for_token.call_args_list
+    )
+    assert disconnected == ["old-1", "old-2"]
+    auth.create_token.assert_awaited_once()
+
+
+async def test_token_endpoint_prev_id_fast_path_revokes_first(
+    wizard_client: TestClient, wizard_mass: MagicMock
+) -> None:
+    """``prev_token_id`` is revoked once; same id in ``get_rows`` does not double-delete."""
+    auth = wizard_mass.webserver.auth
+    auth.database.get_rows = AsyncMock(
+        return_value=[{"token_id": "hot", "name": "MCP — Cursor", "user_id": "u1"}]
+    )
+
+    resp = await wizard_client.post(
+        "/mcp/v1/connect/token",
+        json={
+            "session_token": "sess-1",
+            "client_id": "cursor",
+            "prev_token_id": "hot",
+        },
+        headers={"Origin": "http://localhost:8095"},
+    )
+    assert resp.status == 200
+
+    deleted_ids = [c.args[1]["token_id"] for c in auth.database.delete.await_args_list]
+    assert deleted_ids == ["hot"]
+
+
+async def test_token_endpoint_dedup_lookup_failure_does_not_fail_mint(
+    wizard_client: TestClient, wizard_mass: MagicMock
+) -> None:
+    """A ``get_rows`` exception is logged but the mint still succeeds."""
+    auth = wizard_mass.webserver.auth
+    auth.database.get_rows = AsyncMock(side_effect=RuntimeError("db down"))
+
+    resp = await wizard_client.post(
+        "/mcp/v1/connect/token",
+        json={"session_token": "sess-1", "client_id": "cursor"},
+        headers={"Origin": "http://localhost:8095"},
+    )
+    assert resp.status == 200
+    auth.create_token.assert_awaited_once()
+
+
+async def test_token_endpoint_no_prior_no_revoke(
+    wizard_client: TestClient, wizard_mass: MagicMock
+) -> None:
+    """Empty prior rows + no ``prev_token_id`` → no revoke side effects."""
+    auth = wizard_mass.webserver.auth
+
+    resp = await wizard_client.post(
+        "/mcp/v1/connect/token",
+        json={"session_token": "sess-1", "client_id": "cursor"},
+        headers={"Origin": "http://localhost:8095"},
+    )
+    assert resp.status == 200
+    auth.database.delete.assert_not_called()
+    wizard_mass.webserver.disconnect_websockets_for_token.assert_not_called()
+
+
+async def test_token_endpoint_revoke_failure_does_not_fail_mint(
+    wizard_client: TestClient, wizard_mass: MagicMock
+) -> None:
+    """A ``database.delete`` exception is swallowed; the new mint still happens."""
+    auth = wizard_mass.webserver.auth
+    auth.database.get_rows = AsyncMock(
+        return_value=[{"token_id": "old", "name": "MCP — Cursor", "user_id": "u1"}]
+    )
+    auth.database.delete = AsyncMock(side_effect=RuntimeError("delete failed"))
+
+    resp = await wizard_client.post(
+        "/mcp/v1/connect/token",
+        json={"session_token": "sess-1", "client_id": "cursor"},
+        headers={"Origin": "http://localhost:8095"},
+    )
+    assert resp.status == 200
+    auth.create_token.assert_awaited_once()
+
+
+async def test_token_endpoint_get_token_id_none_returns_null(
+    wizard_client: TestClient, wizard_mass: MagicMock
+) -> None:
+    """``get_token_id`` returning ``None`` surfaces as ``token_id: null`` in the JSON."""
+    wizard_mass.webserver.auth.jwt_helper.get_token_id = MagicMock(return_value=None)
+
+    resp = await wizard_client.post(
+        "/mcp/v1/connect/token",
+        json={"session_token": "sess-1", "client_id": "cursor"},
+        headers={"Origin": "http://localhost:8095"},
+    )
+    assert resp.status == 200
+    data = await resp.json()
+    assert data["token"] == "jwt-xyz"
+    assert data["token_id"] is None
 
 
 # ── Origin & mount ───────────────────────────────────────────────────────────
