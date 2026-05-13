@@ -619,6 +619,73 @@ async def test_action_handler_empty_external_base_url_falls_back_to_path(
     assert url == "/mcp/v1/connect"
 
 
+async def test_open_connect_gcs_prior_wizard_tokens(
+    wizard_mass: MagicMock, mock_user: MagicMock
+) -> None:
+    """Prior MCP — wizard bootstrap/session rows are deleted before the new bootstrap is minted.
+
+    Per-client rows (``MCP — Cursor`` etc.) are left untouched.
+    """
+    auth = wizard_mass.webserver.auth
+    auth.database.get_rows = AsyncMock(
+        return_value=[
+            {"token_id": "boot-old", "name": "MCP — wizard bootstrap", "user_id": "u1"},
+            {"token_id": "sess-old", "name": "MCP — wizard session", "user_id": "u1"},
+            {"token_id": "cursor-keep", "name": "MCP — Cursor", "user_id": "u1"},
+        ]
+    )
+
+    await handle_open_connect_action(
+        wizard_mass,
+        current_user=mock_user,
+        mount_path="/mcp/v1",
+    )
+
+    deleted_ids = sorted(c.args[1]["token_id"] for c in auth.database.delete.await_args_list)
+    assert deleted_ids == ["boot-old", "sess-old"]
+    disconnected = sorted(
+        c.args[0] for c in wizard_mass.webserver.disconnect_websockets_for_token.call_args_list
+    )
+    assert disconnected == ["boot-old", "sess-old"]
+    auth.create_token.assert_awaited_once_with(
+        user=mock_user,
+        name="MCP — wizard bootstrap",
+        is_long_lived=False,
+    )
+    wizard_mass.signal_event.assert_called_once()
+
+
+async def test_open_connect_gc_lookup_failure_does_not_block(
+    wizard_mass: MagicMock, mock_user: MagicMock
+) -> None:
+    """A ``get_rows`` exception is swallowed; the new bootstrap mint still happens."""
+    auth = wizard_mass.webserver.auth
+    auth.database.get_rows = AsyncMock(side_effect=RuntimeError("db down"))
+
+    await handle_open_connect_action(
+        wizard_mass,
+        current_user=mock_user,
+        mount_path="/mcp/v1",
+    )
+
+    auth.create_token.assert_awaited_once()
+    wizard_mass.signal_event.assert_called_once()
+
+
+async def test_open_connect_no_user_skips_gc(wizard_mass: MagicMock) -> None:
+    """Without a current user there is no row lookup and nothing is deleted."""
+    auth = wizard_mass.webserver.auth
+
+    await handle_open_connect_action(
+        wizard_mass,
+        current_user=None,
+        mount_path="/mcp/v1",
+    )
+
+    auth.database.get_rows.assert_not_called()
+    auth.database.delete.assert_not_called()
+
+
 # ── Dispatch: WS-client auto-detect + config-override fallback ───────────────
 
 
