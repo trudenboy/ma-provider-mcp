@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.13] — 2026-05-13
+
+### Changed
+- **Connect Wizard no longer displays the provider version.** The
+  `v0.3.x` tag in the wizard's permissions panel and the `version`
+  field in `GET /connect/info` are gone. The wizard is purely an
+  onboarding flow and didn't need the label; removing it lets the
+  release number live in exactly one place — the `VERSION` file at
+  the repo root — instead of being threaded through Python imports,
+  HTML, JavaScript, and the `/connect/info` payload.
+
+### Removed
+- **`provider.__version__`** is no longer defined. Two prior releases
+  (v0.3.11 and v0.3.12) shipped with `__version__ = "0.3.10"` because
+  the constant was hand-edited separately from the `VERSION` file. No
+  in-tree consumer reads it anymore (the wizard was the only one);
+  dropping it eliminates the drift surface entirely.
+
 ## [0.3.12] — 2026-05-13
 
 ### Fixed
