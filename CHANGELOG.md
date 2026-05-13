@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.16] — 2026-05-13
+
+### Fixed
+- **`Open Connect Wizard` raised `AttributeError: 'sqlite3.Row' object
+  has no attribute 'get'` on real MA installs.** The provider was reaching
+  directly into `mass.webserver.auth.database` for token GC, name-based
+  dedup, and ownership checks; at runtime those queries return
+  `sqlite3.Row` instances which only support bracket indexing, so
+  `row.get(...)` raised. The provider now goes through the sanctioned
+  public API instead — `auth.revoke_token` (which enforces user ownership
+  internally and handles WS disconnect itself), `auth.get_user_tokens`
+  (returns typed `AuthToken` dataclasses, never raw rows), and
+  `auth.get_token_id_from_token` (handles both JWT and legacy hash
+  tokens) — using the same `set_current_user` context-impersonation
+  pattern that MA's own test suite uses
+  (`tests/test_webserver_auth.py:336-354`). As a side effect, the
+  encapsulation concern from the upstream review is resolved.
+
+### Changed
+- **Connect Wizard no longer relies on the client-supplied
+  `prev_token_id` hint.** Re-generate now revokes prior tokens entirely
+  via server-side name-dedup using `auth.get_user_tokens`. The
+  `sessionStorage` `ma_token_ids` cache and the `token_id` field
+  previously returned from `/connect/token` are gone — they were
+  defense-in-depth on top of a hardened dedup path that is now
+  self-sufficient.
+
 ## [0.3.15] — 2026-05-13
 
 ### Changed
