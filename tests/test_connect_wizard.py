@@ -335,9 +335,7 @@ async def test_token_endpoint_invalid_session_401(
     wizard_mass.webserver.auth.create_token.assert_not_called()
 
 
-async def test_token_endpoint_returns_token_id(
-    wizard_client: TestClient, wizard_mass: MagicMock
-) -> None:
+async def test_token_endpoint_returns_token_id(wizard_client: TestClient) -> None:
     """Mint response carries the new ``token_id`` derived via ``jwt_helper.get_token_id``."""
     resp = await wizard_client.post(
         "/mcp/v1/connect/token",
