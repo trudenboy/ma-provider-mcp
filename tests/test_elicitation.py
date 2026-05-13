@@ -135,8 +135,7 @@ async def test_remove_from_library_confirms(mock_mass: MagicMock) -> None:
 async def test_remove_from_favorites_resolves_provider_uri_to_library(
     mock_mass: MagicMock,
 ) -> None:
-    """A provider URI (e.g. ``yandex_music://...``) is resolved to the matching library
-    item before ``remove_item_from_favorites`` is called.
+    """A provider URI is resolved to the matching library item before removal.
 
     ``MusicController.remove_item_from_*`` expects a library item id; passing the
     provider's native item id silently targets the wrong item (or raises on a

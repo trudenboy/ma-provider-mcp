@@ -13,13 +13,9 @@ the same object and a diff is empty.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
-if TYPE_CHECKING:
-    pass
 
 
 @pytest.mark.asyncio
