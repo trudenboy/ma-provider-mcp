@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import logging
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -49,11 +49,13 @@ try:
         set_current_user as _ma_set_current_user,
     )
 except Exception:
+    # Signatures must match the real MA helpers exactly — mypy on CI sees
+    # both branches with the full MA install and rejects any drift.
 
-    def _ma_get_current_user() -> Any:
+    def _ma_get_current_user() -> User | None:
         return None
 
-    def _ma_set_current_user(_user: Any) -> None:
+    def _ma_set_current_user(_user: User | None) -> None:
         return None
 
 
