@@ -48,7 +48,12 @@ try:
     from music_assistant.controllers.webserver.helpers.auth_middleware import (
         set_current_user as _ma_set_current_user,
     )
-except Exception:
+except ImportError:
+    # Narrow on purpose: only swallow ``ImportError`` (which covers
+    # ``ModuleNotFoundError``) — the case is the minimal dev venv missing
+    # a transitive MA dep. Anything else (e.g. ``AttributeError`` from a
+    # renamed symbol) must propagate so MA-side breakage surfaces loudly
+    # instead of silently disabling token revocation.
     # Signatures must match the real MA helpers exactly — mypy on CI sees
     # both branches with the full MA install and rejects any drift.
 
