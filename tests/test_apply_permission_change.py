@@ -31,8 +31,8 @@ async def test_resource_toggle_triggers_full_restart(
     from provider.server import MCPServerRuntime  # noqa: PLC0415
 
     runtime = MCPServerRuntime(mock_mass, mock_config, logging.getLogger("t"))
-    runtime.stop = AsyncMock()  # type: ignore[method-assign]
-    runtime.start = AsyncMock()  # type: ignore[method-assign]
+    runtime.stop = AsyncMock()
+    runtime.start = AsyncMock()
 
     await runtime.apply_permission_change(mock_config, changed_keys={"res_library"})
 
@@ -50,8 +50,8 @@ async def test_permission_only_change_hot_swaps(
     runtime = MCPServerRuntime(mock_mass, mock_config, logging.getLogger("t"))
     # Pretend the runtime has started so _allowed_tags exists and hot-swap is viable.
     runtime._allowed_tags = {"query:library"}
-    runtime.stop = AsyncMock()  # type: ignore[method-assign]
-    runtime.start = AsyncMock()  # type: ignore[method-assign]
+    runtime.stop = AsyncMock()
+    runtime.start = AsyncMock()
 
     await runtime.apply_permission_change(
         mock_config, changed_keys={"control_volume", "query_library"}
