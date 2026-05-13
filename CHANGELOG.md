@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.17] — 2026-05-13
+
+### Fixed
+- **Test harness `build_aiohttp_app` did not mirror MA's real
+  dynamic-route matching for bare-stem URLs.** A path registered as
+  `"/mcp/v1/*"` in MA matches both `/mcp/v1` (no trailing slash) and
+  any descendant `/mcp/v1/...`, per
+  `helpers/webserver.py::_handle_catch_all`. Our harness emitted
+  aiohttp pattern `/{stem}/{tail:.*}`, which requires a trailing slash,
+  so the wizard-advertised MCP entry-point URL (`<base_url>/mcp/v1` —
+  no trailing slash, exactly what clients connect to) was silently
+  excluded from coverage. The harness now adds an explicit route for
+  the bare stem alongside the wildcard; new regression test
+  `test_bare_mount_path_without_trailing_slash_reaches_asgi` locks the
+  behaviour in.
+
 ## [0.3.16] — 2026-05-13
 
 ### Fixed
