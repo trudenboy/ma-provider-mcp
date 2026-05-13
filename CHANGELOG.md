@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.12] — 2026-05-13
+
+### Fixed
+- **`media_remove_from_favorites` and `media_remove_from_library` silently
+  mis-targeted or raised for non-library URIs.** The tools cast the
+  resolved item's id to `int(...)`, but a provider URI (e.g.
+  `yandex_music://track/abc`) resolves to a `MediaItem` whose `item_id`
+  is the **provider's** native id, not a library id. The destructive
+  controllers expect a library item id, so the call either failed on
+  the `int()` cast or pointed at the wrong row. The tools now resolve
+  the library counterpart explicitly and raise a clear error when the
+  URI is not in the library.
+- **Resource-toggle config changes (`res_library`, `res_player`,
+  `res_prompts`) silently took the hot-swap code path and never
+  reloaded resources.** Music Assistant updates `ProviderConfig` in
+  place, so the runtime's internal old-vs-new diff was always empty
+  and incorrectly classified resource toggles as permission-only.
+  The provider's `changed_keys` set is now passed through and used
+  directly; resource toggles trigger a full runtime restart so the
+  user's change actually takes effect.
+
 ## [0.3.11] — 2026-05-12
 
 ### Fixed
