@@ -26,6 +26,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the Connect Wizard now garbage-collects any prior wizard
   bootstrap/session rows for the same user before minting the new
   one. Per-client tokens (`MCP — <Client>`) are not touched.
+- **Connect Wizard snippets for Codex CLI, Cline, and Zed corrected
+  against upstream syntax drift.** Codex CLI's streamable-HTTP
+  transport reads custom headers from `http_headers` (not `headers`);
+  Cline's JSON schema does not define a `transportType` field (it's a
+  UI-only picker); Zed has had native remote-MCP support for a while,
+  so the `npx mcp-remote` stdio bridge is no longer needed. Users
+  pasting any of these snippets will now get a working server entry
+  without silent failures.
 
 ### Security
 - **Connect Wizard bootstrap tokens are now single-use on a
