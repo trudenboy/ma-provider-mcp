@@ -137,7 +137,7 @@ HTML: str = """<!doctype html>
         </div>
         <div id="notes-area" class="hint"></div>
         <div class="banner good" id="token-banner" style="margin-top:12px">
-          Token shown once. Visible in MA → Settings → Security → Tokens as
+          Token shown once. Visible in MA → Profile → Long-lived access tokens as
           <code id="token-name">MCP — …</code>. Revoke there.
         </div>
       </div>
@@ -349,7 +349,7 @@ HTML: str = """<!doctype html>
     $("regen-btn").addEventListener("click", () => {
       // Drop the cached token so the next mint replaces it; the previous
       // token remains valid in MA until the user revokes it from
-      // Settings → Security → Tokens.
+      // Profile → Long-lived access tokens.
       if (state.selectedClientId) delete state.tokens[state.selectedClientId];
       mintForSelected();
     });

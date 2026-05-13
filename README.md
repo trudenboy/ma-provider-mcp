@@ -36,7 +36,7 @@ Claude Code, Codex, and any other MCP-aware LLM client.
 After enabling the plugin in MA settings, click **Open Connect Wizard**
 in the provider's config panel. Pick your AI client — the wizard mints a
 per-client token (`MCP — <Client>`, revocable individually under
-Settings → Security → Tokens) and shows the ready-to-paste snippet.
+Profile → Long-lived access tokens) and shows the ready-to-paste snippet.
 Cursor users get an extra **Add to Cursor** one-click deeplink. Supports
 Claude Desktop, Claude Code, Cursor, Windsurf, VSCode, ChatGPT
 Connectors, Codex CLI, Gemini CLI, Cline, and Zed.
@@ -44,7 +44,7 @@ Connectors, Codex CLI, Gemini CLI, Cline, and Zed.
 ### Manual
 
 ```bash
-TOKEN="<mint a token in MA Settings → Security → Tokens>"
+TOKEN="<mint a token in MA Profile → Long-lived access tokens>"
 
 # Probe streamable HTTP transport
 curl -sS -H "Authorization: Bearer $TOKEN" \
