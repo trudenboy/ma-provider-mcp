@@ -370,11 +370,18 @@ HTML: str = """<!doctype html>
 
     $("generate-btn").addEventListener("click", mintForSelected);
     $("regen-btn").addEventListener("click", () => {
-      // Drop the cached token locally; mintForSelected sends prev_token_id
-      // so the server revokes the prior row, and also dedups by name as a
-      // safety net (covers the cross-tab / post-reload case where the
-      // tokenIds hint may be missing).
-      if (state.selectedClientId) delete state.tokens[state.selectedClientId];
+      // Drop the cached token locally AND from sessionStorage immediately, so
+      // a mint failure (network/5xx) plus a page reload cannot rehydrate the
+      // stale token the user just asked to replace. mintForSelected sends
+      // prev_token_id so the server revokes the prior row, and also dedups
+      // by name as a safety net for the cross-tab case.
+      const id = state.selectedClientId;
+      if (id) {
+        delete state.tokens[id];
+        delete state.tokenIds[id];
+        SS.setItem("ma_tokens", JSON.stringify(state.tokens));
+        SS.setItem("ma_token_ids", JSON.stringify(state.tokenIds));
+      }
       mintForSelected();
     });
 

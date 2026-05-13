@@ -404,6 +404,35 @@ async def test_token_endpoint_prev_id_fast_path_revokes_first(
     assert deleted_ids == ["hot"]
 
 
+async def test_token_endpoint_prev_id_foreign_user_ignored(
+    wizard_client: TestClient, wizard_mass: MagicMock
+) -> None:
+    """A ``prev_token_id`` whose row does not belong to the session user is silently ignored.
+
+    The ownership check returns no row → no delete, no WS disconnect; the
+    mint still proceeds.
+    """
+    auth = wizard_mass.webserver.auth
+    # get_rows returns [] regardless of match — emulates "no row owned by
+    # this user with that token_id" for the ownership check AND no priors
+    # for the name-dedup query.
+    auth.database.get_rows = AsyncMock(return_value=[])
+
+    resp = await wizard_client.post(
+        "/mcp/v1/connect/token",
+        json={
+            "session_token": "sess-1",
+            "client_id": "cursor",
+            "prev_token_id": "foreign-id",
+        },
+        headers={"Origin": "http://localhost:8095"},
+    )
+    assert resp.status == 200
+    auth.database.delete.assert_not_called()
+    wizard_mass.webserver.disconnect_websockets_for_token.assert_not_called()
+    auth.create_token.assert_awaited_once()
+
+
 async def test_token_endpoint_dedup_lookup_failure_does_not_fail_mint(
     wizard_client: TestClient, wizard_mass: MagicMock
 ) -> None:

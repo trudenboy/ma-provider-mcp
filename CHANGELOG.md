@@ -28,12 +28,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one. Per-client tokens (`MCP — <Client>`) are not touched.
 
 ### Security
-- **Connect Wizard bootstrap tokens are now single-use.** Previously a
-  bootstrap (the token embedded in the wizard URL) could be exchanged
-  for session tokens repeatedly for up to 30 days. `/connect/exchange`
-  now deletes the bootstrap immediately after authenticating it and
-  before minting the session, so each bootstrap exchanges at most
-  once.
+- **Connect Wizard bootstrap tokens are now single-use on a
+  best-effort basis.** Previously a bootstrap (the token embedded in
+  the wizard URL) could be exchanged for session tokens repeatedly
+  for up to 30 days. `/connect/exchange` now deletes the bootstrap
+  immediately after authenticating it and before minting the session,
+  so each bootstrap exchanges at most once under normal operation.
+  Revocation is best-effort: if the delete fails (DB error etc.) it
+  is logged and the mint still proceeds, matching the pre-patch
+  reusable behaviour only in that failure case.
+- **Connect Wizard `/connect/token` revoke is scoped to the
+  authenticated user.** The optional `prev_token_id` hint from the
+  frontend is now verified against the session user before any delete
+  — a caller cannot name a token owned by a different user and have
+  it revoked. The server-side name-dedup path was already scoped via
+  the `user_id` filter on the row lookup.
 
 ## [0.3.14] — 2026-05-13
 

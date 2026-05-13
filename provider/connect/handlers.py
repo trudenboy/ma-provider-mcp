@@ -250,10 +250,12 @@ def make_mint_token(ctx: WizardContext) -> Callable[[web.Request], Any]:
         revoked_ids: set[str] = set()
 
         # Fast path: honor the explicit prev_token_id the frontend persists per
-        # client. Lets the in-tab Re-generate revoke without an extra DB round
-        # trip when the hint is available.
+        # client. The hint is client-supplied, so scope the revoke to the
+        # authenticated user — without this, a caller could name another
+        # user's token_id and DoS them. Helper silently no-ops on a
+        # mismatch.
         if prev_id:
-            await revoke_token_by_id(ctx.mass, prev_id)
+            await revoke_token_by_id(ctx.mass, prev_id, user_id=user.user_id)
             revoked_ids.add(prev_id)
 
         # Server-side dedup: revoke any other rows with this exact client-token
