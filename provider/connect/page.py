@@ -372,15 +372,17 @@ HTML: str = """<!doctype html>
     $("regen-btn").addEventListener("click", () => {
       // Drop the cached token locally AND from sessionStorage immediately, so
       // a mint failure (network/5xx) plus a page reload cannot rehydrate the
-      // stale token the user just asked to replace. mintForSelected sends
-      // prev_token_id so the server revokes the prior row, and also dedups
-      // by name as a safety net for the cross-tab case.
+      // stale token the user just asked to replace. Re-render right away so
+      // the now-revoked token does not stay visible while the mint is in
+      // flight — if the mint then fails, the snippet area is already
+      // cleared and the user is not staring at a dead token.
       const id = state.selectedClientId;
       if (id) {
         delete state.tokens[id];
         delete state.tokenIds[id];
         SS.setItem("ma_tokens", JSON.stringify(state.tokens));
         SS.setItem("ma_token_ids", JSON.stringify(state.tokenIds));
+        renderSelected();
       }
       mintForSelected();
     });

@@ -433,6 +433,43 @@ async def test_token_endpoint_prev_id_foreign_user_ignored(
     auth.create_token.assert_awaited_once()
 
 
+async def test_token_endpoint_foreign_prev_id_does_not_block_name_dedup(
+    wizard_client: TestClient, wizard_mass: MagicMock
+) -> None:
+    """A foreign (or otherwise no-op) ``prev_token_id`` must not poison the dedup set.
+
+    If the fast-path revoke no-ops, the name-dedup loop is still required to
+    pick up the user's real prior row at a different token_id.
+    """
+    auth = wizard_mass.webserver.auth
+
+    def _get_rows(_table: str, match: dict, **_kw: object) -> list[dict]:
+        # Ownership-check query (carries token_id) → foreign id has no row
+        # owned by this user.
+        if "token_id" in match:
+            return []
+        # Name-dedup query (user-id only) → user does have a real prior
+        # token at a different id.
+        return [{"token_id": "real-prior", "name": "MCP — Cursor", "user_id": "u1"}]
+
+    auth.database.get_rows = AsyncMock(side_effect=_get_rows)
+
+    resp = await wizard_client.post(
+        "/mcp/v1/connect/token",
+        json={
+            "session_token": "sess-1",
+            "client_id": "cursor",
+            "prev_token_id": "foreign-id",
+        },
+        headers={"Origin": "http://localhost:8095"},
+    )
+    assert resp.status == 200
+
+    deleted_ids = [c.args[1]["token_id"] for c in auth.database.delete.await_args_list]
+    assert deleted_ids == ["real-prior"]
+    auth.create_token.assert_awaited_once()
+
+
 async def test_token_endpoint_dedup_lookup_failure_does_not_fail_mint(
     wizard_client: TestClient, wizard_mass: MagicMock
 ) -> None:
