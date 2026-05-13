@@ -142,6 +142,19 @@ def make_exchange(ctx: WizardContext) -> Callable[[web.Request], Any]:
         if user is None or not getattr(user, "enabled", True):
             return web.json_response({"error": "invalid bootstrap"}, status=401)
 
+        # Make the bootstrap single-use: revoke it BEFORE minting the session
+        # so a partial failure (revoke ok, mint fails) cannot leave both the
+        # bootstrap and a session valid. If get_token_id can't extract a jti
+        # (legacy/unknown shape) we skip the revoke — no regression vs prior
+        # behaviour.
+        try:
+            bootstrap_id = ctx.mass.webserver.auth.jwt_helper.get_token_id(bootstrap)
+        except Exception:
+            LOGGER.exception("Connect Wizard: get_token_id raised for bootstrap")
+            bootstrap_id = None
+        if bootstrap_id:
+            await revoke_token_by_id(ctx.mass, bootstrap_id)
+
         try:
             session = await ctx.mass.webserver.auth.create_token(
                 user=user,

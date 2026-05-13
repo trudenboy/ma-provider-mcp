@@ -181,6 +181,73 @@ async def test_exchange_bootstrap_invalid_401(
     wizard_mass.webserver.auth.create_token.assert_not_called()
 
 
+async def test_exchange_revokes_bootstrap_on_success(
+    wizard_client: TestClient, wizard_mass: MagicMock
+) -> None:
+    """Successful exchange deletes the bootstrap row and drops any WS bound to it."""
+    auth = wizard_mass.webserver.auth
+
+    resp = await wizard_client.post(
+        "/mcp/v1/connect/exchange",
+        json={"bootstrap": "boot-1"},
+        headers={"Origin": "http://localhost:8095"},
+    )
+    assert resp.status == 200
+
+    auth.database.delete.assert_awaited_once_with("auth_tokens", {"token_id": "tid:boot-1"})
+    wizard_mass.webserver.disconnect_websockets_for_token.assert_called_once_with("tid:boot-1")
+
+
+async def test_exchange_invalid_bootstrap_does_not_revoke(
+    wizard_client: TestClient, wizard_mass: MagicMock
+) -> None:
+    """Invalid bootstrap → no revoke and no mint."""
+    wizard_mass.webserver.auth.authenticate_with_token = AsyncMock(return_value=None)
+
+    resp = await wizard_client.post(
+        "/mcp/v1/connect/exchange",
+        json={"bootstrap": "bad"},
+        headers={"Origin": "http://localhost:8095"},
+    )
+    assert resp.status == 401
+    wizard_mass.webserver.auth.database.delete.assert_not_called()
+
+
+async def test_exchange_revoke_failure_still_returns_session(
+    wizard_client: TestClient, wizard_mass: MagicMock
+) -> None:
+    """A delete exception is swallowed; the exchange still issues a session_token."""
+    auth = wizard_mass.webserver.auth
+    auth.database.delete = AsyncMock(side_effect=RuntimeError("delete failed"))
+
+    resp = await wizard_client.post(
+        "/mcp/v1/connect/exchange",
+        json={"bootstrap": "boot-1"},
+        headers={"Origin": "http://localhost:8095"},
+    )
+    assert resp.status == 200
+    data = await resp.json()
+    assert data["session_token"] == "jwt-xyz"
+    auth.create_token.assert_awaited_once()
+
+
+async def test_exchange_get_token_id_none_skips_revoke(
+    wizard_client: TestClient, wizard_mass: MagicMock
+) -> None:
+    """When ``get_token_id`` returns ``None`` the revoke is skipped, mint still happens."""
+    auth = wizard_mass.webserver.auth
+    auth.jwt_helper.get_token_id = MagicMock(return_value=None)
+
+    resp = await wizard_client.post(
+        "/mcp/v1/connect/exchange",
+        json={"bootstrap": "boot-1"},
+        headers={"Origin": "http://localhost:8095"},
+    )
+    assert resp.status == 200
+    auth.database.delete.assert_not_called()
+    auth.create_token.assert_awaited_once()
+
+
 # ── Login form fallback ──────────────────────────────────────────────────────
 
 
