@@ -5,6 +5,40 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.18] — 2026-05-22
+
+### Changed
+- **Bundled FastMCP bumped from `3.2.4` to `3.3.1`.** Picks up
+  reentrant lifespan handling for mounted servers (relevant — we
+  mount 8 sub-servers under one root), clean ping-loop exit on
+  stream close, HTTP-transport teardown ordered before lifespan
+  shutdown, OTEL instrumentation of `list_*` operations, and
+  hardened OAuth-proxy silent-consent. No code changes required;
+  all 193 tests pass unmodified. The `fastmcp-slim` client-only
+  distribution introduced in 3.3 is **not** used — this provider is
+  a server.
+- **`manifest.json` `documentation` field now points to the official
+  Music Assistant docs site (`music-assistant.io/plugins/fastmcp_server/`)
+  instead of the external source repository,** so the *Documentation*
+  link in the provider config panel takes the user to the in-house docs
+  the rest of the MA UI links to.
+
+### Fixed
+- **`asyncio.get_event_loop()` deprecation warning on Python 3.14
+  during plugin unload.** Replaced with the modern
+  `asyncio.get_running_loop()` / `asyncio.run()` pair, so the
+  unmount path keeps working on 3.14 (where `get_event_loop()` now
+  raises `RuntimeError` outside a running loop instead of silently
+  creating one).
+- **`pytest_addoption` and `pytest_collection_modifyitems` hooks in
+  the test conftest leaked a global `--run-integration` CLI flag and
+  a whole-session marker-skip into the surrounding pytest run.** When
+  the test tree is collected alongside the broader Music Assistant
+  suite, those hooks would have added an unsolicited CLI option and
+  iterated every collected item — including tests outside this
+  provider — looking for an `integration` marker. The hooks have
+  been removed (no test in the repo actually used the marker).
+
 ## [0.3.17] — 2026-05-13
 
 ### Fixed

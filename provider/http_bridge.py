@@ -257,12 +257,13 @@ async def mount_into_mass(
             unregister()
         # Schedule the lifespan shutdown — caller may be sync (MA's
         # ``unload``), so dispatch onto the running loop without blocking.
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            loop.create_task(_stop_asgi_lifespan(lifespan_state))
-        else:  # pragma: no cover - belt-and-braces for unit-test contexts
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:  # pragma: no cover - belt-and-braces for unit-test contexts
             with contextlib.suppress(Exception):
-                loop.run_until_complete(_stop_asgi_lifespan(lifespan_state))
+                asyncio.run(_stop_asgi_lifespan(lifespan_state))
+        else:
+            loop.create_task(_stop_asgi_lifespan(lifespan_state))
 
     return _unmount
 
