@@ -25,11 +25,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **`asyncio.get_event_loop()` deprecation warning on Python 3.14
-  during plugin unload.** Replaced with the modern
-  `asyncio.get_running_loop()` / `asyncio.run()` pair, so the
-  unmount path keeps working on 3.14 (where `get_event_loop()` now
-  raises `RuntimeError` outside a running loop instead of silently
-  creating one).
+  during plugin unload.** The unmount path now uses
+  `asyncio.get_running_loop()`. The unreachable sync-context
+  fallback was dropped — `MCPServerRuntime.stop` is `async`, so the
+  unmount closure always runs with a live event loop and the
+  fallback only added noise.
 - **`pytest_addoption` and `pytest_collection_modifyitems` hooks in
   the test conftest leaked a global `--run-integration` CLI flag and
   a whole-session marker-skip into the surrounding pytest run.** When
