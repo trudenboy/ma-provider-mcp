@@ -10,7 +10,7 @@
     "[Model Context Protocol](https://modelcontextprotocol.io/)"
   ],
   "requirements": ["fastmcp==3.3.1"],
-  "documentation": "https://music-assistant.io/plugins/fastmcp_server/",
+  "documentation": "https://music-assistant.io/plugins/fastmcp-server/",
   "multi_instance": false,
   "builtin": false
 }

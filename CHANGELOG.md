@@ -18,7 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   distribution introduced in 3.3 is **not** used — this provider is
   a server.
 - **`manifest.json` `documentation` field now points to the official
-  Music Assistant docs site (`music-assistant.io/plugins/fastmcp_server/`)
+  Music Assistant docs site (`music-assistant.io/plugins/fastmcp-server/`)
   instead of the external source repository,** so the *Documentation*
   link in the provider config panel takes the user to the in-house docs
   the rest of the MA UI links to.
