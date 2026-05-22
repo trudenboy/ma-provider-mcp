@@ -16,7 +16,7 @@ import pytest
 from provider.http_bridge import _start_asgi_lifespan
 
 
-async def _silent_asgi(scope: dict[str, Any], receive: Any, send: Any) -> None:
+async def _silent_asgi(scope: dict[str, Any], receive: Any, _send: Any) -> None:
     """ASGI app that consumes the lifespan startup message but never acks."""
     if scope.get("type") != "lifespan":
         return
