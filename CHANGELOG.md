@@ -24,13 +24,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   smoke logger is renamed from `ma-provider-mcp.smoke` to
   `fastmcp_server.smoke` to match the provider domain.
 
-### Removed
-- **`test_compute_allowlist_handles_missing_attrs`.** It validated
-  the defensive `getattr(..., "base_url", "")` behaviour on a
-  synthetic `mass.webserver` that omitted the attribute — a shape
-  that does not occur against the real MA surface, so the test
-  was guarding a contract the provider no longer claims.
-
 ## [0.3.19] — 2026-05-22
 
 ### Fixed
