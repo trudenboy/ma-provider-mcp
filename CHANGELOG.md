@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.20] — 2026-05-26
+
+### Changed
+- **Defensive `hasattr` / `getattr` shims around stable Music
+  Assistant APIs are gone.** `mass.players.all_players()`,
+  `mass.player_queues.clear()`, `mass.webserver.base_url` and
+  `mass.webserver.publish_ip` are documented stable surfaces, so
+  the provider now calls them directly. A latent bug in the
+  ``list_players`` shim — a double-invoke of `all_players()` that
+  would have raised `TypeError` had the (unreachable) fallback ever
+  fired — is incidentally removed.
+- **Test conftest and `__init__` docstrings are now repo-agnostic,
+  and the `sys.path` injection in `tests/conftest.py` is gone.**
+  The `provider` package is already importable through the editable
+  install performed by `./scripts/setup.sh`, so the injection was
+  dead code in every supported test environment. The end-to-end
+  smoke logger is renamed from `ma-provider-mcp.smoke` to
+  `fastmcp_server.smoke` to match the provider domain.
+
+### Removed
+- **`test_compute_allowlist_handles_missing_attrs`.** It validated
+  the defensive `getattr(..., "base_url", "")` behaviour on a
+  synthetic `mass.webserver` that omitted the attribute — a shape
+  that does not occur against the real MA surface, so the test
+  was guarding a contract the provider no longer claims.
+
 ## [0.3.19] — 2026-05-22
 
 ### Fixed
