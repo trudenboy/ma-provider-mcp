@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.30] — 2026-05-27
+
+### Added
+- `list_players` now reports `available` and `enabled` on every player
+  brief, mirroring the same flags Music Assistant exposes for each
+  device. The previous response shape (without these fields) is a
+  strict subset, so existing callers keep working.
+- `list_players` accepts a new `include_unavailable` parameter
+  (default `False`) that controls whether offline / unreachable
+  players appear in the result.
+
+### Fixed
+- **Offline players were indistinguishable from quiet ones in
+  `list_players`.** Music Assistant never receives push updates from
+  a device it has lost contact with, so the cached `state` stayed at
+  `"idle"` and `powered` stayed at `True` — the brief looked
+  identical to a working speaker that simply wasn't playing
+  anything. The default `list_players` response now omits
+  unavailable devices entirely, and when they're requested
+  explicitly (`include_unavailable=True`) their `state` is reported
+  as `"unavailable"` so callers can tell the two cases apart.
+
 ## [0.3.29] — 2026-05-27
 
 ### Fixed

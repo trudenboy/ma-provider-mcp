@@ -31,16 +31,26 @@ def build_players_server(mass: MusicAssistant) -> FastMCP:
         ),
         timeout=TIMEOUT_FAST,
     )  # type: ignore[untyped-decorator, unused-ignore]
-    async def list_players() -> list[PlayerBrief]:
+    async def list_players(include_unavailable: bool = False) -> list[PlayerBrief]:
         """
-        List all players known to Music Assistant.
+        List players known to Music Assistant.
 
         Returns ``PlayerBrief`` items with ``player_id``, ``name``, ``state``,
-        ``powered``, ``volume_level``, group membership and the currently
-        playing item (if any). Does not include queue contents — use the
-        ``queue`` tools for that.
+        ``powered``, ``volume_level``, ``available``, ``enabled`` and the
+        currently playing item (if any). Players that MA has lost contact
+        with are hidden by default — pass ``include_unavailable=True`` to
+        get them back, with ``state="unavailable"`` so they are easy to
+        distinguish. Does not include queue contents — use the ``queue``
+        tools for that.
+
+        :param include_unavailable: When ``True``, include players whose
+            ``available`` flag is ``False`` (offline / unreachable
+            devices). Defaults to ``False``.
         """
-        return [to_brief_player(p) for p in mass.players.all_players()]
+        briefs = [to_brief_player(p) for p in mass.players.all_players()]
+        if include_unavailable:
+            return briefs
+        return [b for b in briefs if b.available]
 
     @sub.tool(
         tags={Tag.QUERY_PLAYERS},

@@ -160,6 +160,19 @@ def to_brief_player(player: Any) -> PlayerBrief:
             getattr(current_media, "uri", None)
         )
 
+    # Default ``available`` / ``enabled`` to ``True`` so legacy fixtures (and
+    # any partial stub built before this field existed) keep working. MA's
+    # real :class:`Player` always sets both.
+    available_val = bool(getattr(player, "available", True))
+    enabled_val = bool(getattr(player, "enabled", True))
+
+    # An offline device's cached ``playback_state`` is whatever MA last saw —
+    # usually ``"idle"``, which is indistinguishable from a genuinely quiet
+    # speaker. Surface the offline status in ``state`` so a single field
+    # tells the caller everything they need to triage the device.
+    if not available_val:
+        state_value = "unavailable"
+
     return PlayerBrief(
         player_id=str(getattr(player, "player_id", "")),
         name=str(getattr(player, "display_name", None) or getattr(player, "name", "")),
@@ -167,6 +180,8 @@ def to_brief_player(player: Any) -> PlayerBrief:
         volume_level=_int(getattr(player, "volume_level", None)),
         powered=powered_val,
         current_item=current_item,
+        available=available_val,
+        enabled=enabled_val,
     )
 
 

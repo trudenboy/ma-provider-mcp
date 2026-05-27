@@ -241,6 +241,61 @@ def test_to_brief_player_current_item_uses_state_current_media() -> None:
     assert to_brief_player(player).current_item is None
 
 
+def test_to_brief_player_exposes_available_and_enabled() -> None:
+    """``available`` / ``enabled`` flow through from the upstream player object."""
+    player = SimpleNamespace(
+        player_id="p1",
+        name="P1",
+        playback_state=SimpleNamespace(value="idle"),
+        volume_level=0,
+        powered=True,
+        current_media=None,
+        available=False,
+        enabled=False,
+    )
+    brief = to_brief_player(player)
+    assert brief.available is False
+    assert brief.enabled is False
+
+
+def test_to_brief_player_available_enabled_default_true_when_attrs_missing() -> None:
+    """Legacy stubs without ``available`` / ``enabled`` keep working (defaults to True).
+
+    Pins back-compat: tests built before this feature use bare
+    ``SimpleNamespace`` players, and they must still produce a usable brief.
+    """
+    player = SimpleNamespace(
+        player_id="p1",
+        name="P1",
+        playback_state=SimpleNamespace(value="playing"),
+        volume_level=50,
+        powered=True,
+        current_media=None,
+    )
+    brief = to_brief_player(player)
+    assert brief.available is True
+    assert brief.enabled is True
+
+
+def test_to_brief_player_unavailable_overrides_state() -> None:
+    """``state`` becomes ``"unavailable"`` when the player is offline.
+
+    Without the override the brief reports the cached ``playback_state``
+    (typically ``"idle"``) and an LLM cannot distinguish a quiet speaker
+    from one that fell off the network.
+    """
+    player = SimpleNamespace(
+        player_id="p1",
+        name="P1",
+        playback_state=SimpleNamespace(value="idle"),
+        volume_level=None,
+        powered=True,
+        current_media=None,
+        available=False,
+    )
+    assert to_brief_player(player).state == "unavailable"
+
+
 def test_to_brief_queue_with_items() -> None:
     """``to_brief_queue`` builds a ``QueueBrief`` with item summaries."""
     queue = SimpleNamespace(

@@ -69,6 +69,8 @@ class PlayerBrief:
     volume_level: int | None = None
     powered: bool = True
     current_item: str | None = None
+    available: bool = True
+    enabled: bool = True
 
 
 @dataclass
