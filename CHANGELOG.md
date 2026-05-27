@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.31] — 2026-05-27
+
+### Changed
+- **Connect-wizard bootstrap helpers moved from the package root to
+  `provider._init_helpers`** with a back-compat re-export from
+  `provider.__init__`. Existing callers (`from provider import
+  _detect_external_base_url, …`) keep working, but tests now use the
+  dotted-path import — the upstream-PR rewrite only translates
+  ``from provider.<sub> import …`` forms, so a bare
+  ``from provider import …`` slipped through the rename and broke
+  upstream CI with `ModuleNotFoundError`. The wrapper itself is being
+  patched in `ma-provider-tools`; this change unblocks the next sync
+  in the meantime.
+- **`tests/test_origins_module.py`** switches from
+  `from provider import origins` (namespace import, also missed by
+  the rewrite) to explicit ``from provider.origins import …`` names
+  — the same contract is still pinned by the from-import failing at
+  collection time if a name disappears.
+
 ## [0.3.30] — 2026-05-27
 
 ### Added
