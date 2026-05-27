@@ -23,7 +23,7 @@ def build_players_server(mass: MusicAssistant) -> FastMCP:
     @sub.tool(
         tags={Tag.QUERY_PLAYERS},
         annotations=ToolAnnotations(
-            title="List all players",
+            title="List players",
             readOnlyHint=True,
             destructiveHint=False,
             idempotentHint=True,
@@ -47,10 +47,12 @@ def build_players_server(mass: MusicAssistant) -> FastMCP:
             ``available`` flag is ``False`` (offline / unreachable
             devices). Defaults to ``False``.
         """
-        briefs = [to_brief_player(p) for p in mass.players.all_players()]
-        if include_unavailable:
-            return briefs
-        return [b for b in briefs if b.available]
+        # Delegate filtering to MA's native ``return_unavailable`` knob rather
+        # than re-implementing it in Python — MA short-circuits the build at
+        # the controller level and applies the same user-role visibility
+        # filters as every other consumer.
+        players = mass.players.all_players(return_unavailable=include_unavailable)
+        return [to_brief_player(p) for p in players]
 
     @sub.tool(
         tags={Tag.QUERY_PLAYERS},
