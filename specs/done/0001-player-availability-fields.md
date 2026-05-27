@@ -2,7 +2,7 @@
 id: "0001"
 title: "Expose player availability so callers can ignore offline devices"
 size: S
-status: inprogress
+status: done
 priority: P1
 effort_minutes: 10
 feature_id:
