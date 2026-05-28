@@ -13,10 +13,14 @@ for ``mass``.
 from __future__ import annotations
 
 import importlib.util
+import shutil
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+
+from provider.debug import log_reader
 
 
 class FakeWebserver:
@@ -210,3 +214,19 @@ def mock_config() -> MagicMock:
 def have_fastmcp() -> bool:
     """True if ``fastmcp`` is importable in the current environment."""
     return importlib.util.find_spec("fastmcp") is not None
+
+
+@pytest.fixture
+def tmp_log_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Sandboxed log root for SafeLogTail tests.
+
+    Copies the fixture log into ``tmp_path`` and patches
+    ``SafeLogTail.ROOT`` to point at it. Tests never touch the real
+    ``~/.musicassistant/`` directory.
+    """
+    src = Path(__file__).parent / "fixtures" / "musicassistant.sample.log"
+    dst = tmp_path / "musicassistant.log"
+    shutil.copyfile(src, dst)
+
+    monkeypatch.setattr(log_reader.SafeLogTail, "ROOT", tmp_path, raising=True)
+    return tmp_path
