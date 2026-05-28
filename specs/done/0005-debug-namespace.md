@@ -2,7 +2,7 @@
 id: "0005"
 title: "Debug namespace for MA development and troubleshooting via MCP"
 size: L
-status: inprogress
+status: done
 priority: P1
 effort_minutes: 480
 feature_id:
