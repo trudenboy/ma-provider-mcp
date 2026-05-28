@@ -769,3 +769,62 @@ def test_debug_dataclass_shape(name: str, fields: set[str]) -> None:
     assert cls.__dataclass_params__.kw_only, f"{name} must be kw_only"  # type: ignore[attr-defined]
     actual = {f.name for f in dataclasses.fields(cls)}
     assert actual == fields, f"{name} fields drift: {actual - fields=} {fields - actual=}"
+
+
+_CONFIG_CLASSES = [
+    ("ConfigTarget", {"target_type", "target_id", "domain", "name", "enabled"}),
+    ("ConfigTargetList", {"providers", "core", "players"}),
+    ("CoreConfigDump", {"domain", "values", "truncated"}),
+    ("PlayerConfigDump", {"player_id", "provider", "values", "truncated"}),
+    (
+        "ConfigEntryDump",
+        {
+            "key",
+            "type",
+            "label",
+            "default_value",
+            "required",
+            "description",
+            "options",
+            "range",
+            "advanced",
+            "hidden",
+            "requires_reload",
+            "depends_on",
+            "action",
+            "current_value",
+        },
+    ),
+    ("ConfigEntryList", {"target_type", "target_id", "entries", "truncated"}),
+    ("DSPConfigDump", {"player_id", "enabled", "input_gain", "output_gain", "filters"}),
+    ("ValueChange", {"key", "before", "after", "secret"}),
+    ("DiffResult", {"target_type", "target_id", "changes"}),
+    (
+        "SetValueResult",
+        {"target_type", "target_id", "key", "applied", "requires_reload", "audit_log_id", "diff"},
+    ),
+    (
+        "SaveResult",
+        {
+            "target_type",
+            "target_id",
+            "applied",
+            "changes",
+            "requires_reload",
+            "audit_log_id",
+            "diff",
+        },
+    ),
+    ("ActionResult", {"instance_id", "action_key", "new_entries", "extra_data", "audit_log_id"}),
+]
+
+
+@pytest.mark.parametrize(("name", "fields"), _CONFIG_CLASSES)
+def test_config_dataclass_shape(name: str, fields: set[str]) -> None:
+    """Config dataclasses are frozen, kw_only, and have the expected fields."""
+    cls = cast("type", getattr(provider.models, name))
+    assert dataclasses.is_dataclass(cls), f"{name} is not a dataclass"
+    assert cls.__dataclass_params__.frozen, f"{name} must be frozen"  # type: ignore[attr-defined]
+    assert cls.__dataclass_params__.kw_only, f"{name} must be kw_only"  # type: ignore[attr-defined]
+    actual = {f.name for f in dataclasses.fields(cls)}
+    assert actual == fields, f"{name} fields drift: {actual - fields=} {fields - actual=}"

@@ -286,3 +286,142 @@ class HealthSummary:
     events_per_min_by_type: dict[str, float] | None
     log_errors_last_5min: int | None
     disabled_capabilities: list[str]
+
+
+# ---- Config namespace response dataclasses (spec 0006) ----
+
+
+@dataclass(frozen=True, kw_only=True)
+class ConfigTarget:
+    """One configurable target (provider, core controller, or player)."""
+
+    target_type: str
+    target_id: str
+    domain: str
+    name: str
+    enabled: bool
+
+
+@dataclass(frozen=True, kw_only=True)
+class ConfigTargetList:
+    """Result of config_list_targets."""
+
+    providers: list[ConfigTarget]
+    core: list[ConfigTarget]
+    players: list[ConfigTarget]
+
+
+@dataclass(frozen=True, kw_only=True)
+class CoreConfigDump:
+    """Result of config_get_core."""
+
+    domain: str
+    values: list[ConfigValueDump]
+    truncated: bool
+
+
+@dataclass(frozen=True, kw_only=True)
+class PlayerConfigDump:
+    """Result of config_get_player."""
+
+    player_id: str
+    provider: str
+    values: list[ConfigValueDump]
+    truncated: bool
+
+
+@dataclass(frozen=True, kw_only=True)
+class ConfigEntryDump:
+    """One editable ConfigEntry definition + current value."""
+
+    key: str
+    type: str
+    label: str
+    default_value: Any
+    required: bool
+    description: str | None
+    options: list[Any] | None
+    range: tuple[int, int] | None
+    advanced: bool
+    hidden: bool
+    requires_reload: bool
+    depends_on: str | None
+    action: str | None
+    current_value: Any
+
+
+@dataclass(frozen=True, kw_only=True)
+class ConfigEntryList:
+    """Result of config_get_entries."""
+
+    target_type: str
+    target_id: str
+    entries: list[ConfigEntryDump]
+    truncated: bool
+
+
+@dataclass(frozen=True, kw_only=True)
+class DSPConfigDump:
+    """Result of config_get_dsp — mirrors music_assistant_models.dsp.DSPConfig."""
+
+    player_id: str
+    enabled: bool
+    input_gain: float
+    output_gain: float
+    filters: list[dict[str, Any]]
+
+
+@dataclass(frozen=True, kw_only=True)
+class ValueChange:
+    """One key's before/after in a config diff (secrets masked both sides)."""
+
+    key: str
+    before: Any
+    after: Any
+    secret: bool
+
+
+@dataclass(frozen=True, kw_only=True)
+class DiffResult:
+    """A dry-run config diff."""
+
+    target_type: str
+    target_id: str
+    changes: list[ValueChange]
+
+
+@dataclass(frozen=True, kw_only=True)
+class SetValueResult:
+    """Result of config_set_*_value."""
+
+    target_type: str
+    target_id: str
+    key: str
+    applied: bool
+    requires_reload: bool
+    audit_log_id: str
+    diff: DiffResult | None
+
+
+@dataclass(frozen=True, kw_only=True)
+class SaveResult:
+    """Result of config_save_* (bulk)."""
+
+    target_type: str
+    target_id: str
+    applied: bool
+    changes: list[ValueChange]
+    requires_reload: bool
+    audit_log_id: str
+    diff: DiffResult | None
+
+
+@dataclass(frozen=True, kw_only=True)
+class ActionResult:
+    """Result of config_trigger_provider_action."""
+
+    instance_id: str
+    action_key: str
+    new_entries: list[ConfigEntryDump]
+    extra_data: dict[str, Any]
+    audit_log_id: str
