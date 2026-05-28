@@ -36,7 +36,7 @@ def coerce(entry: ConfigEntry, value: Any) -> Any:
     except Exception as exc:
         raise ToolError(f"value for {entry.key!r} failed validation: {exc}") from exc
 
-    if entry.range is not None and isinstance(parsed, int | float):
+    if entry.range is not None and isinstance(parsed, int | float) and not isinstance(parsed, bool):
         low, high = entry.range
         if not (low <= parsed <= high):
             raise ToolError(
@@ -45,9 +45,11 @@ def coerce(entry: ConfigEntry, value: Any) -> Any:
 
     if entry.options and parsed is not None:
         allowed = {opt.value for opt in entry.options}
-        if parsed not in allowed:
+        candidates = parsed if isinstance(parsed, list) else [parsed]
+        bad = [c for c in candidates if c not in allowed]
+        if bad:
             raise ToolError(
-                f"value for {entry.key!r} failed validation: {parsed!r} not in allowed options"
+                f"value for {entry.key!r} failed validation: {bad!r} not in allowed options"
             )
 
     return parsed

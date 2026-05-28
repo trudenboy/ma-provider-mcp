@@ -68,3 +68,24 @@ def test_coerce_string_in_options_ok() -> None:
         options=[ConfigValueOption(title="A", value="a"), ConfigValueOption(title="B", value="b")],
     )
     assert coerce(entry, "a") == "a"
+
+
+def test_coerce_boolean_with_stray_range_not_range_checked() -> None:
+    # bool subclasses int — a BOOLEAN entry that carries a range must NOT
+    # be range-checked (False == 0 would spuriously fail range=(1,15)).
+    entry = _entry(type=ConfigEntryType.BOOLEAN, range=(1, 15))
+    assert coerce(entry, False) is False
+    assert coerce(entry, True) is True
+
+
+def test_coerce_multi_value_options_checks_each_member() -> None:
+    entry = _entry(
+        type=ConfigEntryType.STRING,
+        multi_value=True,
+        options=[ConfigValueOption(title="A", value="a"), ConfigValueOption(title="B", value="b")],
+    )
+    # all members valid → passes, returns the list
+    assert coerce(entry, ["a", "b"]) == ["a", "b"]
+    # a bad member → ToolError, NOT a raw TypeError
+    with pytest.raises(ToolError, match="failed validation"):
+        coerce(entry, ["a", "z"])
