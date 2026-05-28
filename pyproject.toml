@@ -49,6 +49,9 @@ filterwarnings = [
 # >>> ma-provider-tools sync (codespell skip) — DO NOT EDIT >>>
 skip = "*.js,*.svg,docs-site/package-lock.json"
 # <<< ma-provider-tools sync (codespell skip) <<<
+# Provider-specific carve-out (does not drift): "hass" is the Home Assistant
+# root-object attribute name, not a misspelling of "hash".
+ignore-words-list = "hass"
 
 # >>> ma-provider-tools sync (mypy) — DO NOT EDIT >>>
 [tool.mypy]
