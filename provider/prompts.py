@@ -64,7 +64,8 @@ def register_prompts(mcp: Any, config: ProviderConfig) -> None:
             )
         return (
             "List players via players_list_players (pass "
-            "include_unavailable=True if you also want offline devices). "
+            "include_unavailable=True for offline devices, "
+            "include_disabled=True for admin-disabled devices). "
             "For each player whose state is 'playing', fetch its active "
             "queue and summarise the now-playing track. Group by room "
             "when possible. A player whose state is 'synced' is playing "

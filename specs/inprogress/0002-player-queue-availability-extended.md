@@ -93,16 +93,21 @@ over from v0.3.30.
 ## Sequence Diagram
 
 ```mermaid
-flowchart TD
-    A[Player object from MA] --> B{available?}
-    B -- no --> Bs["state = 'unavailable'"]
-    B -- yes --> C{enabled?}
-    C -- no --> Cs["state = 'disabled'"]
-    C -- yes --> D{needs_setup?}
-    D -- yes --> Ds["state = 'needs_setup'"]
-    D -- no --> E{synced_to or active_group set?}
-    E -- yes --> Es["state = 'synced'"]
-    E -- no --> F["state = playback_state.value"]
+sequenceDiagram
+    actor LLM
+    participant Tool as players_list_players
+    participant MA as mass.players
+    participant Mapper as to_brief_player
+
+    LLM->>Tool: list_players(include_unavailable=False, include_disabled=False)
+    Tool->>MA: all_players(return_unavailable=False, return_disabled=False)
+    MA-->>Tool: [Player, Player, …]
+    loop each Player
+        Tool->>Mapper: to_brief_player(player)
+        Note over Mapper: priority ladder<br/>1. not available → "unavailable"<br/>2. not enabled  → "disabled"<br/>3. needs_setup  → "needs_setup"<br/>4. synced_to / active_group → "synced"<br/>5. else → playback_state.value
+        Mapper-->>Tool: PlayerBrief(state=…, available, enabled, needs_setup, active_group, synced_to, …)
+    end
+    Tool-->>LLM: [PlayerBrief, …]
 ```
 
 The ladder is short-circuit: the first matching blocker wins and the

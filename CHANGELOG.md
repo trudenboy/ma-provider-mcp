@@ -36,20 +36,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   client doing equality checks against `idle`/`playing`/`paused`
   keeps working as before.
 - **`now_playing_summary` prompt** now reflects the default filter
-  (`include_unavailable=True` is the way to inspect offline
-  devices) and tells the LLM what `state="synced"` means for queue
-  routing.
-
-### Fixed
-- **Three test-fragility nits from the `0.3.30` self-review.** The
-  `to_brief_player` playback-state equality test now pins every
-  defaulted field explicitly so a future default flip can't pass
-  silently. The `available`/`enabled` exposure test now also asserts
-  the synthesised `state` on the same stub so a regression that
-  breaks the override only when both fields are set is caught.
-  The `mounted_players` pytest fixture is now `yield`-based with a
-  best-effort shutdown hook so a future FastMCP lifecycle change
-  can't leak state between tests.
+  (`include_unavailable=True` for offline devices,
+  `include_disabled=True` for admin-disabled devices) and tells the
+  LLM what `state="synced"` means for queue routing.
 
 ## [0.3.31] — 2026-05-27
 
