@@ -61,7 +61,7 @@ async def test_unload_stops_event_buffer_before_unmount(
         call_order.append("buffer_stop")
         original_stop()
 
-    buf.stop = _stop_record  # type: ignore[method-assign]
+    setattr(buf, "stop", _stop_record)  # noqa: B010 -- patch bound method for call-order assertion
 
     original_unmount = runtime._unmount
 
@@ -70,7 +70,7 @@ async def test_unload_stops_event_buffer_before_unmount(
         if original_unmount is not None:
             await original_unmount()
 
-    runtime._unmount = _unmount_record  # type: ignore[assignment]
+    setattr(runtime, "_unmount", _unmount_record)  # noqa: B010 -- patch teardown hook for call-order assertion
 
     await runtime.stop()
     assert call_order, "no recorded teardown calls"

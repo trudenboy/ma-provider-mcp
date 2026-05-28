@@ -4,13 +4,16 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 from fastmcp import Client
 from fastmcp.exceptions import ToolError
 
 from provider.debug.log_reader import SafeLogTail
+
+if TYPE_CHECKING:
+    from music_assistant.mass import MusicAssistant
 
 
 def test_tail_returns_last_n_lines(tmp_log_dir: Path) -> None:  # noqa: ARG001 -- fixture activates SafeLogTail.ROOT patch via monkeypatch
@@ -39,7 +42,7 @@ def test_tail_parses_real_ma_log_line_format(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    SafeLogTail.ROOT = tmp_path  # type: ignore[misc]
+    setattr(SafeLogTail, "ROOT", tmp_path)  # noqa: B010 -- redirect class-level log root for this test
     try:
         result = SafeLogTail().tail(lines=10)
     finally:
@@ -63,9 +66,9 @@ def test_tail_prefers_mass_storage_path_over_class_root(tmp_path: Path) -> None:
     """
     log_path = tmp_path / "musicassistant.log"
     log_path.write_text("2026-05-28 09:00:00,001 INFO music_assistant.mass: hello\n")
-    mass = SimpleNamespace(storage_path=str(tmp_path))
+    mass = cast("MusicAssistant", SimpleNamespace(storage_path=str(tmp_path)))
 
-    tail = SafeLogTail(mass)  # type: ignore[arg-type]
+    tail = SafeLogTail(mass)
     result = tail.tail(lines=5)
     assert result.log_path == str(log_path)
     assert len(result.lines) == 1

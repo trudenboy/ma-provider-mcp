@@ -7,6 +7,7 @@ import dataclasses
 import datetime as dt
 import enum
 import json
+from typing import Any
 
 from provider.debug.inspect_serializer import dump
 
@@ -31,14 +32,14 @@ def test_dump_simple_dataclass() -> None:  # noqa: D103
 
 
 def test_dump_handles_self_reference_without_recursion_error() -> None:  # noqa: D103
-    d: dict = {}
+    d: dict[str, Any] = {}
     d["self"] = d
     out = dump(d)
     assert out["self"] == "<cycle>"
 
 
 def test_dump_max_depth_truncates() -> None:  # noqa: D103
-    deep: dict = {}
+    deep: dict[str, Any] = {}
     current = deep
     for i in range(10):
         current["next"] = {}
@@ -46,7 +47,7 @@ def test_dump_max_depth_truncates() -> None:  # noqa: D103
     current["leaf"] = "value"
     out = dump(deep, max_depth=3)
 
-    def _depth(o, n=0):
+    def _depth(o: Any, n: int = 0) -> tuple[int, Any]:
         if isinstance(o, dict) and "next" in o:
             return _depth(o["next"], n + 1)
         return n, o
@@ -91,7 +92,7 @@ def test_dump_unserialisable_objects_render_placeholder() -> None:  # noqa: D103
 def test_dump_property_raising_renders_placeholder() -> None:  # noqa: D103
     class _Bad:
         @property
-        def value(self):
+        def value(self) -> str:
             raise RuntimeError("not ready")
 
     out = dump(_Bad())

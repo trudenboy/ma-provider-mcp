@@ -19,11 +19,11 @@ def _provider_config(instance_id: str = "yandex_music_1") -> SimpleNamespace:
     return SimpleNamespace(instance_id=instance_id, domain="yandex_music", enabled=True)
 
 
-def _decliner():
+def _decliner() -> object:
     """Elicitation handler that always declines — mirrors tests/test_elicitation.py."""
     from fastmcp.client.elicitation import ElicitResult  # noqa: PLC0415
 
-    async def handler(message, response_type, params, context):  # noqa: ARG001
+    async def handler(*args: Any, **kwargs: Any) -> ElicitResult:  # noqa: ARG001
         return ElicitResult(action="decline", content=None)
 
     return handler
