@@ -27,6 +27,7 @@ from ..models import (
     ConfigValueDump,
     EventBufferStats,
     EventSnapshot,
+    HealthSummary,
     LogTailResult,
     PackageVersions,
     PlayerInspect,
@@ -218,6 +219,7 @@ def build_debug_server(
     _register_events_tools(sub, mass, event_buffer)
     _register_providers_tools(sub, mass)
     _register_reload_tool(sub, mass, require_confirmation=require_confirmation)
+    _register_health_tool(sub, mass, buffer=event_buffer)
     return sub
 
 
@@ -506,6 +508,91 @@ def _register_providers_tools(sub: FastMCP, mass: MusicAssistant) -> None:
             except importlib.metadata.PackageNotFoundError:
                 out[pkg] = "<not installed>"
         return PackageVersions(packages=out)
+
+
+def _register_health_tool(
+    sub: FastMCP, mass: MusicAssistant, *, buffer: EventBuffer | None
+) -> None:
+    @sub.tool(
+        tags={Tag.DEBUG_PROVIDERS},
+        annotations=_readonly("Health summary roll-up"),
+        timeout=TIMEOUT_FAST,
+    )  # type: ignore[untyped-decorator, unused-ignore]
+    async def health_summary() -> HealthSummary:
+        """Entry-point triage tool — one read returns a roll-up of provider state, queue counts, event rate, and log error count.
+
+        If a section flags errors, drill into: debug_inspect_provider for provider
+        errors, debug_inspect_queue for queue errors, debug_tail_log for the
+        recent ERROR log lines. Fields whose capability is disabled show as
+        ``None`` with the tag name listed in ``disabled_capabilities``.
+        """
+        providers = list(getattr(mass, "providers", []))
+        loaded = sum(1 for p in providers if getattr(p, "available", False))
+        disabled = sum(1 for p in providers if not getattr(p, "enabled", True))
+        error_details: list[ProviderSummary] = []
+        for p in providers:
+            if getattr(p, "last_error", None):
+                ptype = getattr(getattr(p, "type", None), "value", "unknown")
+                error_details.append(
+                    ProviderSummary(
+                        instance_id=getattr(p, "instance_id", ""),
+                        domain=getattr(p, "domain", ""),
+                        type=str(ptype),
+                        name=getattr(p, "name", "") or getattr(p, "domain", ""),
+                        available=bool(getattr(p, "available", False)),
+                        last_error=getattr(p, "last_error", None),
+                    )
+                )
+
+        try:
+            queues = list(mass.player_queues.all())
+        except (AttributeError, TypeError):
+            queues = []
+        queues_active = sum(1 for q in queues if getattr(q, "state", None) == "playing")
+        queues_errors = sum(
+            1
+            for q in queues
+            if getattr(q, "state", None) == "error" or not getattr(q, "available", True)
+        )
+
+        disabled_capabilities: list[str] = []
+        events_per_min: dict[str, float] | None = None
+        if buffer is None:
+            disabled_capabilities.append("DEBUG_EVENTS")
+        else:
+            stats = buffer.stats()
+            if stats.subscribed_since is None:
+                disabled_capabilities.append("DEBUG_EVENTS")
+            else:
+                from datetime import datetime  # noqa: PLC0415
+
+                subscribed_at = datetime.fromisoformat(stats.subscribed_since)
+                elapsed_min = max(
+                    1.0 / 60,
+                    (datetime.now().astimezone() - subscribed_at).total_seconds() / 60.0,
+                )
+                events_per_min = {
+                    et: round(count / elapsed_min, 2) for et, count in stats.by_type.items()
+                }
+
+        log_errors: int | None = None
+        try:
+            log_errors = SafeLogTail().count_errors_last_5min()
+        except Exception:
+            disabled_capabilities.append("DEBUG_LOGS")
+
+        return HealthSummary(
+            providers_loaded=loaded,
+            providers_disabled=disabled,
+            providers_error=len(error_details),
+            providers_error_details=error_details,
+            queues_total=len(queues),
+            queues_with_active_playback=queues_active,
+            queues_with_errors=queues_errors,
+            events_per_min_by_type=events_per_min,
+            log_errors_last_5min=log_errors,
+            disabled_capabilities=disabled_capabilities,
+        )
 
 
 def _attribute_route(path: str) -> str | None:
