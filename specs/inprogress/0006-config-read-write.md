@@ -39,7 +39,7 @@ over MCP.
 ## Solution Summary
 
 Add a tenth FastMCP sub-server, `config`, mounted by `MCPServerRuntime`
-alongside the existing nine. It exposes thirteen tools across five new
+alongside the existing nine. It exposes fourteen tools across five new
 permission tags — `config:read`, `config:write:provider`,
 `config:write:core`, `config:write:player`, and the orthogonal
 `config:write:secret` — each gated by its own off-by-default
@@ -223,8 +223,11 @@ the rest of the provider.
 
 - **`tests/test_config_write_player.py`**
   - `test_set_player_value_persists`,
-  - `test_save_dsp_config_persists`,
-  - `test_save_payload_over_64kb_rejected` (AC #11).
+  - `test_save_player_bulk_persists`,
+  - `test_save_dsp_persists`,
+  - `test_save_dsp_dry_run_no_persist`,
+  - `test_save_player_payload_over_64kb_rejected` (AC #11),
+  - `test_save_dsp_invalid_payload_rejected`.
 
 - **Manual verification step (post-merge, local — MANDATORY).** Spec
   0005 shipped five production bugs that synthetic mocks did not catch
@@ -425,7 +428,7 @@ class ActionResult:
 ```
 provider/
   tools/
-    config.py                  # build_config_server + 13 tool defs
+    config.py                  # build_config_server + 14 tool defs
   config_io/
     __init__.py
     validator.py               # coerce(entry, value) -> parsed | ToolError
