@@ -5,6 +5,52 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.32] — 2026-05-28
+
+### Added
+- **`list_players` and `get_player` now expose three more
+  Music-Assistant signals**: `needs_setup` (device awaiting first-run
+  configuration), `active_group` (id of the active sync group the
+  device belongs to, when set), and `synced_to` (id of the sync
+  leader, when set). The previous response shape is a strict subset,
+  so existing callers keep working.
+- **`list_players` accepts a new `include_disabled` parameter**
+  (default `False`, matching MA's own `return_disabled` default).
+  Without it, admin-disabled players are filtered out by MA before
+  they reach the brief — the `enabled` field added in `0.3.30` was
+  therefore always `True` and effectively dead. Flipping the flag
+  exposes them with `state="disabled"` so an LLM can act on the
+  signal.
+- **`QueueBrief.available`** now mirrors `PlayerQueue.available` for
+  every queue tool response. The same triage problem the player
+  surface closed in `0.3.30` is now closed for queues as well.
+
+### Changed
+- **`state` on `PlayerBrief` summarises usability across four
+  blocker axes, not one.** The previous single override
+  (`state="unavailable"` when `available=False`) is now a priority
+  ladder: `unavailable` > `disabled` > `needs_setup` > `synced` >
+  the underlying `playback_state`. A device that is both offline
+  and a sync follower still reports `"unavailable"` (the most
+  blocking signal wins). The new state values are additive — any
+  client doing equality checks against `idle`/`playing`/`paused`
+  keeps working as before.
+- **`now_playing_summary` prompt** now reflects the default filter
+  (`include_unavailable=True` is the way to inspect offline
+  devices) and tells the LLM what `state="synced"` means for queue
+  routing.
+
+### Fixed
+- **Three test-fragility nits from the `0.3.30` self-review.** The
+  `to_brief_player` playback-state equality test now pins every
+  defaulted field explicitly so a future default flip can't pass
+  silently. The `available`/`enabled` exposure test now also asserts
+  the synthesised `state` on the same stub so a regression that
+  breaks the override only when both fields are set is caught.
+  The `mounted_players` pytest fixture is now `yield`-based with a
+  best-effort shutdown hook so a future FastMCP lifecycle change
+  can't leak state between tests.
+
 ## [0.3.31] — 2026-05-27
 
 ### Changed
