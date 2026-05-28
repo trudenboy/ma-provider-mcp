@@ -102,17 +102,21 @@ the rest of the provider.
    never encrypts, never persists raw, and never logs or returns the
    plaintext. A subsequent read renders the value as
    `SECURE_STRING_SUBSTITUTE`.
-5. The provider pre-validates every value through
-   `ConfigEntry.parse_value(..., raise_on_error=True)` (type coercion,
-   `range`, `options`, provider-defined `validate`) before calling
+5. The provider pre-validates every value before calling
    `save_*_config`; a failure raises
    `ToolError(f"value for {key!r} failed validation: ...")` and nothing
-   is sent to MA. MA's `save_*_config` re-validates authoritatively via
-   `config.validate()` — the provider's pass is for fail-early messages
-   and dry-run diffs, not a substitute. A bulk save is atomic at MA's
-   layer (`config.update()` + `validate()` + `to_raw()` persist happen
-   together, with rollback on reload failure for core/player), so a
-   single invalid key aborts the whole call with no partial write.
+   is sent to MA. Validation has two layers: `ConfigEntry.parse_value(...,
+   raise_on_error=True)` covers type coercion and the entry's optional
+   `validate` callback, and the provider additionally enforces `range`
+   (numeric bounds) and `options` (allowed-value set) — which MA itself
+   treats as UI hints, not parse-level constraints (verified in
+   `music_assistant_models.config_entries`), so the provider enforces
+   them as fail-early guardrails appropriate for autonomous-agent
+   writes. MA's `save_*_config` still re-validates type/None
+   authoritatively via `config.validate()`. A bulk save is atomic at
+   MA's layer (`config.update()` + `validate()` + `to_raw()` persist
+   happen together, with rollback on reload failure for core/player),
+   so a single invalid key aborts the whole call with no partial write.
 6. `dry_run=True` on any set/save returns the result dataclass with
    `applied=False` and a populated `diff` (key-by-key before/after, with
    SECURE_STRING values shown as `SECURE_STRING_SUBSTITUTE` on both
