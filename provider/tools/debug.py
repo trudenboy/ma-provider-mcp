@@ -161,8 +161,8 @@ def _register_reload_tool(
             )
 
 
-def _register_logs_tool(sub: FastMCP, mass: MusicAssistant) -> None:  # noqa: ARG001 -- mass reserved for symmetry/future use
-    tail = SafeLogTail()
+def _register_logs_tool(sub: FastMCP, mass: MusicAssistant) -> None:
+    tail = SafeLogTail(mass)
 
     @sub.tool(
         tags={Tag.DEBUG_LOGS},
@@ -578,7 +578,7 @@ def _register_health_tool(
 
         log_errors: int | None = None
         try:
-            log_errors = SafeLogTail().count_errors_last_5min()
+            log_errors = SafeLogTail(mass).count_errors_last_5min()
         except Exception:
             disabled_capabilities.append("DEBUG_LOGS")
 

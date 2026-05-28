@@ -1,4 +1,4 @@
-"""Stateless tail reader for ``$HOME/.musicassistant/musicassistant.log``.
+"""Stateless tail reader for ``mass.storage_path / musicassistant.log``.
 
 The reader is constrained by three load-bearing invariants:
 
@@ -14,6 +14,7 @@ The reader is constrained by three load-bearing invariants:
   before the line is returned. Best-effort; not a substitute for
   scrubbing in MA's own logger.
 """
+# ruff: noqa: TID252  -- relative imports are the canonical MA-provider pattern.
 
 from __future__ import annotations
 
@@ -21,15 +22,27 @@ import os
 import re
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from fastmcp.exceptions import ToolError
 
 from ..models import LogLine, LogTailResult
 
+if TYPE_CHECKING:
+    from music_assistant.mass import MusicAssistant
+
+# Accept both common formats:
+#   - Music Assistant runtime: ``<ts> <LEVEL> (<thread>) [<component>] <msg>``
+#   - Python logging default:  ``<ts> <LEVEL> <component>: <msg>``
+# Component is surfaced from whichever group matched.
 _LOG_LINE_RE = re.compile(
     r"^(?P<ts>\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?)\s+"
     r"(?P<level>[A-Z]+)\s+"
-    r"(?P<component>[A-Za-z0-9_.]+)\s*:\s*"
+    r"(?:"
+    r"\([^)]+\)\s+\[(?P<component_brk>[^\]]+)\]\s+"
+    r"|"
+    r"(?P<component_col>[A-Za-z0-9_.]+)\s*:\s+"
+    r")"
     r"(?P<msg>.*)$"
 )
 
@@ -47,8 +60,32 @@ _BLOCK_SIZE = 8 * 1024
 class SafeLogTail:
     """Tail the MA log file with path allowlist + byte cap + redactor."""
 
+    # Fallback root used only when no ``mass`` instance is provided. The class-level
+    # attribute remains so existing unit tests that monkeypatch ``SafeLogTail.ROOT``
+    # against a ``tmp_path`` keep working without plumbing the fixture through a mass
+    # mock. Production callers pass ``mass`` and the tailer reads ``mass.storage_path``,
+    # which is the directory MA itself writes ``musicassistant.log`` into
+    # (see MA ``mass.py``: ``logfile = os.path.join(self.storage_path, ...)``).
     ROOT: Path = Path.home() / ".musicassistant"
     ALLOWED = frozenset(["musicassistant.log"] + [f"musicassistant.log.{i}" for i in range(1, 6)])
+
+    def __init__(self, mass: MusicAssistant | None = None) -> None:
+        """Build a tail reader optionally bound to a live MA instance.
+
+        :param mass: When provided, the log root is taken from
+            ``mass.storage_path`` — honouring custom ``--data-dir`` deployments
+            (Docker, HA add-on, etc.). When ``None``, falls back to the class
+            attribute ``ROOT`` (default ``$HOME/.musicassistant``) so unit
+            tests that monkeypatch ``SafeLogTail.ROOT`` keep working.
+        """
+        self._mass = mass
+
+    @property
+    def _root(self) -> Path:
+        """Effective log root — prefer ``mass.storage_path`` when bound."""
+        if self._mass is not None:
+            return Path(self._mass.storage_path)
+        return self.ROOT
 
     def tail(
         self,
@@ -123,8 +160,8 @@ class SafeLogTail:
         if name not in self.ALLOWED:
             raise ToolError(f"log file {name!r} not allowed")
 
-        root_resolved = self.ROOT.resolve()
-        candidate = self.ROOT / name
+        root_resolved = self._root.resolve()
+        candidate = self._root / name
         # resolve(strict=False) follows symlinks; the is_relative_to check below
         # catches both directly-malformed paths and symlink-escape attempts in one pass.
         resolved = candidate.resolve(strict=False)
@@ -181,10 +218,11 @@ class SafeLogTail:
             parsed_ts = datetime.fromisoformat(ts_raw).astimezone().isoformat()
         except ValueError:
             parsed_ts = None
+        component = match.group("component_brk") or match.group("component_col")
         return LogLine(
             timestamp=parsed_ts,
             level=match["level"],
-            component=match["component"],
+            component=component,
             message=self._redact(match["msg"]),
         )
 

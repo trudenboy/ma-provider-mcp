@@ -217,18 +217,22 @@ def have_fastmcp() -> bool:
 
 
 @pytest.fixture
-def tmp_log_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+def tmp_log_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mock_mass: MagicMock) -> Path:
     """Sandboxed log root for SafeLogTail tests.
 
-    Copies the fixture log into ``tmp_path`` and patches
-    ``SafeLogTail.ROOT`` to point at it. Tests never touch the real
-    ``~/.musicassistant/`` directory.
+    Copies the fixture log into ``tmp_path`` and (a) patches the class-level
+    ``SafeLogTail.ROOT`` so bare ``SafeLogTail()`` callers see ``tmp_path``,
+    and (b) sets ``mock_mass.storage_path = str(tmp_path)`` so e2e tests that
+    go through ``mounted_debug → build_debug_server(mock_mass) →
+    SafeLogTail(mass)`` resolve to the same sandbox. Tests never touch the
+    real ``~/.musicassistant/`` directory.
     """
     src = Path(__file__).parent / "fixtures" / "musicassistant.sample.log"
     dst = tmp_path / "musicassistant.log"
     shutil.copyfile(src, dst)
 
     monkeypatch.setattr(log_reader.SafeLogTail, "ROOT", tmp_path, raising=True)
+    mock_mass.storage_path = str(tmp_path)
     return tmp_path
 
 

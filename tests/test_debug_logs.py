@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -18,6 +19,57 @@ def test_tail_returns_last_n_lines(tmp_log_dir: Path) -> None:  # noqa: ARG001 -
     result = tail.tail(lines=5)
     assert len(result.lines) == 5
     assert result.bytes_scanned > 0
+
+
+def test_tail_parses_real_ma_log_line_format(tmp_path: Path) -> None:
+    """Pin parser support for both MA-runtime and Python-default log shapes.
+
+    Reproduces the regression caught live in the dev container: real MA writes
+    ``<ts> <LEVEL> (<thread>) [<component>] <msg>``, the synthetic fixture used
+    ``<ts> <LEVEL> <component>: <msg>``. Without this pin the parser silently
+    drops every real MA line to ``timestamp/level/component=None`` and
+    ``debug_tail_log(level="ERROR")`` returns empty.
+    """
+    log_path = tmp_path / "musicassistant.log"
+    log_path.write_text(
+        # MA runtime format with (MainThread) and [bracket] component.
+        "2026-05-28 19:02:21.989 INFO (MainThread) [mcp.server.lowlevel.server] Processing request\n"
+        # Python default format with colon-after-component.
+        "2026-05-28 09:00:00,001 INFO music_assistant.mass: Starting Music Assistant\n",
+        encoding="utf-8",
+    )
+
+    SafeLogTail.ROOT = tmp_path  # type: ignore[misc]
+    try:
+        result = SafeLogTail().tail(lines=10)
+    finally:
+        SafeLogTail.ROOT = Path.home() / ".musicassistant"
+
+    assert len(result.lines) == 2
+    by_component = {ln.component: ln for ln in result.lines}
+    assert "mcp.server.lowlevel.server" in by_component
+    assert by_component["mcp.server.lowlevel.server"].level == "INFO"
+    assert "music_assistant.mass" in by_component
+    assert by_component["music_assistant.mass"].level == "INFO"
+
+
+def test_tail_prefers_mass_storage_path_over_class_root(tmp_path: Path) -> None:
+    """When constructed with ``mass``, SafeLogTail reads from ``mass.storage_path``.
+
+    Pins the regression that surfaced live in the dev container: MA is started
+    with ``--data-dir /data`` so the real log lives at ``/data/musicassistant.log``,
+    not at ``Path.home() / ".musicassistant"``. The class-level ``ROOT`` default
+    is wrong for any non-default deployment.
+    """
+    log_path = tmp_path / "musicassistant.log"
+    log_path.write_text("2026-05-28 09:00:00,001 INFO music_assistant.mass: hello\n")
+    mass = SimpleNamespace(storage_path=str(tmp_path))
+
+    tail = SafeLogTail(mass)  # type: ignore[arg-type]
+    result = tail.tail(lines=5)
+    assert result.log_path == str(log_path)
+    assert len(result.lines) == 1
+    assert result.lines[0].message == "hello"
     assert result.truncated is False
 
 

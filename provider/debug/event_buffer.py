@@ -9,6 +9,7 @@ Restarts and reloads reset the buffer — events are not persisted across
 provider lifecycles. See spec 0005 "Deliberately deferred" for the
 rationale.
 """
+# ruff: noqa: TID252  -- relative imports are the canonical MA-provider pattern.
 
 from __future__ import annotations
 

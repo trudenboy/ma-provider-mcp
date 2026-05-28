@@ -99,12 +99,16 @@ async def test_health_summary_events_rate_when_buffer_present(
 
 async def test_health_summary_counts_recent_log_errors(
     mounted_debug: Any,
-    populated_mass: MagicMock,  # noqa: ARG001
+    populated_mass: MagicMock,
     tmp_path: Any,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Write a synthetic log with current-time ERROR lines, assert count."""
     monkeypatch.setattr(log_reader.SafeLogTail, "ROOT", tmp_path, raising=True)
+    # health_summary's SafeLogTail(mass) now reads mass.storage_path first;
+    # point it at the same sandbox so the patched ROOT and the runtime
+    # resolution agree.
+    populated_mass.storage_path = str(tmp_path)
     log_path = tmp_path / "musicassistant.log"
     now = datetime.now().astimezone()
     ts = now.strftime("%Y-%m-%d %H:%M:%S,000")
