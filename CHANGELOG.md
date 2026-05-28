@@ -33,6 +33,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   be mistaken for "client cannot confirm" and let the operation through;
   now only genuine missing-capability errors pass through and any other
   error re-raises.
+- **Confirmation-gated tools no longer time out mid-confirmation.** The
+  tool timeout wraps the interactive confirmation prompt, so the previous
+  10-second limit could expire while a human was still reading and
+  answering it (and the provider-reload that follows can itself take
+  several seconds). Config writes and the provider-reload tool now use a
+  generous interactive timeout; read-only tools keep the fast one.
 
 ## [0.4.0] — 2026-05-28
 
