@@ -176,6 +176,18 @@ class MCPServerRuntime:
             namespace="debug",
         )
 
+        from .constants import CONF_CONFIG_WRITE_SECRET  # noqa: PLC0415
+        from .tools import build_config_server  # noqa: PLC0415
+
+        mcp.mount(
+            build_config_server(
+                self._mass,
+                require_confirmation=require_confirmation,
+                secret_writes_enabled=bool(self._config.get_value(CONF_CONFIG_WRITE_SECRET)),
+            ),
+            namespace="config",
+        )
+
         register_resources(mcp, self._mass, self._config)
         register_prompts(mcp, self._config)
 
