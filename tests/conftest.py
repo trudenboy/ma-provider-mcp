@@ -266,3 +266,54 @@ def fake_event_emitter(mock_mass: MagicMock) -> Any:
             holder["cb"](event)
 
     return _Emitter()
+
+
+@pytest.fixture
+def mounted_debug(mock_mass: MagicMock) -> Any:
+    """Build a root FastMCP with the debug sub-server mounted, all debug tags allowed."""
+    import contextlib  # noqa: PLC0415
+
+    from fastmcp import FastMCP  # noqa: PLC0415
+
+    from provider.tools.debug import build_debug_server  # noqa: PLC0415
+
+    mcp = FastMCP(name="test")
+    mcp.mount(build_debug_server(mock_mass, require_confirmation=False), namespace="debug")
+
+    # No tag-restrict middleware here — by default every tag is visible.
+    # mounted_debug_off below applies the restrict filter explicitly.
+    try:
+        yield mcp
+    finally:
+        close = getattr(mcp, "close", None) or getattr(mcp, "shutdown", None)
+        if callable(close):
+            with contextlib.suppress(Exception):
+                close()
+
+
+@pytest.fixture
+def mounted_debug_off(mock_mass: MagicMock) -> Any:
+    """Debug sub-server mounted with the TagFilterMiddleware allowing zero debug tags.
+
+    Uses the project's own ``TagFilterMiddleware`` (provider/middleware.py),
+    not FastMCP's built-in ``restrict_tag`` — the latter is scope-based
+    OAuth authorisation while this provider needs config-driven visibility.
+    """
+    import contextlib  # noqa: PLC0415
+
+    from fastmcp import FastMCP  # noqa: PLC0415
+
+    from provider.middleware import TagFilterMiddleware  # noqa: PLC0415
+    from provider.server import build_tag_lookup  # noqa: PLC0415
+    from provider.tools.debug import build_debug_server  # noqa: PLC0415
+
+    mcp = FastMCP(name="test")
+    mcp.mount(build_debug_server(mock_mass, require_confirmation=False), namespace="debug")
+    mcp.add_middleware(TagFilterMiddleware(lambda: set(), build_tag_lookup(mcp)))
+    try:
+        yield mcp
+    finally:
+        close = getattr(mcp, "close", None) or getattr(mcp, "shutdown", None)
+        if callable(close):
+            with contextlib.suppress(Exception):
+                close()
