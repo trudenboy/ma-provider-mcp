@@ -6,7 +6,6 @@ All tools in this module are gated by off-by-default ConfigEntries
 (see ``provider/config.py``). With no tag enabled the entire namespace
 is invisible to MCP clients via ``TagFilterMiddleware``.
 """
-# ruff: noqa: TID252  -- relative imports are the canonical MA-provider pattern.
 
 from __future__ import annotations
 
@@ -18,7 +17,9 @@ from fastmcp.exceptions import ToolError
 from mcp.types import ToolAnnotations
 
 from ..debug.inspect_serializer import dump
+from ..debug.log_reader import SafeLogTail
 from ..models import (
+    LogTailResult,
     PlayerInspect,
     ProviderInspect,
     QueueInspect,
@@ -59,7 +60,45 @@ def _readonly(title: str) -> ToolAnnotations:
     )
 
 
-def build_debug_server(mass: MusicAssistant, *, require_confirmation: bool = True) -> FastMCP:  # noqa: ARG001
+def _register_logs_tool(sub: FastMCP, mass: MusicAssistant) -> None:  # noqa: ARG001 -- mass reserved for symmetry/future use
+    tail = SafeLogTail()
+
+    @sub.tool(
+        tags={Tag.DEBUG_LOGS},
+        annotations=_readonly("Tail MA log"),
+        timeout=TIMEOUT_FAST,
+    )  # type: ignore[untyped-decorator, unused-ignore]
+    async def tail_log(
+        lines: int = 200,
+        level: str | None = None,
+        component_regex: str | None = None,
+        since_seconds: int | None = None,
+        name: str = "musicassistant.log",
+    ) -> LogTailResult:
+        """Return the last N parsed lines of musicassistant.log with optional filters.
+
+        Bearer tokens and common secret patterns are redacted before lines are returned.
+        See also: debug_recent_events for state transitions in the same window.
+
+        :param lines: Number of lines to return (clamped to [1, 2000], default 200).
+        :param level: Optional level filter (e.g. ``"ERROR"``).
+        :param component_regex: Optional regex matched against the component name.
+        :param since_seconds: When set, only entries with parseable timestamps within
+            this many seconds of "now" are returned.
+        :param name: Log file basename within ``$HOME/.musicassistant/``. Only the
+            canonical log and its rotated siblings (``.log.1`` … ``.log.5``) are
+            allowed.
+        """
+        return tail.tail(
+            lines=lines,
+            level=level,
+            component_regex=component_regex,
+            since_seconds=since_seconds,
+            name=name,
+        )
+
+
+def build_debug_server(mass: MusicAssistant, *, require_confirmation: bool = True) -> FastMCP:
     """Build the ``debug`` sub-server.
 
     :param mass: MusicAssistant instance.
@@ -68,6 +107,7 @@ def build_debug_server(mass: MusicAssistant, *, require_confirmation: bool = Tru
     """
     sub = FastMCP(name="debug")
     _register_inspect_tools(sub, mass)
+    _register_logs_tool(sub, mass)
     return sub
 
 

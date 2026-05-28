@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
+from fastmcp import Client
 from fastmcp.exceptions import ToolError
 
 from provider.debug.log_reader import SafeLogTail
-
-# ruff: noqa: ARG001 - fixtures are passed but not directly used in test body
 
 
 def test_tail_returns_last_n_lines(tmp_log_dir: Path) -> None:
@@ -90,7 +90,7 @@ def test_symlink_escape_rejected(tmp_log_dir: Path) -> None:
 
 def test_scan_bytes_cap_marks_truncated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """SafeLogTail marks result truncated when 10MB cap is reached."""
-    from provider.debug import log_reader  # noqa: PLC0415
+    from provider.debug import log_reader
 
     monkeypatch.setattr(log_reader.SafeLogTail, "ROOT", tmp_path, raising=True)
     huge = tmp_path / "musicassistant.log"
@@ -115,7 +115,7 @@ def test_scan_bytes_cap_drops_partial_first_line(
     no timestamp / level / component (just a tail substring of a real line) —
     which slips past since_seconds filtering and confuses callers.
     """
-    from provider.debug import log_reader  # noqa: PLC0415
+    from provider.debug import log_reader
 
     monkeypatch.setattr(log_reader.SafeLogTail, "ROOT", tmp_path, raising=True)
     huge = tmp_path / "musicassistant.log"
@@ -133,3 +133,21 @@ def test_scan_bytes_cap_drops_partial_first_line(
         "partial leading fragment leaked: "
         + str([e for e in result.lines if e.timestamp is None][:3])
     )
+
+
+# ---- E2E tests via MCP transport (debug_tail_log tool) ----
+
+
+async def test_e2e_debug_tail_log(mounted_debug: Any, tmp_log_dir: Path) -> None:
+    """debug_tail_log tool returns the last 5 lines via MCP."""
+    async with Client(mounted_debug) as client:
+        result = await client.call_tool("debug_tail_log", {"lines": 5})
+    assert len(result.data.lines) == 5
+    assert result.data.truncated is False
+
+
+async def test_e2e_debug_tail_log_invalid_name(mounted_debug: Any, tmp_log_dir: Path) -> None:
+    """debug_tail_log rejects path traversal attempts via MCP."""
+    async with Client(mounted_debug) as client:
+        with pytest.raises(ToolError):
+            await client.call_tool("debug_tail_log", {"name": "../etc/passwd"})
