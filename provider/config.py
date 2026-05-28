@@ -8,6 +8,11 @@ from music_assistant_models.config_entries import ConfigEntry
 from music_assistant_models.enums import ConfigEntryType
 
 from .constants import (
+    CONF_CONFIG_READ,
+    CONF_CONFIG_WRITE_CORE,
+    CONF_CONFIG_WRITE_PLAYER,
+    CONF_CONFIG_WRITE_PROVIDER,
+    CONF_CONFIG_WRITE_SECRET,
     CONF_CONNECT_EXTERNAL_URL,
     CONF_CONTROL_MEDIA,
     CONF_CONTROL_PLAYBACK,
@@ -386,5 +391,49 @@ def build_config_entries(
                 "are dropped FIFO. Has no effect when events are off."
             ),
             required=False,
+        ),
+        # Config namespace — all off-by-default. See specs/inprogress/0006-config-read-write.md.
+        _bool(
+            CONF_CONFIG_READ,
+            "Config: read core/provider/player settings",
+            False,
+            "Config",
+            "Exposes read access to MA core, provider, and player configuration "
+            "over MCP (secrets stay masked). Disable in production unless needed.",
+        ),
+        _bool(
+            CONF_CONFIG_WRITE_PROVIDER,
+            "Config: edit provider settings",
+            False,
+            "Config",
+            "Allows MCP clients to change provider configuration and trigger "
+            "provider config actions. Changes may reload the provider and "
+            "interrupt its streams. Disable in production.",
+        ),
+        _bool(
+            CONF_CONFIG_WRITE_CORE,
+            "Config: edit core settings",
+            False,
+            "Config",
+            "Allows MCP clients to change MA core controller configuration "
+            "(webserver, streams, cache, ...). Core changes may RESTART "
+            "subsystems and interrupt ALL playback. Disable in production.",
+        ),
+        _bool(
+            CONF_CONFIG_WRITE_PLAYER,
+            "Config: edit player settings",
+            False,
+            "Config",
+            "Allows MCP clients to change per-player configuration and DSP. Disable in production.",
+        ),
+        _bool(
+            CONF_CONFIG_WRITE_SECRET,
+            "Config: allow writing secret values",
+            False,
+            "Config",
+            "Required IN ADDITION to a category write flag before any "
+            "SECURE_STRING (password/token) value can be written. With this "
+            "off, secret writes are rejected while non-secret edits still "
+            "work. Keep off unless deliberately rotating credentials.",
         ),
     )

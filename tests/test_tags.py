@@ -5,6 +5,11 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from provider.constants import (
+    CONF_CONFIG_READ,
+    CONF_CONFIG_WRITE_CORE,
+    CONF_CONFIG_WRITE_PLAYER,
+    CONF_CONFIG_WRITE_PROVIDER,
+    CONF_CONFIG_WRITE_SECRET,
     CONF_CONTROL_PLAYBACK,
     CONF_DEBUG_EVENTS,
     CONF_DEBUG_INSPECT,
@@ -22,12 +27,12 @@ if TYPE_CHECKING:
 
 
 def test_config_to_tag_is_total() -> None:
-    """Core permission keys have unique tags in CONFIG_TO_TAG (16 core + 5 debug)."""
+    """Core permission keys have unique tags in CONFIG_TO_TAG (16 core + 5 debug + 5 config)."""
     assert set(PERMISSION_KEYS).issubset(set(CONFIG_TO_TAG))
     assert (
         len({v for k, v in CONFIG_TO_TAG.items() if k in PERMISSION_KEYS})
         == len(PERMISSION_KEYS)
-        == 21
+        == 26
     )
 
 
@@ -36,7 +41,7 @@ def test_tag_enum_values_are_namespaced() -> None:
     for tag in Tag:
         assert ":" in tag.value
         verb, _, _ = tag.value.partition(":")
-        assert verb in {"query", "control", "edit", "delete", "debug"}
+        assert verb in {"query", "control", "edit", "delete", "debug", "config"}
 
 
 def test_enabled_tags_defaults(mock_config: MagicMock) -> None:
@@ -107,3 +112,21 @@ def test_enabled_tags_excludes_debug_when_off(mock_config: MagicMock) -> None:
     assert Tag.DEBUG_EVENTS not in tags
     assert Tag.DEBUG_PROVIDERS not in tags
     assert Tag.DEBUG_RELOAD not in tags
+
+
+def test_config_tags_present_in_enum() -> None:
+    """Config tags exist in the Tag enum with correct string values."""
+    assert Tag.CONFIG_READ.value == "config:read"
+    assert Tag.CONFIG_WRITE_PROVIDER.value == "config:write:provider"
+    assert Tag.CONFIG_WRITE_CORE.value == "config:write:core"
+    assert Tag.CONFIG_WRITE_PLAYER.value == "config:write:player"
+    assert Tag.CONFIG_WRITE_SECRET.value == "config:write:secret"
+
+
+def test_config_keys_map_to_tags() -> None:
+    """Config config keys map to their corresponding Tag enum members."""
+    assert CONFIG_TO_TAG[CONF_CONFIG_READ] is Tag.CONFIG_READ
+    assert CONFIG_TO_TAG[CONF_CONFIG_WRITE_PROVIDER] is Tag.CONFIG_WRITE_PROVIDER
+    assert CONFIG_TO_TAG[CONF_CONFIG_WRITE_CORE] is Tag.CONFIG_WRITE_CORE
+    assert CONFIG_TO_TAG[CONF_CONFIG_WRITE_PLAYER] is Tag.CONFIG_WRITE_PLAYER
+    assert CONFIG_TO_TAG[CONF_CONFIG_WRITE_SECRET] is Tag.CONFIG_WRITE_SECRET

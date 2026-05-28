@@ -6,6 +6,11 @@ from enum import StrEnum
 from typing import TYPE_CHECKING
 
 from .constants import (
+    CONF_CONFIG_READ,
+    CONF_CONFIG_WRITE_CORE,
+    CONF_CONFIG_WRITE_PLAYER,
+    CONF_CONFIG_WRITE_PROVIDER,
+    CONF_CONFIG_WRITE_SECRET,
     CONF_CONTROL_MEDIA,
     CONF_CONTROL_PLAYBACK,
     CONF_CONTROL_PLAYERS,
@@ -57,6 +62,11 @@ class Tag(StrEnum):
     DEBUG_EVENTS = "debug:events"
     DEBUG_PROVIDERS = "debug:providers"
     DEBUG_RELOAD = "debug:reload"
+    CONFIG_READ = "config:read"
+    CONFIG_WRITE_PROVIDER = "config:write:provider"
+    CONFIG_WRITE_CORE = "config:write:core"
+    CONFIG_WRITE_PLAYER = "config:write:player"
+    CONFIG_WRITE_SECRET = "config:write:secret"
 
 
 CONFIG_TO_TAG: dict[str, Tag] = {
@@ -81,6 +91,11 @@ CONFIG_TO_TAG: dict[str, Tag] = {
     CONF_DEBUG_EVENTS: Tag.DEBUG_EVENTS,
     CONF_DEBUG_PROVIDERS: Tag.DEBUG_PROVIDERS,
     CONF_DEBUG_RELOAD: Tag.DEBUG_RELOAD,
+    CONF_CONFIG_READ: Tag.CONFIG_READ,
+    CONF_CONFIG_WRITE_PROVIDER: Tag.CONFIG_WRITE_PROVIDER,
+    CONF_CONFIG_WRITE_CORE: Tag.CONFIG_WRITE_CORE,
+    CONF_CONFIG_WRITE_PLAYER: Tag.CONFIG_WRITE_PLAYER,
+    CONF_CONFIG_WRITE_SECRET: Tag.CONFIG_WRITE_SECRET,
 }
 
 
