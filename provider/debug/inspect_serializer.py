@@ -33,6 +33,24 @@ _UNSERIALISABLE = (
     asyncio.Semaphore,
 )
 
+# Names that are known runtime back-references on MA dataclasses like
+# ``Player``, ``Queue``, ``Provider``:
+#
+# * ``mass`` / ``hass`` point at the MusicAssistant / Home Assistant root
+#   — walking them drags every other provider, queue, player, cache and
+#   metadata-cache into the dump.
+# * ``logger`` is a ``logging.Logger`` whose ``.parent.manager.loggerDict``
+#   chain transitively reaches every other logger registered in the
+#   runtime; for our purposes its ``name`` / ``level`` would be the only
+#   useful bits, and both are already implied by the entity's ``provider``
+#   / ``domain`` field.
+#
+# Each one alone is enough to exhaust the 256 KB byte budget before the
+# entity's own fields are serialised. Skip them explicitly and render a
+# transparent ``<back-ref skipped: name>`` placeholder so callers see the
+# field exists but the heavy subtree was not chased.
+_BACK_REF_NAMES = frozenset({"mass", "hass", "logger"})
+
 
 def dump(
     obj: Any,
@@ -220,6 +238,11 @@ def _convert_attrs(
         if state.budget_exceeded():
             state.truncated = True
             break
+        if name in _BACK_REF_NAMES:
+            placeholder = f"<back-ref skipped: {name}>"
+            out[name] = placeholder
+            state.charge(placeholder)
+            continue
         try:
             value = getattr(obj, name)
         except Exception as exc:

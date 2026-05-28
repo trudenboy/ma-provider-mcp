@@ -127,6 +127,57 @@ def test_dump_dataclass_with_raising_property_renders_placeholder() -> None:
     assert out["diagnostic"] == "<raise: RuntimeError>"
 
 
+def test_dump_skips_mass_back_reference_on_dataclasses() -> None:
+    """``mass`` field on Player/Queue/Provider is a back-ref to MA's runtime root.
+
+    Live verification surfaced the regression: walking ``player.mass`` drags the
+    entire MA graph (every other provider, queue, player, cache) into the dump
+    and exhausts the byte budget before the player's own ``player_id``/``name``/
+    ``current_media`` get serialised — leaving ``raw.keys() == ["mass"]`` with
+    every user-facing field reported as ``null``. The serializer must elide
+    ``mass`` (and the equivalent ``hass`` for Home Assistant) with a transparent
+    placeholder so the caller sees the field exists but the heavy subtree is
+    not chased.
+    """
+
+    @dataclasses.dataclass
+    class _Huge:
+        # Stand-in for the MusicAssistant runtime root — a large payload that
+        # would dominate the dump if walked.
+        big: list[int] = dataclasses.field(default_factory=lambda: list(range(10_000)))
+
+    @dataclasses.dataclass
+    class _Player:
+        player_id: str
+        name: str
+        mass: _Huge
+        hass: _Huge
+        logger: _Huge
+
+    p = _Player(
+        player_id="kitchen",
+        name="Kitchen",
+        mass=_Huge(),
+        hass=_Huge(),
+        logger=_Huge(),
+    )
+    out = dump(p)
+
+    # The user-facing fields ARE present even though they come after the
+    # back-ref in dataclass field order.
+    assert out["player_id"] == "kitchen"
+    assert out["name"] == "Kitchen"
+    # All three back-refs (MA runtime, HA client, scoped Logger) are elided
+    # with a transparent placeholder — the caller sees the field exists but
+    # the heavy subtree was not chased.
+    assert out["mass"] == "<back-ref skipped: mass>"
+    assert out["hass"] == "<back-ref skipped: hass>"
+    assert out["logger"] == "<back-ref skipped: logger>"
+    # And — critically — the 10_000-element ``big`` list inside any of them
+    # did not get walked, so it does not appear anywhere in the payload.
+    assert "big" not in json.dumps(out)
+
+
 def test_dump_dataclass_includes_property_values() -> None:
     """Dataclass properties whose getters succeed should appear in the output too."""
 
