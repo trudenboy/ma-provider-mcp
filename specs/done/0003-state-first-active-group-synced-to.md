@@ -2,7 +2,7 @@
 id: "0003"
 title: "Read active_group / synced_to from Player.state so SyncGroupPlayer membership resolves correctly"
 size: S
-status: inprogress
+status: done
 priority: P0
 effort_minutes: 10
 feature_id:
