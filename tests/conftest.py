@@ -317,3 +317,36 @@ def mounted_debug_off(mock_mass: MagicMock) -> Any:
         if callable(close):
             with contextlib.suppress(Exception):
                 close()
+
+
+@pytest.fixture
+def mounted_debug_with_events(mock_mass: MagicMock, fake_event_emitter: Any) -> Any:
+    """Debug server with a started EventBuffer wired in.
+
+    Yields ``(mcp, buffer, emitter)`` — tests drive synthetic events
+    through ``emitter.emit(...)`` and read back via either the MCP
+    client or the buffer directly.
+    """
+    import contextlib  # noqa: PLC0415
+
+    from fastmcp import FastMCP  # noqa: PLC0415
+
+    from provider.debug.event_buffer import EventBuffer  # noqa: PLC0415
+    from provider.tools.debug import build_debug_server  # noqa: PLC0415
+
+    buf = EventBuffer(mock_mass, capacity=500)
+    buf.start()
+
+    mcp = FastMCP(name="test")
+    mcp.mount(
+        build_debug_server(mock_mass, require_confirmation=False, event_buffer=buf),
+        namespace="debug",
+    )
+    try:
+        yield mcp, buf, fake_event_emitter
+    finally:
+        buf.stop()
+        close = getattr(mcp, "close", None) or getattr(mcp, "shutdown", None)
+        if callable(close):
+            with contextlib.suppress(Exception):
+                close()

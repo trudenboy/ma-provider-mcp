@@ -6,6 +6,7 @@ All tools in this module are gated by off-by-default ConfigEntries
 (see ``provider/config.py``). With no tag enabled the entire namespace
 is invisible to MCP clients via ``TagFilterMiddleware``.
 """
+# ruff: noqa: TID252  -- relative imports are the canonical MA-provider pattern.
 
 from __future__ import annotations
 
@@ -16,9 +17,12 @@ from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 from mcp.types import ToolAnnotations
 
+from ..debug.event_buffer import EventBuffer
 from ..debug.inspect_serializer import dump
 from ..debug.log_reader import SafeLogTail
 from ..models import (
+    EventBufferStats,
+    EventSnapshot,
     LogTailResult,
     PlayerInspect,
     ProviderInspect,
@@ -98,16 +102,25 @@ def _register_logs_tool(sub: FastMCP, mass: MusicAssistant) -> None:  # noqa: AR
         )
 
 
-def build_debug_server(mass: MusicAssistant, *, require_confirmation: bool = True) -> FastMCP:
+def build_debug_server(
+    mass: MusicAssistant,
+    *,
+    require_confirmation: bool = True,  # noqa: ARG001 -- used by debug_reload_provider (Task 10)
+    event_buffer: EventBuffer | None = None,
+) -> FastMCP:
     """Build the ``debug`` sub-server.
 
     :param mass: MusicAssistant instance.
     :param require_confirmation: When True (default), ``debug_reload_provider``
         elicits explicit confirmation from the MCP client before reloading.
+    :param event_buffer: A started ``EventBuffer`` instance. When ``None``
+        the events tools still mount but report ``current_size=0`` and
+        empty snapshots — useful for tests that only exercise other groups.
     """
     sub = FastMCP(name="debug")
     _register_inspect_tools(sub, mass)
     _register_logs_tool(sub, mass)
+    _register_events_tools(sub, mass, event_buffer)
     return sub
 
 
@@ -215,3 +228,67 @@ def _register_inspect_tools(sub: FastMCP, mass: MusicAssistant) -> None:
             manifest=manifest_payload,
             truncated=bool(raw_trunc or manifest_trunc),
         )
+
+
+def _register_events_tools(
+    sub: FastMCP,
+    mass: MusicAssistant,  # noqa: ARG001 -- reserved for symmetry/future use
+    buffer: EventBuffer | None,
+) -> None:
+    @sub.tool(
+        tags={Tag.DEBUG_EVENTS},
+        annotations=_readonly("Read recent MA events"),
+        timeout=TIMEOUT_FAST,
+    )  # type: ignore[untyped-decorator, unused-ignore]
+    async def recent_events(
+        limit: int = 100,
+        event_types: list[str] | None = None,
+        id_filter: str | None = None,
+        since_seconds: int | None = None,
+    ) -> EventSnapshot:
+        """Return the most recent events captured into the in-memory ring buffer.
+
+        See also: debug_tail_log for the textual context around an event timestamp.
+
+        :param limit: Maximum events to return (clamped to [1, 1000]).
+        :param event_types: Optional list of event-type strings to include.
+        :param id_filter: Optional ``object_id`` to filter by.
+        :param since_seconds: When set, only events within this many seconds of
+            "now" are returned.
+        """
+        if buffer is None:
+            return EventSnapshot(events=[], buffer_capacity=0, total_seen=0)
+        events = buffer.snapshot(
+            limit=limit,
+            event_types=event_types,
+            id_filter=id_filter,
+            since_seconds=since_seconds,
+        )
+        stats = buffer.stats()
+        return EventSnapshot(
+            events=events,
+            buffer_capacity=stats.capacity,
+            total_seen=stats.total_seen,
+        )
+
+    @sub.tool(
+        tags={Tag.DEBUG_EVENTS},
+        annotations=_readonly("Event buffer stats"),
+        timeout=TIMEOUT_FAST,
+    )  # type: ignore[untyped-decorator, unused-ignore]
+    async def event_buffer_stats() -> EventBufferStats:
+        """Return introspection counters for the event ring buffer.
+
+        Use this to distinguish "no events match" from "events were dropped
+        before you asked". ``dropped`` is non-zero whenever the buffer overflowed.
+        """
+        if buffer is None:
+            return EventBufferStats(
+                capacity=0,
+                current_size=0,
+                total_seen=0,
+                dropped=0,
+                subscribed_since=None,
+                by_type={},
+            )
+        return buffer.stats()

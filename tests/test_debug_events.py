@@ -1,10 +1,13 @@
-"""Unit tests for EventBuffer (e2e tools come in a later task)."""
+"""Unit tests for EventBuffer and e2e tests for debug events tools."""
 
 from __future__ import annotations
 
 import datetime as dt
 from types import SimpleNamespace
 from typing import Any
+
+import pytest
+from fastmcp import Client
 
 import provider.debug.event_buffer as ev_buf
 from provider.debug.event_buffer import EventBuffer
@@ -85,3 +88,30 @@ def test_snapshot_since_seconds_filters_old_events(
     fake_event_emitter.emit(_ev("b"))
     snap = buf.snapshot(limit=100, since_seconds=2)
     assert [e.event_type for e in snap] == ["b"]
+
+
+@pytest.mark.asyncio
+async def test_e2e_recent_events_returns_filtered_snapshot(mounted_debug_with_events: Any) -> None:
+    """Test debug_recent_events tool with filtering."""
+    mcp, _buf, emitter = mounted_debug_with_events
+    emitter.emit(_ev("player_updated", "kitchen"))
+    emitter.emit(_ev("queue_updated", "kitchen"))
+    async with Client(mcp) as client:
+        result = await client.call_tool(
+            "debug_recent_events",
+            {"limit": 10, "event_types": ["player_updated"]},
+        )
+    assert len(result.data.events) == 1
+    assert result.data.events[0].event_type == "player_updated"
+
+
+@pytest.mark.asyncio
+async def test_e2e_event_buffer_stats(mounted_debug_with_events: Any) -> None:
+    """Test debug_event_buffer_stats tool."""
+    mcp, _buf, emitter = mounted_debug_with_events
+    emitter.emit(_ev("player_updated", "kitchen"))
+    async with Client(mcp) as client:
+        result = await client.call_tool("debug_event_buffer_stats", {})
+    assert result.data.capacity == 500
+    assert result.data.total_seen == 1
+    assert result.data.by_type["player_updated"] == 1
