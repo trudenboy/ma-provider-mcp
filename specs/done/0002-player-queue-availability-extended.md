@@ -2,7 +2,7 @@
 id: "0002"
 title: "Extend availability surface: sync membership, setup state, disabled gate, queue availability"
 size: M
-status: inprogress
+status: done
 priority: P1
 effort_minutes: 20
 feature_id:
