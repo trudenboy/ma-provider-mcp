@@ -2,7 +2,7 @@
 id: "0004"
 title: "Expose group_volume, volume_muted, group_volume_muted on PlayerBrief"
 size: S
-status: inprogress
+status: done
 priority: P1
 effort_minutes: 10
 feature_id:
