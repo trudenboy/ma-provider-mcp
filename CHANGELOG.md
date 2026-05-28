@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.35] — 2026-05-28
+
+### Added
+- **`PlayerBrief` now carries `volume_muted`, `group_volume`, and
+  `group_volume_muted`.** Sync groups hold their volume on a
+  separate `group_volume` property — without these fields a
+  caller looking at a SyncGroupPlayer's brief saw only
+  `volume_level=null` and had no signal at all about how loud the
+  group was set or whether it was muted. The mute state of
+  individual players is now visible too. All three fields default
+  to `None` so the brief stays back-compatible with every existing
+  caller, and the values are read from `Player.state` first (the
+  canonical view populated by MA's volume-state machinery), with
+  the raw dataclass attributes as a fallback for legacy stubs.
+
 ## [0.3.34] — 2026-05-28
 
 ### Fixed
