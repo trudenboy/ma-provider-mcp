@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.33] — 2026-05-28
+
+### Changed
+- **One inline test import is now pre-split into multi-line form** so
+  the upstream-PR rewrite cannot push it past the upstream ruff
+  line-length (99). When the wrapper rewrites `provider.tools` to its
+  longer upstream path, the original single-line `from … import a, b`
+  would exceed the limit, ruff would split it across multiple lines,
+  and the trailing `# noqa: PLC0415` would land on the wrong row —
+  ruff then deletes it as `RUF100 unused-noqa` and the underlying
+  `import inside function` violation goes uncovered. Writing the
+  import as multi-line with the noqa on the opening `(` line up-front
+  keeps the marker stable through every formatter pass. The wrapper
+  itself is being patched in `ma-provider-tools` so future sync runs
+  normalise formatting after rewrite.
+
 ## [0.3.32] — 2026-05-28
 
 ### Added

@@ -37,7 +37,10 @@ def _build_runtime_with_mounted_server(
     hot-swap behaviour under test.
     """
     from provider.tags import enabled_tags  # noqa: PLC0415
-    from provider.tools import build_library_server, build_volume_server  # noqa: PLC0415
+    from provider.tools import (  # noqa: PLC0415
+        build_library_server,
+        build_volume_server,
+    )
 
     runtime = MCPServerRuntime(mock_mass, mock_config, logging.getLogger("t"))
 
