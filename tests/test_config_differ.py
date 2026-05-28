@@ -9,7 +9,7 @@ from music_assistant_models.enums import ConfigEntryType
 from provider.config_io.differ import compute_diff
 
 
-def _entries():
+def _entries() -> dict[str, ConfigEntry]:
     return {
         "log_level": ConfigEntry(key="log_level", type=ConfigEntryType.STRING, label="L"),
         "token": ConfigEntry(key="token", type=ConfigEntryType.SECURE_STRING, label="T"),

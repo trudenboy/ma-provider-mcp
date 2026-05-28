@@ -357,7 +357,7 @@ def mounted_debug_with_events(mock_mass: MagicMock, fake_event_emitter: Any) -> 
 
 
 @pytest.fixture
-def mounted_config(mock_mass) -> Any:
+def mounted_config(mock_mass: Any) -> Any:
     """Root FastMCP with the config sub-server mounted, all config tags visible."""
     import contextlib  # noqa: PLC0415
 
@@ -377,7 +377,7 @@ def mounted_config(mock_mass) -> Any:
 
 
 @pytest.fixture
-def mounted_config_off(mock_mass) -> Any:
+def mounted_config_off(mock_mass: Any) -> Any:
     """Config sub-server with TagFilterMiddleware allowing zero tags."""
     import contextlib  # noqa: PLC0415
 
@@ -400,7 +400,7 @@ def mounted_config_off(mock_mass) -> Any:
 
 
 @pytest.fixture
-def mounted_config_no_secret(mock_mass) -> Any:
+def mounted_config_no_secret(mock_mass: Any) -> Any:
     """Config sub-server built with secret writes disabled (value-gate off)."""
     import contextlib  # noqa: PLC0415
 
@@ -423,7 +423,7 @@ def mounted_config_no_secret(mock_mass) -> Any:
 
 
 @pytest.fixture
-def mock_config_targets(mock_mass):
+def mock_config_targets(mock_mass: Any) -> Any:
     """Wire mock_mass.config with provider/core/player config + entries.
 
     Provides a SECURE_STRING entry (token, requires_reload), an

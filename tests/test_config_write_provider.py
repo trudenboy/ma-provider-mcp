@@ -13,16 +13,16 @@ from fastmcp import Client
 from fastmcp.exceptions import ToolError
 
 
-def _decliner():
+def _decliner() -> Any:
     from fastmcp.client.elicitation import ElicitResult
 
-    async def handler(*_a: Any, **_kw: Any):
+    async def handler(*_a: Any, **_kw: Any) -> ElicitResult:
         return ElicitResult(action="decline")
 
     return handler
 
 
-async def test_set_provider_value_persists(mounted_config, mock_config_targets) -> None:
+async def test_set_provider_value_persists(mounted_config: Any, mock_config_targets: Any) -> None:
     async with Client(mounted_config) as client:
         result = await client.call_tool(
             "config_set_provider_value",
@@ -32,7 +32,9 @@ async def test_set_provider_value_persists(mounted_config, mock_config_targets) 
     assert result.data.applied is True
 
 
-async def test_dry_run_returns_diff_no_persist(mounted_config, mock_config_targets) -> None:
+async def test_dry_run_returns_diff_no_persist(
+    mounted_config: Any, mock_config_targets: Any
+) -> None:
     async with Client(mounted_config) as client:
         result = await client.call_tool(
             "config_set_provider_value",
@@ -43,7 +45,10 @@ async def test_dry_run_returns_diff_no_persist(mounted_config, mock_config_targe
     mock_config_targets.config.save_provider_config.assert_not_called()
 
 
-async def test_set_provider_value_validation_rejects(mounted_config, mock_config_targets) -> None:  # noqa: ARG001
+async def test_set_provider_value_validation_rejects(
+    mounted_config: Any,
+    mock_config_targets: Any,  # noqa: ARG001
+) -> None:
     async with Client(mounted_config) as client:
         with pytest.raises(ToolError, match="failed validation"):
             await client.call_tool(
@@ -52,7 +57,7 @@ async def test_set_provider_value_validation_rejects(mounted_config, mock_config
             )
 
 
-async def test_requires_reload_flag_surfaced(mounted_config, mock_config_targets) -> None:  # noqa: ARG001
+async def test_requires_reload_flag_surfaced(mounted_config: Any, mock_config_targets: Any) -> None:  # noqa: ARG001
     # token entry has requires_reload=True in the fixture and is SECURE_STRING;
     # mounted_config has all tags incl. secret, so this is allowed.
     async with Client(mounted_config) as client:
@@ -63,7 +68,7 @@ async def test_requires_reload_flag_surfaced(mounted_config, mock_config_targets
     assert result.data.requires_reload is True
 
 
-async def test_confirm_declined_blocks_write(mock_config_targets) -> None:
+async def test_confirm_declined_blocks_write(mock_config_targets: Any) -> None:
     from fastmcp import FastMCP
 
     from provider.tools.config import build_config_server
@@ -81,7 +86,7 @@ async def test_confirm_declined_blocks_write(mock_config_targets) -> None:
     mock_config_targets.config.save_provider_config.assert_not_called()
 
 
-async def test_trigger_action_relays_entries(mounted_config, mock_config_targets) -> None:
+async def test_trigger_action_relays_entries(mounted_config: Any, mock_config_targets: Any) -> None:
     async with Client(mounted_config) as client:
         result = await client.call_tool(
             "config_trigger_provider_action",
@@ -91,7 +96,7 @@ async def test_trigger_action_relays_entries(mounted_config, mock_config_targets
     mock_config_targets.config.get_provider_config_entries.assert_awaited()
 
 
-async def test_save_provider_bulk_persists(mounted_config, mock_config_targets) -> None:
+async def test_save_provider_bulk_persists(mounted_config: Any, mock_config_targets: Any) -> None:
     async with Client(mounted_config) as client:
         result = await client.call_tool(
             "config_save_provider",
@@ -102,7 +107,7 @@ async def test_save_provider_bulk_persists(mounted_config, mock_config_targets) 
 
 
 async def test_secret_write_delegates_plaintext_and_never_logs_it(
-    mounted_config, mock_config_targets, caplog
+    mounted_config: Any, mock_config_targets: Any, caplog: Any
 ) -> None:
     with caplog.at_level(logging.INFO, logger="music_assistant.providers.fastmcp_server.config"):
         async with Client(mounted_config) as client:

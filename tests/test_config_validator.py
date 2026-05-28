@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 from fastmcp.exceptions import ToolError
 from music_assistant_models.config_entries import ConfigEntry, ConfigValueOption
@@ -12,10 +14,10 @@ from music_assistant_models.enums import ConfigEntryType
 from provider.config_io.validator import coerce
 
 
-def _entry(**kw):
+def _entry(**kw: Any) -> ConfigEntry:
     base = {"key": "k", "type": ConfigEntryType.STRING, "label": "K"}
     base.update(kw)
-    return ConfigEntry(**base)
+    return ConfigEntry(**base)  # type: ignore[arg-type]
 
 
 def test_coerce_type_coercion_str_to_int() -> None:

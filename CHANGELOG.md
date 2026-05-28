@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] — 2026-05-29
+
+### Added
+- **New `config` MCP namespace for viewing and editing settings.** Adds
+  fourteen tools across five off-by-default permission flags
+  (`Config: read core/provider/player settings`, `Config: edit provider
+  settings`, `Config: edit core settings`, `Config: edit player settings`,
+  and the orthogonal `Config: allow writing secret values`). Default
+  installations see no new surface; an operator opts in per capability.
+  Read tools dump provider, core, and player configuration with
+  `SECURE_STRING` values masked by Music Assistant's own serialiser.
+  Writes delegate to MA's atomic save primitives — which validate,
+  encrypt, persist, and reload (with rollback) — so the provider performs
+  no raw writes and never encrypts or logs a plaintext secret.
+  SECURE_STRING writes require the secret flag in addition to the
+  category flag. Every write validates each value (type, range, and
+  options), elicits confirmation (core-config prompts warn about
+  subsystem restarts), writes a value-free audit log line, and supports
+  a `dry_run` preview that returns a before/after diff without mutating.
+  A `config_trigger_provider_action` tool relays provider config actions
+  such as QR login.
+
+### Fixed
+- **The destructive-operation confirmation gate now fails closed on
+  unexpected MCP errors.** Previously a transient protocol error could
+  be mistaken for "client cannot confirm" and let the operation through;
+  now only genuine missing-capability errors pass through and any other
+  error re-raises.
+
 ## [0.4.0] — 2026-05-28
 
 ### Added

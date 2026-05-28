@@ -11,16 +11,16 @@ from typing import Any
 from fastmcp import Client
 
 
-def _decliner():
+def _decliner() -> Any:
     from fastmcp.client.elicitation import ElicitResult
 
-    async def handler(*_a: Any, **_kw: Any):
+    async def handler(*_a: Any, **_kw: Any) -> ElicitResult:
         return ElicitResult(action="decline")
 
     return handler
 
 
-async def test_core_value_set_persists(mounted_config, mock_config_targets) -> None:
+async def test_core_value_set_persists(mounted_config: Any, mock_config_targets: Any) -> None:
     async with Client(mounted_config) as client:
         result = await client.call_tool(
             "config_set_core_value",
@@ -30,7 +30,7 @@ async def test_core_value_set_persists(mounted_config, mock_config_targets) -> N
     assert result.data.applied is True
 
 
-async def test_core_save_bulk_persists(mounted_config, mock_config_targets) -> None:
+async def test_core_save_bulk_persists(mounted_config: Any, mock_config_targets: Any) -> None:
     async with Client(mounted_config) as client:
         result = await client.call_tool(
             "config_save_core",
@@ -40,14 +40,14 @@ async def test_core_save_bulk_persists(mounted_config, mock_config_targets) -> N
     assert result.data.applied is True
 
 
-async def test_core_save_confirm_prompt_mentions_restart(mock_config_targets) -> None:
+async def test_core_save_confirm_prompt_mentions_restart(mock_config_targets: Any) -> None:
     from fastmcp import FastMCP
 
     from provider.tools.config import build_config_server
 
     seen: list[str] = []
 
-    async def handler(message, response_type, params, ctx):  # noqa: ARG001
+    async def handler(message: str, response_type: Any, params: Any, ctx: Any) -> Any:  # noqa: ARG001
         seen.append(message)
         return _decliner()()
 
