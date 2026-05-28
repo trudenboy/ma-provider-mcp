@@ -10,11 +10,13 @@ is invisible to MCP clients via ``TagFilterMiddleware``.
 
 from __future__ import annotations
 
+import asyncio
 import importlib.metadata
 import logging
+import time
 from typing import TYPE_CHECKING, Any
 
-from fastmcp import FastMCP
+from fastmcp import Context, FastMCP
 from fastmcp.exceptions import ToolError
 from mcp.types import ToolAnnotations
 
@@ -33,11 +35,12 @@ from ..models import (
     ProviderList,
     ProviderSummary,
     QueueInspect,
+    ReloadResult,
     RouteEntry,
     RouteList,
 )
 from ..tags import Tag
-from ._common import TIMEOUT_FAST
+from ._common import TIMEOUT_FAST, confirm_or_raise
 
 if TYPE_CHECKING:
     from music_assistant.mass import MusicAssistant
@@ -54,6 +57,10 @@ _TRACKED_PACKAGES = (
     "aiohttp",
     "mashumaro",
 )
+
+_RELOAD_POLL_SECONDS = 5.0
+_RELOAD_POLL_INTERVAL = 0.1
+_RELOAD_LOCK = asyncio.Lock()
 
 
 def _safe_get(obj: Any, name: str, default: Any = None) -> Any:
@@ -78,6 +85,78 @@ def _readonly(title: str) -> ToolAnnotations:
         idempotentHint=True,
         openWorldHint=False,
     )
+
+
+def _register_reload_tool(
+    sub: FastMCP, mass: MusicAssistant, *, require_confirmation: bool
+) -> None:
+    @sub.tool(
+        tags={Tag.DEBUG_RELOAD},
+        annotations=ToolAnnotations(
+            title="Reload provider",
+            destructiveHint=True,
+            idempotentHint=False,
+        ),
+        timeout=TIMEOUT_FAST,
+    )
+    async def reload_provider(instance_id: str, ctx: Context | None = None) -> ReloadResult:
+        """Unload and reload a configured provider instance.
+
+        INTERRUPTS ACTIVE STREAMS on the affected provider. Confirmation is
+        required by default. See also: debug_inspect_provider to verify the
+        reload landed; debug_tail_log for the reload's own log lines.
+
+        :param instance_id: Provider instance identifier.
+        :param ctx: FastMCP context — populated automatically by the server.
+        """
+        await confirm_or_raise(
+            ctx,
+            (
+                f"Reload provider {instance_id!r}? "
+                "Active playback on this provider will be interrupted."
+            ),
+            enabled=require_confirmation,
+        )
+        try:
+            conf = await mass.config.get_provider_config(instance_id)
+        except Exception as exc:
+            raise ToolError(f"provider instance_id={instance_id!r} not configured") from exc
+
+        async with _RELOAD_LOCK:
+            LOGGER.info(
+                "MCP debug_reload_provider triggered: instance_id=%s",
+                instance_id,
+            )
+            t0 = time.monotonic()
+            load_error: Exception | None = None
+            try:
+                await mass._load_provider(conf)
+            except Exception as exc:
+                load_error = exc
+
+            if load_error is not None:
+                return ReloadResult(
+                    instance_id=instance_id,
+                    duration_ms=(time.monotonic() - t0) * 1000,
+                    new_available=False,
+                    last_error=str(load_error),
+                )
+
+            deadline = time.monotonic() + _RELOAD_POLL_SECONDS
+            prov = None
+            while time.monotonic() < deadline:
+                prov = mass.get_provider(instance_id)
+                if prov and getattr(prov, "available", False):
+                    break
+                await asyncio.sleep(_RELOAD_POLL_INTERVAL)
+            available = bool(prov and getattr(prov, "available", False))
+            last_error = getattr(prov, "last_error", None) if prov else "reload timed out"
+            return ReloadResult(
+                instance_id=instance_id,
+                duration_ms=(time.monotonic() - t0) * 1000,
+                new_available=available,
+                last_error=last_error,
+            )
 
 
 def _register_logs_tool(sub: FastMCP, mass: MusicAssistant) -> None:  # noqa: ARG001 -- mass reserved for symmetry/future use
@@ -121,7 +200,7 @@ def _register_logs_tool(sub: FastMCP, mass: MusicAssistant) -> None:  # noqa: AR
 def build_debug_server(
     mass: MusicAssistant,
     *,
-    require_confirmation: bool = True,  # noqa: ARG001 -- used by debug_reload_provider (Task 10)
+    require_confirmation: bool = True,
     event_buffer: EventBuffer | None = None,
 ) -> FastMCP:
     """Build the ``debug`` sub-server.
@@ -138,6 +217,7 @@ def build_debug_server(
     _register_logs_tool(sub, mass)
     _register_events_tools(sub, mass, event_buffer)
     _register_providers_tools(sub, mass)
+    _register_reload_tool(sub, mass, require_confirmation=require_confirmation)
     return sub
 
 
