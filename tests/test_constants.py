@@ -10,8 +10,8 @@ from provider.constants import (
 
 
 def test_permission_keys_count() -> None:
-    """16 permission keys: 4 verbs x 4 categories."""
-    assert len(PERMISSION_KEYS) == 16
+    """21 permission keys: 4 verbs x 4 categories + 5 debug tags."""
+    assert len(PERMISSION_KEYS) == 21
 
 
 def test_resource_keys_count() -> None:

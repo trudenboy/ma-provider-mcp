@@ -6,6 +6,12 @@ from typing import TYPE_CHECKING
 
 from provider.config import build_config_entries
 from provider.constants import (
+    CONF_DEBUG_EVENT_BUFFER_CAPACITY,
+    CONF_DEBUG_EVENTS,
+    CONF_DEBUG_INSPECT,
+    CONF_DEBUG_LOGS,
+    CONF_DEBUG_PROVIDERS,
+    CONF_DEBUG_RELOAD,
     CONF_DELETE_LIBRARY,
     CONF_MOUNT_PATH,
     CONF_QUERY_LIBRARY,
@@ -19,9 +25,9 @@ if TYPE_CHECKING:
 
 
 def test_total_entry_count(mock_mass: MagicMock) -> None:
-    """27 entries: 1 info label + 1 connect-wizard action + 6 server + 16 perms + 3 resources."""
+    """33 entries: 1 info label + 1 connect-wizard action + 6 server + 16 perms + 3 resources + 6 debug."""
     entries = build_config_entries(mock_mass, {})
-    assert len(entries) == 1 + 1 + 6 + 16 + 3
+    assert len(entries) == 1 + 1 + 6 + 16 + 3 + 6
 
 
 def test_all_permission_keys_present(mock_mass: MagicMock) -> None:
@@ -61,6 +67,7 @@ def test_categories_match_pr2889_ux(mock_mass: MagicMock) -> None:
         "Edit Permissions",
         "Delete Permissions",
         "MCP Resources",
+        "Debug",
         "generic",
     }
 
@@ -93,3 +100,22 @@ def test_delete_library_default(mock_mass: MagicMock) -> None:
     """Specifically: delete_library defaults False (a hard-to-undo permission)."""
     entries = {e.key: e for e in build_config_entries(mock_mass, {})}
     assert entries[CONF_DELETE_LIBRARY].default_value is False
+
+
+def test_debug_entries_present_with_off_defaults(mock_mass: MagicMock) -> None:
+    """Debug ConfigEntries are present and default to off (least privilege)."""
+    entries = {e.key: e for e in build_config_entries(mock_mass, {})}
+    for key in (
+        CONF_DEBUG_INSPECT,
+        CONF_DEBUG_LOGS,
+        CONF_DEBUG_EVENTS,
+        CONF_DEBUG_PROVIDERS,
+        CONF_DEBUG_RELOAD,
+    ):
+        assert key in entries, f"missing {key}"
+        assert entries[key].default_value is False, f"{key} must be off by default"
+        assert entries[key].category == "Debug"
+
+    cap = entries[CONF_DEBUG_EVENT_BUFFER_CAPACITY]
+    assert cap.default_value == 500
+    assert cap.range == (50, 5000)

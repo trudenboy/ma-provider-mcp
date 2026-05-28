@@ -351,7 +351,7 @@ the five new `ConfigEntry` keys below.
 
 ### New `ConfigEntry`s (`provider/config.py`)
 
-Five booleans, `default_value=False`, `category="advanced"`,
+Five booleans, `default_value=False`, `category="Debug"`,
 `description` carrying an explicit "exposes raw runtime state — disable
 in production" warning. `DEBUG_RELOAD`'s description additionally warns
 that reload interrupts active streams. A sixth, non-tag entry

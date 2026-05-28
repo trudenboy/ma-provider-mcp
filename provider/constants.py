@@ -41,6 +41,14 @@ CONF_RES_LIBRARY = "res_library"
 CONF_RES_PLAYER = "res_player"
 CONF_RES_PROMPTS = "res_prompts"
 
+# ── Debug namespace permission flags (all off-by-default) ──────────────────
+CONF_DEBUG_INSPECT = "debug_inspect"
+CONF_DEBUG_LOGS = "debug_logs"
+CONF_DEBUG_EVENTS = "debug_events"
+CONF_DEBUG_PROVIDERS = "debug_providers"
+CONF_DEBUG_RELOAD = "debug_reload"
+CONF_DEBUG_EVENT_BUFFER_CAPACITY = "debug_event_buffer_capacity"
+
 PERMISSION_KEYS: frozenset[str] = frozenset(
     {
         CONF_QUERY_LIBRARY,
@@ -59,6 +67,11 @@ PERMISSION_KEYS: frozenset[str] = frozenset(
         CONF_DELETE_QUEUE,
         CONF_DELETE_PLAYLISTS,
         CONF_DELETE_FAVORITES,
+        CONF_DEBUG_INSPECT,
+        CONF_DEBUG_LOGS,
+        CONF_DEBUG_EVENTS,
+        CONF_DEBUG_PROVIDERS,
+        CONF_DEBUG_RELOAD,
     }
 )
 
