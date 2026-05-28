@@ -362,17 +362,17 @@ class ConfigEntryList:
     truncated: bool
 
 @dataclass(frozen=True, kw_only=True)
-class DSPBand:
-    frequency: float
-    gain: float
-    q: float
-
-@dataclass(frozen=True, kw_only=True)
 class DSPConfigDump:
+    # Mirrors music_assistant_models.dsp.DSPConfig (DataClassDictMixin):
+    # enabled + input/output gain + an ordered list of DSPFilter
+    # (ParametricEQFilter | ToneControlFilter), each a nested dataclass.
+    # filters are dumped via DSPConfig.to_dict()["filters"] rather than
+    # re-modelled here, so new filter types forward-compat automatically.
     player_id: str
     enabled: bool
-    bands: list[DSPBand]
-    raw: dict[str, Any]                # forward-compat for unknown DSP fields
+    input_gain: float
+    output_gain: float
+    filters: list[dict[str, Any]]
 
 @dataclass(frozen=True, kw_only=True)
 class ValueChange:
@@ -427,7 +427,7 @@ provider/
     validator.py               # coerce(entry, value) -> parsed | ToolError
     secret_handler.py          # SECURE_STRING detection + tag gate (NO encryption — MA's to_raw does it)
     differ.py                  # before/after diff for dry-run (masks secrets)
-  models.py                    # +13 dataclasses (ConfigValueDump + ProviderConfigDump reused from 0005)
+  models.py                    # +12 dataclasses (ConfigValueDump + ProviderConfigDump reused from 0005)
   config.py                    # +5 ConfigEntry
   tags.py                      # +5 Tag, +5 CONFIG_TO_TAG, +5 in PERMISSION_KEYS
   server.py                    # mount config sub-server (one line; stateless)
