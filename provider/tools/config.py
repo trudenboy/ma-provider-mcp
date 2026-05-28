@@ -38,7 +38,7 @@ from ..models import (
     SetValueResult,
 )
 from ..tags import Tag
-from ._common import TIMEOUT_FAST, confirm_or_raise
+from ._common import TIMEOUT_FAST, TIMEOUT_INTERACTIVE, confirm_or_raise
 
 if TYPE_CHECKING:
     from music_assistant_models.config_entries import (
@@ -538,7 +538,7 @@ def _register_provider_write_tools(
             destructiveHint=True,
             idempotentHint=False,
         ),
-        timeout=TIMEOUT_FAST,
+        timeout=TIMEOUT_INTERACTIVE,
     )
     async def set_provider_value(
         instance_id: str, key: str, value: Any, dry_run: bool = False, ctx: Context | None = None
@@ -576,7 +576,7 @@ def _register_provider_write_tools(
             destructiveHint=True,
             idempotentHint=False,
         ),
-        timeout=TIMEOUT_FAST,
+        timeout=TIMEOUT_INTERACTIVE,
     )
     async def save_provider(
         instance_id: str,
@@ -609,7 +609,7 @@ def _register_provider_write_tools(
             destructiveHint=True,
             idempotentHint=False,
         ),
-        timeout=TIMEOUT_FAST,
+        timeout=TIMEOUT_INTERACTIVE,
     )
     async def trigger_provider_action(
         instance_id: str,
@@ -665,7 +665,7 @@ def _register_core_write_tools(
             destructiveHint=True,
             idempotentHint=False,
         ),
-        timeout=TIMEOUT_FAST,
+        timeout=TIMEOUT_INTERACTIVE,
     )
     async def set_core_value(
         domain: str, key: str, value: Any, dry_run: bool = False, ctx: Context | None = None
@@ -701,7 +701,7 @@ def _register_core_write_tools(
             destructiveHint=True,
             idempotentHint=False,
         ),
-        timeout=TIMEOUT_FAST,
+        timeout=TIMEOUT_INTERACTIVE,
     )
     async def save_core(
         domain: str, values: dict[str, Any], dry_run: bool = False, ctx: Context | None = None
@@ -733,7 +733,7 @@ def _register_player_write_tools(
         annotations=ToolAnnotations(
             title="Set player config value", destructiveHint=True, idempotentHint=False
         ),
-        timeout=TIMEOUT_FAST,
+        timeout=TIMEOUT_INTERACTIVE,
     )
     async def set_player_value(
         player_id: str, key: str, value: Any, dry_run: bool = False, ctx: Context | None = None
@@ -765,7 +765,7 @@ def _register_player_write_tools(
         annotations=ToolAnnotations(
             title="Save player config (bulk)", destructiveHint=True, idempotentHint=False
         ),
-        timeout=TIMEOUT_FAST,
+        timeout=TIMEOUT_INTERACTIVE,
     )
     async def save_player(
         player_id: str, values: dict[str, Any], dry_run: bool = False, ctx: Context | None = None
@@ -793,7 +793,7 @@ def _register_player_write_tools(
         annotations=ToolAnnotations(
             title="Save player DSP config", destructiveHint=True, idempotentHint=False
         ),
-        timeout=TIMEOUT_FAST,
+        timeout=TIMEOUT_INTERACTIVE,
     )
     async def save_dsp(
         player_id: str, dsp: dict[str, Any], dry_run: bool = False, ctx: Context | None = None

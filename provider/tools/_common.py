@@ -37,6 +37,11 @@ TIMEOUT_FAST = 10.0
 TIMEOUT_MUTATION = 15.0
 TIMEOUT_QUERY = 30.0
 TIMEOUT_BULK = 60.0
+# Confirmation-gated writes block on an interactive elicitation round-trip
+# (a human reads the prompt and answers) plus the subsequent save+reload.
+# 10s (TIMEOUT_FAST) times out mid-confirmation; allow a generous human-scale
+# window.
+TIMEOUT_INTERACTIVE = 120.0
 
 
 async def confirm_or_raise(ctx: Context | None, prompt: str, *, enabled: bool) -> None:

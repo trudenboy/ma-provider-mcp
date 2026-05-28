@@ -118,3 +118,50 @@ async def test_secret_write_delegates_plaintext_and_never_logs_it(
     args = mock_config_targets.config.save_provider_config.await_args
     assert "sup3rsecret" in str(args)  # plaintext passed to MA (which encrypts)
     assert "sup3rsecret" not in caplog.text  # never logged
+
+
+async def test_write_tools_use_interactive_timeout() -> None:
+    """Confirmation-gated writes must not use the 10s fast timeout.
+
+    The elicitation round-trip + save+reload needs a human-scale window.
+    Regression for a live timeout-mid-confirmation bug.
+    """
+    from unittest.mock import MagicMock
+
+    from provider.tools._common import TIMEOUT_FAST, TIMEOUT_INTERACTIVE
+    from provider.tools.config import build_config_server
+
+    assert TIMEOUT_INTERACTIVE > TIMEOUT_FAST
+    sub = build_config_server(MagicMock(), require_confirmation=True)
+    tools = await sub.list_tools()
+    write_names = {
+        "set_provider_value",
+        "save_provider",
+        "trigger_provider_action",
+        "set_core_value",
+        "save_core",
+        "set_player_value",
+        "save_player",
+        "save_dsp",
+    }
+    read_names = {
+        "list_targets",
+        "get_provider",
+        "get_core",
+        "get_player",
+        "get_entries",
+        "get_dsp",
+    }
+    tools_by_name = {tool.name: tool for tool in tools}
+    for name in write_names:
+        assert name in tools_by_name, f"{name} not found in tools"
+        tool = tools_by_name[name]
+        assert tool.timeout == TIMEOUT_INTERACTIVE, (
+            f"{name} should use TIMEOUT_INTERACTIVE (120s), got {tool.timeout}s"
+        )
+    for name in read_names:
+        assert name in tools_by_name, f"{name} not found in tools"
+        tool = tools_by_name[name]
+        assert tool.timeout == TIMEOUT_FAST, (
+            f"{name} should keep TIMEOUT_FAST (10s), got {tool.timeout}s"
+        )

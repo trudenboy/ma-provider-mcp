@@ -166,3 +166,48 @@ async def test_concurrent_reloads_serialise_through_lock(mock_mass: MagicMock) -
             client.call_tool("debug_reload_provider", {"instance_id": "yandex_music_1"}),
         )
     assert peak == 1, "lock failed to serialise concurrent reloads"
+
+
+async def test_reload_tool_uses_interactive_timeout() -> None:
+    """debug_reload_provider must use interactive timeout for the confirmation round-trip.
+
+    The tool elicits confirmation and polls up to 5s for reload; a 10s timeout
+    is too short for the confirmation round-trip to complete. Regression for
+    a live timeout-mid-confirmation bug.
+    """
+    from provider.tools._common import (  # noqa: PLC0415
+        TIMEOUT_FAST,
+        TIMEOUT_INTERACTIVE,
+    )
+
+    mass = MagicMock()
+    sub = build_debug_server(mass, require_confirmation=True)
+    tools = await sub.list_tools()
+    tools_by_name = {tool.name: tool for tool in tools}
+
+    assert "reload_provider" in tools_by_name
+    reload_tool = tools_by_name["reload_provider"]
+    assert reload_tool.timeout == TIMEOUT_INTERACTIVE, (
+        f"reload_provider should use TIMEOUT_INTERACTIVE (120s), got {reload_tool.timeout}s"
+    )
+
+    # Also verify other debug tools still use TIMEOUT_FAST
+    other_inspect_tools = {
+        "inspect_player",
+        "inspect_queue",
+        "inspect_provider",
+        "recent_events",
+        "event_buffer_stats",
+        "list_providers",
+        "inspect_provider_config",
+        "list_webserver_routes",
+        "list_package_versions",
+        "health_summary",
+        "tail_log",
+    }
+    for name in other_inspect_tools:
+        if name in tools_by_name:
+            tool = tools_by_name[name]
+            assert tool.timeout == TIMEOUT_FAST, (
+                f"{name} should keep TIMEOUT_FAST (10s), got {tool.timeout}s"
+            )

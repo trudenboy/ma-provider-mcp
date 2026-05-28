@@ -41,7 +41,7 @@ from ..models import (
     RouteList,
 )
 from ..tags import Tag
-from ._common import TIMEOUT_FAST, confirm_or_raise
+from ._common import TIMEOUT_FAST, TIMEOUT_INTERACTIVE, confirm_or_raise
 
 if TYPE_CHECKING:
     from music_assistant.mass import MusicAssistant
@@ -98,7 +98,7 @@ def _register_reload_tool(
             destructiveHint=True,
             idempotentHint=False,
         ),
-        timeout=TIMEOUT_FAST,
+        timeout=TIMEOUT_INTERACTIVE,
     )
     async def reload_provider(instance_id: str, ctx: Context | None = None) -> ReloadResult:
         """Unload and reload a configured provider instance.
