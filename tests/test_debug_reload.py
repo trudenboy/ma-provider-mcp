@@ -9,8 +9,10 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from fastmcp import Client
+from fastmcp import Client, FastMCP
 from fastmcp.exceptions import ToolError
+
+from provider.tools.debug import build_debug_server
 
 
 def _provider_config(instance_id: str = "yandex_music_1") -> SimpleNamespace:
@@ -29,10 +31,6 @@ def _decliner():
 
 async def test_reload_requires_confirmation(mock_mass: MagicMock) -> None:
     """When the client declines the elicit prompt, the tool errors and never loads."""
-    from fastmcp import FastMCP
-
-    from provider.tools.debug import build_debug_server
-
     mass = mock_mass
     mass._load_provider = AsyncMock()
     mass.config.get_provider_config = AsyncMock(return_value=_provider_config())
@@ -54,10 +52,7 @@ async def test_reload_requires_confirmation(mock_mass: MagicMock) -> None:
 
 
 async def test_reload_calls_load_provider_with_resolved_config(mock_mass: MagicMock) -> None:
-    from fastmcp import FastMCP
-
-    from provider.tools.debug import build_debug_server
-
+    """Tool passes resolved config to mass._load_provider and reports new availability."""
     mass = mock_mass
     conf = _provider_config()
     mass.config.get_provider_config = AsyncMock(return_value=conf)
@@ -85,10 +80,7 @@ async def test_reload_calls_load_provider_with_resolved_config(mock_mass: MagicM
 async def test_reload_timeout_populates_last_error(
     mock_mass: MagicMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from fastmcp import FastMCP
-
-    from provider.tools.debug import build_debug_server
-
+    """Tool reports last_error when provider fails to become available within timeout."""
     mass = mock_mass
     mass.config.get_provider_config = AsyncMock(return_value=_provider_config())
     mass._load_provider = AsyncMock()
@@ -96,7 +88,7 @@ async def test_reload_timeout_populates_last_error(
     mass.get_provider = MagicMock(return_value=not_ready)
 
     # Speed the 5s poll up so the test stays fast.
-    import provider.tools.debug as debug_mod
+    import provider.tools.debug as debug_mod  # noqa: PLC0415
 
     monkeypatch.setattr(debug_mod, "_RELOAD_POLL_SECONDS", 0.05)
     monkeypatch.setattr(debug_mod, "_RELOAD_POLL_INTERVAL", 0.005)
@@ -119,10 +111,7 @@ async def test_reload_timeout_populates_last_error(
 async def test_audit_log_written_before_load_provider(
     mock_mass: MagicMock, caplog: pytest.LogCaptureFixture
 ) -> None:
-    from fastmcp import FastMCP
-
-    from provider.tools.debug import build_debug_server
-
+    """Audit log is written before mass._load_provider is called."""
     mass = mock_mass
     mass.config.get_provider_config = AsyncMock(return_value=_provider_config())
     call_order: list[str] = []
@@ -149,10 +138,7 @@ async def test_audit_log_written_before_load_provider(
 
 
 async def test_concurrent_reloads_serialise_through_lock(mock_mass: MagicMock) -> None:
-    from fastmcp import FastMCP
-
-    from provider.tools.debug import build_debug_server
-
+    """Concurrent reload calls serialize through global lock."""
     mass = mock_mass
     mass.config.get_provider_config = AsyncMock(return_value=_provider_config())
     mass.get_provider = MagicMock(return_value=SimpleNamespace(available=True, last_error=None))

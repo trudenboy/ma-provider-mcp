@@ -12,7 +12,7 @@ from fastmcp.exceptions import ToolError
 from provider.debug.log_reader import SafeLogTail
 
 
-def test_tail_returns_last_n_lines(tmp_log_dir: Path) -> None:
+def test_tail_returns_last_n_lines(tmp_log_dir: Path) -> None:  # noqa: ARG001 -- fixture activates SafeLogTail.ROOT patch via monkeypatch
     """SafeLogTail.tail returns exactly N requested lines."""
     tail = SafeLogTail()
     result = tail.tail(lines=5)
@@ -21,7 +21,7 @@ def test_tail_returns_last_n_lines(tmp_log_dir: Path) -> None:
     assert result.truncated is False
 
 
-def test_tail_redacts_bearer_token(tmp_log_dir: Path) -> None:
+def test_tail_redacts_bearer_token(tmp_log_dir: Path) -> None:  # noqa: ARG001 -- fixture activates SafeLogTail.ROOT patch via monkeypatch
     """SafeLogTail redacts Authorization: Bearer tokens."""
     tail = SafeLogTail()
     result = tail.tail(lines=200)
@@ -30,7 +30,7 @@ def test_tail_redacts_bearer_token(tmp_log_dir: Path) -> None:
     assert "<redacted>" in joined
 
 
-def test_tail_redacts_query_string_secrets(tmp_log_dir: Path) -> None:
+def test_tail_redacts_query_string_secrets(tmp_log_dir: Path) -> None:  # noqa: ARG001 -- fixture activates SafeLogTail.ROOT patch via monkeypatch
     """SafeLogTail redacts token= and password= query string values."""
     tail = SafeLogTail()
     result = tail.tail(lines=200)
@@ -39,7 +39,7 @@ def test_tail_redacts_query_string_secrets(tmp_log_dir: Path) -> None:
     assert "hunter2" not in joined
 
 
-def test_tail_filters_by_level(tmp_log_dir: Path) -> None:
+def test_tail_filters_by_level(tmp_log_dir: Path) -> None:  # noqa: ARG001 -- fixture activates SafeLogTail.ROOT patch via monkeypatch
     """SafeLogTail filters by log level."""
     tail = SafeLogTail()
     result = tail.tail(lines=200, level="ERROR")
@@ -47,7 +47,7 @@ def test_tail_filters_by_level(tmp_log_dir: Path) -> None:
     assert any("lookup failed" in line.message for line in result.lines)
 
 
-def test_tail_filters_by_component_regex(tmp_log_dir: Path) -> None:
+def test_tail_filters_by_component_regex(tmp_log_dir: Path) -> None:  # noqa: ARG001 -- fixture activates SafeLogTail.ROOT patch via monkeypatch
     """SafeLogTail filters by component regex."""
     tail = SafeLogTail()
     result = tail.tail(lines=200, component_regex=r"providers\.yandex.*")
@@ -69,7 +69,7 @@ def test_tail_filters_by_component_regex(tmp_log_dir: Path) -> None:
         "musicassistant.log.99",
     ],
 )
-def test_path_traversal_rejected(tmp_log_dir: Path, name: str) -> None:
+def test_path_traversal_rejected(tmp_log_dir: Path, name: str) -> None:  # noqa: ARG001 -- fixture activates SafeLogTail.ROOT patch via monkeypatch
     """SafeLogTail rejects path traversal attempts."""
     tail = SafeLogTail()
     with pytest.raises(ToolError):
@@ -90,7 +90,7 @@ def test_symlink_escape_rejected(tmp_log_dir: Path) -> None:
 
 def test_scan_bytes_cap_marks_truncated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """SafeLogTail marks result truncated when 10MB cap is reached."""
-    from provider.debug import log_reader
+    from provider.debug import log_reader  # noqa: PLC0415
 
     monkeypatch.setattr(log_reader.SafeLogTail, "ROOT", tmp_path, raising=True)
     huge = tmp_path / "musicassistant.log"
@@ -115,7 +115,7 @@ def test_scan_bytes_cap_drops_partial_first_line(
     no timestamp / level / component (just a tail substring of a real line) —
     which slips past since_seconds filtering and confuses callers.
     """
-    from provider.debug import log_reader
+    from provider.debug import log_reader  # noqa: PLC0415
 
     monkeypatch.setattr(log_reader.SafeLogTail, "ROOT", tmp_path, raising=True)
     huge = tmp_path / "musicassistant.log"
@@ -138,7 +138,7 @@ def test_scan_bytes_cap_drops_partial_first_line(
 # ---- E2E tests via MCP transport (debug_tail_log tool) ----
 
 
-async def test_e2e_debug_tail_log(mounted_debug: Any, tmp_log_dir: Path) -> None:
+async def test_e2e_debug_tail_log(mounted_debug: Any, tmp_log_dir: Path) -> None:  # noqa: ARG001 -- fixture activates SafeLogTail.ROOT patch via monkeypatch
     """debug_tail_log tool returns the last 5 lines via MCP."""
     async with Client(mounted_debug) as client:
         result = await client.call_tool("debug_tail_log", {"lines": 5})
@@ -146,7 +146,7 @@ async def test_e2e_debug_tail_log(mounted_debug: Any, tmp_log_dir: Path) -> None
     assert result.data.truncated is False
 
 
-async def test_e2e_debug_tail_log_invalid_name(mounted_debug: Any, tmp_log_dir: Path) -> None:
+async def test_e2e_debug_tail_log_invalid_name(mounted_debug: Any, tmp_log_dir: Path) -> None:  # noqa: ARG001 -- fixture activates SafeLogTail.ROOT patch via monkeypatch
     """debug_tail_log rejects path traversal attempts via MCP."""
     async with Client(mounted_debug) as client:
         with pytest.raises(ToolError):

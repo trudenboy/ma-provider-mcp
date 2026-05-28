@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] — 2026-05-28
+
+### Added
+- **New `debug` MCP namespace for development and troubleshooting.**
+  Adds ten read tools and one guarded write tool gated by five
+  off-by-default permission flags (`Debug: inspect raw player/queue/provider
+  state`, `Debug: tail musicassistant.log`, `Debug: read recent MA events`,
+  `Debug: inspect configured providers`, `Debug: reload a provider instance`).
+  Default installations see no new surface area; an operator must opt in
+  per capability. Inspection tools mirror the full underlying dataclass
+  (with depth/string caps, defensive per-attribute access, and cycle
+  safety) so an LLM agent can see state that the curated `*Brief`
+  responses deliberately hide. Log tailing uses a path allowlist, a
+  10 MB self-DoS cap, and redaction of common bearer/token/password
+  patterns. Event access is backed by a bounded ring buffer subscribed
+  to MA's event bus at provider start. Provider tools dump configs
+  through `Config.to_dict()` so `SECURE_STRING` masking flows through
+  MA's own `__post_serialize__` hook — there is no separate masking
+  pass in this provider. `debug_reload_provider` requires an
+  elicitation confirmation, serialises through an `asyncio.Lock`,
+  writes an INFO-level audit log line before invoking MA's reload
+  pathway, and surfaces a 5-second `available=True` poll result.
+  `debug_health_summary` is the intended LLM-agent entry point: a
+  single read returns provider/queue roll-up, event rate, and log
+  error count, with a `disabled_capabilities` field so the agent can
+  distinguish "no errors" from "we couldn't check".
+
 ## [0.3.35] — 2026-05-28
 
 ### Added

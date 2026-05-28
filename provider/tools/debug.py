@@ -131,6 +131,7 @@ def _register_reload_tool(
             t0 = time.monotonic()
             load_error: Exception | None = None
             try:
+                # Private but the only reload primitive — see spec 0005 "Known private-API carve-outs".
                 await mass._load_provider(conf)
             except Exception as exc:
                 load_error = exc
@@ -475,7 +476,7 @@ def _register_providers_tools(sub: FastMCP, mass: MusicAssistant) -> None:
         """
         routes: list[RouteEntry] = []
         try:
-            inner_app = mass.webserver._server.app
+            inner_app = mass.webserver._server.app  # type: ignore[attr-defined]
             for route in inner_app.router.routes():
                 method = str(getattr(route, "method", "*"))
                 resource = getattr(route, "resource", None)

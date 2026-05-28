@@ -162,7 +162,8 @@ class MCPServerRuntime:
         from .tools import build_debug_server  # noqa: PLC0415
 
         if bool(self._config.get_value(CONF_DEBUG_EVENTS)):
-            capacity = int(self._config.get_value(CONF_DEBUG_EVENT_BUFFER_CAPACITY) or 500)
+            cap_value = self._config.get_value(CONF_DEBUG_EVENT_BUFFER_CAPACITY)
+            capacity = int(cap_value) if isinstance(cap_value, int | float | str) else 500
             self._event_buffer = EventBuffer(self._mass, capacity=capacity)
             self._event_buffer.start()
 

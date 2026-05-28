@@ -45,10 +45,10 @@ do not expose it through MCP.
 ## Solution Summary
 
 Add a ninth FastMCP sub-server, `debug`, mounted by `MCPServerRuntime`
-alongside the existing eight. It exposes ten tools spread across five
+alongside the existing eight. It exposes ten read tools plus one guarded write tool spread across five
 new permission tags — `debug:inspect`, `debug:logs`, `debug:events`,
 `debug:providers`, `debug:reload` — each gated by its own off-by-default
-`ConfigEntry`. One of the ten — `debug_health_summary` — is the
+`ConfigEntry`. One of the ten read tools — `debug_health_summary` — is the
 intended **entry point** for an LLM agent triaging an unknown problem:
 a single read returns a roll-up of provider state, queue health, event
 rates, and log error counts, so the agent does not need to fan out
