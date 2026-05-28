@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.34] — 2026-05-28
+
+### Fixed
+- **`state="synced"` and `active_group` / `synced_to` now resolve for
+  real Music-Assistant sync followers.** The `0.3.32` release wired
+  three new fields into `PlayerBrief` but read them from the raw
+  `Player` dataclass attributes — those stay `None` for
+  SyncGroupPlayer followers even while they are streaming the group's
+  audio. The canonical values live on `Player.state.active_group` and
+  `Player.state.synced_to`, populated by MA's `__final_active_group`
+  / `__final_synced_to` cached properties (which walk every GROUP
+  player and resolve protocol-id translation). The brief now uses
+  the same state-first / raw-fallback pattern already in place for
+  `powered` and `current_media`, so a follower captured by an active
+  group surfaces as `state="synced"` with the resolved group id.
+  Live verification on a SyncGroupPlayer streaming to Kitchen +
+  Lenco previously left both at `state="idle", active_group=null`;
+  after this fix they correctly report `state="synced"`.
+
 ## [0.3.33] — 2026-05-28
 
 ### Changed
