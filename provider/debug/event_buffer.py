@@ -16,8 +16,8 @@ from collections import Counter, deque
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from provider.debug.inspect_serializer import dump
-from provider.models import EventBufferStats, EventRecord
+from ..models import EventBufferStats, EventRecord
+from .inspect_serializer import dump
 
 if TYPE_CHECKING:
     from music_assistant.mass import MusicAssistant

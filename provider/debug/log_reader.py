@@ -24,7 +24,7 @@ from pathlib import Path
 
 from fastmcp.exceptions import ToolError
 
-from provider.models import LogLine, LogTailResult
+from ..models import LogLine, LogTailResult
 
 _LOG_LINE_RE = re.compile(
     r"^(?P<ts>\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?)\s+"
