@@ -10,6 +10,7 @@ is invisible to MCP clients via ``TagFilterMiddleware``.
 
 from __future__ import annotations
 
+import importlib.metadata
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -21,12 +22,19 @@ from ..debug.event_buffer import EventBuffer
 from ..debug.inspect_serializer import dump
 from ..debug.log_reader import SafeLogTail
 from ..models import (
+    ConfigValueDump,
     EventBufferStats,
     EventSnapshot,
     LogTailResult,
+    PackageVersions,
     PlayerInspect,
+    ProviderConfigDump,
     ProviderInspect,
+    ProviderList,
+    ProviderSummary,
     QueueInspect,
+    RouteEntry,
+    RouteList,
 )
 from ..tags import Tag
 from ._common import TIMEOUT_FAST
@@ -38,6 +46,14 @@ if TYPE_CHECKING:
 LOGGER = logging.getLogger("music_assistant.providers.fastmcp_server.debug")
 
 _PAYLOAD_CAP_BYTES = 256 * 1024
+
+_TRACKED_PACKAGES = (
+    "music_assistant",
+    "music_assistant_models",
+    "fastmcp",
+    "aiohttp",
+    "mashumaro",
+)
 
 
 def _safe_get(obj: Any, name: str, default: Any = None) -> Any:
@@ -121,6 +137,7 @@ def build_debug_server(
     _register_inspect_tools(sub, mass)
     _register_logs_tool(sub, mass)
     _register_events_tools(sub, mass, event_buffer)
+    _register_providers_tools(sub, mass)
     return sub
 
 
@@ -292,3 +309,131 @@ def _register_events_tools(
                 by_type={},
             )
         return buffer.stats()
+
+
+def _register_providers_tools(sub: FastMCP, mass: MusicAssistant) -> None:
+    @sub.tool(
+        tags={Tag.DEBUG_PROVIDERS},
+        annotations=_readonly("List configured providers"),
+        timeout=TIMEOUT_FAST,
+    )  # type: ignore[untyped-decorator, unused-ignore]
+    async def list_providers() -> ProviderList:
+        """Roll-up of every configured provider.
+
+        See also: debug_inspect_provider for the full runtime dump,
+        debug_inspect_provider_config for the masked configuration,
+        debug_health_summary for triage.
+        """
+        summaries: list[ProviderSummary] = []
+        for prov in getattr(mass, "providers", []):
+            ptype = getattr(getattr(prov, "type", None), "value", None) or str(
+                getattr(prov, "type", "unknown")
+            )
+            summaries.append(
+                ProviderSummary(
+                    instance_id=getattr(prov, "instance_id", ""),
+                    domain=getattr(prov, "domain", ""),
+                    type=ptype,
+                    name=getattr(prov, "name", "") or getattr(prov, "domain", ""),
+                    available=bool(getattr(prov, "available", False)),
+                    last_error=getattr(prov, "last_error", None),
+                )
+            )
+        return ProviderList(providers=summaries)
+
+    @sub.tool(
+        tags={Tag.DEBUG_PROVIDERS},
+        annotations=_readonly("Inspect provider config (masked)"),
+        timeout=TIMEOUT_FAST,
+    )  # type: ignore[untyped-decorator, unused-ignore]
+    async def inspect_provider_config(instance_id: str) -> ProviderConfigDump:
+        """Dump a provider's stored ConfigEntry values.
+
+        SECURE_STRING values are replaced by MA's SECURE_STRING_SUBSTITUTE
+        sentinel via ``__post_serialize__`` in ``music_assistant_models`` —
+        this tool carries no masking logic of its own.
+
+        :param instance_id: The provider instance identifier.
+        """
+        try:
+            config = await mass.config.get_provider_config(instance_id)
+        except Exception as exc:
+            raise ToolError(f"provider instance_id={instance_id!r} not configured") from exc
+        raw = config.to_dict()
+        values: list[ConfigValueDump] = []
+        truncated = False
+        running_bytes = 0
+        for key, entry in raw.get("values", {}).items():
+            value = entry.get("value")
+            etype = entry.get("type", "unknown")
+            payload_size = len(str(value)) + len(key) + len(etype) + 16
+            if running_bytes + payload_size > _PAYLOAD_CAP_BYTES:
+                truncated = True
+                break
+            running_bytes += payload_size
+            values.append(ConfigValueDump(key=str(key), type=str(etype), value=value))
+        return ProviderConfigDump(
+            instance_id=instance_id,
+            domain=raw.get("domain", ""),
+            values=values,
+            truncated=truncated,
+        )
+
+    @sub.tool(
+        tags={Tag.DEBUG_PROVIDERS},
+        annotations=_readonly("List webserver routes"),
+        timeout=TIMEOUT_FAST,
+    )  # type: ignore[untyped-decorator, unused-ignore]
+    async def list_webserver_routes() -> RouteList:
+        """Enumerate the HTTP routes registered on MA's webserver.
+
+        Includes both dynamic (provider-registered) and static routes.
+        Reaches into ``webserver._server.app.router`` — single documented
+        private-API touch. See spec 0005.
+        """
+        routes: list[RouteEntry] = []
+        try:
+            inner_app = mass.webserver._server.app
+            for route in inner_app.router.routes():
+                method = str(getattr(route, "method", "*"))
+                resource = getattr(route, "resource", None)
+                path = str(getattr(resource, "canonical", "")) if resource else ""
+                routes.append(
+                    RouteEntry(
+                        method=method,
+                        path=path,
+                        registered_by=_attribute_route(path),
+                    )
+                )
+        except AttributeError as exc:
+            raise ToolError("webserver routes are unavailable in this MA build") from exc
+        return RouteList(routes=routes)
+
+    @sub.tool(
+        tags={Tag.DEBUG_PROVIDERS},
+        annotations=_readonly("List installed package versions"),
+        timeout=TIMEOUT_FAST,
+    )  # type: ignore[untyped-decorator, unused-ignore]
+    async def list_package_versions() -> PackageVersions:
+        """Return installed versions of the key packages backing the MCP provider and MA.
+
+        Useful for upstream bug reports.
+        """
+        out: dict[str, str] = {}
+        for pkg in _TRACKED_PACKAGES:
+            try:
+                out[pkg] = importlib.metadata.version(pkg)
+            except importlib.metadata.PackageNotFoundError:
+                out[pkg] = "<not installed>"
+        return PackageVersions(packages=out)
+
+
+def _attribute_route(path: str) -> str | None:
+    """Best-effort: map a route path back to who registered it by path prefix."""
+    if path.startswith("/mcp/"):
+        return "fastmcp_server"
+    if path.startswith("/.well-known/"):
+        return "fastmcp_server (well-known)"
+    if path.startswith("/api/"):
+        return "music_assistant (api)"
+    return None
