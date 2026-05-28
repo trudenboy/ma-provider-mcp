@@ -230,3 +230,39 @@ def tmp_log_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
     monkeypatch.setattr(log_reader.SafeLogTail, "ROOT", tmp_path, raising=True)
     return tmp_path
+
+
+@pytest.fixture
+def fake_event_emitter(mock_mass: MagicMock) -> Any:
+    """Capture the EventBuffer subscriber and let tests emit synthetic events.
+
+    Replaces ``mock_mass.subscribe`` so the first call stores the callback;
+    tests then call ``emitter.emit(event)`` to drive it.
+    """
+    holder: dict[str, Any] = {"cb": None, "removed": False}
+
+    def _subscribe(cb: Any, event_filter: Any = None, id_filter: Any = None) -> Any:  # noqa: ARG001
+        holder["cb"] = cb
+
+        def _remove() -> None:
+            holder["removed"] = True
+
+        return _remove
+
+    mock_mass.subscribe = MagicMock(side_effect=_subscribe)
+
+    class _Emitter:
+        @property
+        def cb(self) -> Any:
+            return holder["cb"]
+
+        @property
+        def removed(self) -> Any:
+            return holder["removed"]
+
+        def emit(self, event: Any) -> None:
+            if holder["cb"] is None:
+                raise AssertionError("no subscriber registered")
+            holder["cb"](event)
+
+    return _Emitter()

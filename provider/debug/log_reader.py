@@ -170,7 +170,7 @@ class SafeLogTail:
         """Parse a log line into timestamp, level, component, message.
 
         :param raw: Raw log line text.
-        :return: LogLine with parsed fields or message-only if unparseable.
+        :return: LogLine with parsed fields or message-only if unparsable.
         """
         match = _LOG_LINE_RE.match(raw)
         if not match:
