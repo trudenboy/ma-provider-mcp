@@ -346,6 +346,12 @@ def build_config_server(
         require_confirmation=require_confirmation,
         secret_writes_enabled=secret_writes_enabled,
     )
+    _register_core_write_tools(
+        sub,
+        mass,
+        require_confirmation=require_confirmation,
+        secret_writes_enabled=secret_writes_enabled,
+    )
     return sub
 
 
@@ -636,4 +642,78 @@ def _register_provider_write_tools(
             new_entries=[_entry_dump(e, getattr(e, "value", None)) for e in entries],
             extra_data={},
             audit_log_id=audit,
+        )
+
+
+def _register_core_write_tools(
+    sub: FastMCP,
+    mass: MusicAssistant,
+    *,
+    require_confirmation: bool,
+    secret_writes_enabled: bool,
+) -> None:
+    @sub.tool(
+        tags={Tag.CONFIG_WRITE_CORE},
+        annotations=ToolAnnotations(
+            title="Set core config value",
+            destructiveHint=True,
+            idempotentHint=False,
+        ),
+        timeout=TIMEOUT_FAST,
+    )
+    async def set_core_value(
+        domain: str, key: str, value: Any, dry_run: bool = False, ctx: Context | None = None
+    ) -> SetValueResult:
+        """Set one core controller config value.
+
+        Core changes may restart subsystems and interrupt all playback.
+        ``dry_run=True`` previews without writing. See also: config_get_core
+        for current values.
+
+        :param domain: Core controller domain (e.g. "webserver", "streams").
+        :param key: ConfigEntry key.
+        :param value: New value.
+        :param dry_run: When True, return a diff and do not persist.
+        :param ctx: FastMCP context (auto-populated).
+        """
+        return await _write_single(
+            mass,
+            "core",
+            domain,
+            key,
+            value,
+            dry_run=dry_run,
+            ctx=ctx,
+            require_confirmation=require_confirmation,
+            secret_writes_enabled=secret_writes_enabled,
+        )
+
+    @sub.tool(
+        tags={Tag.CONFIG_WRITE_CORE},
+        annotations=ToolAnnotations(
+            title="Save core config (bulk)",
+            destructiveHint=True,
+            idempotentHint=False,
+        ),
+        timeout=TIMEOUT_FAST,
+    )
+    async def save_core(
+        domain: str, values: dict[str, Any], dry_run: bool = False, ctx: Context | None = None
+    ) -> SaveResult:
+        """Bulk-save core controller config values.
+
+        :param domain: Core controller domain.
+        :param values: key->value map.
+        :param dry_run: When True, return a diff and do not persist.
+        :param ctx: FastMCP context (auto-populated).
+        """
+        return await _write_bulk(
+            mass,
+            "core",
+            domain,
+            values,
+            dry_run=dry_run,
+            ctx=ctx,
+            require_confirmation=require_confirmation,
+            secret_writes_enabled=secret_writes_enabled,
         )
