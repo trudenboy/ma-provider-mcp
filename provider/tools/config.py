@@ -352,6 +352,12 @@ def build_config_server(
         require_confirmation=require_confirmation,
         secret_writes_enabled=secret_writes_enabled,
     )
+    _register_player_write_tools(
+        sub,
+        mass,
+        require_confirmation=require_confirmation,
+        secret_writes_enabled=secret_writes_enabled,
+    )
     return sub
 
 
@@ -716,4 +722,131 @@ def _register_core_write_tools(
             ctx=ctx,
             require_confirmation=require_confirmation,
             secret_writes_enabled=secret_writes_enabled,
+        )
+
+
+def _register_player_write_tools(
+    sub: FastMCP, mass: MusicAssistant, *, require_confirmation: bool, secret_writes_enabled: bool
+) -> None:
+    @sub.tool(
+        tags={Tag.CONFIG_WRITE_PLAYER},
+        annotations=ToolAnnotations(
+            title="Set player config value", destructiveHint=True, idempotentHint=False
+        ),
+        timeout=TIMEOUT_FAST,
+    )
+    async def set_player_value(
+        player_id: str, key: str, value: Any, dry_run: bool = False, ctx: Context | None = None
+    ) -> SetValueResult:
+        """Set one player config value (volume limits, crossfade, output protocol, ...).
+
+        See also: config_get_player for current values, config_save_dsp for EQ/DSP.
+
+        :param player_id: The player identifier.
+        :param key: ConfigEntry key.
+        :param value: New value.
+        :param dry_run: When True, return a diff and do not persist.
+        :param ctx: FastMCP context (auto-populated).
+        """
+        return await _write_single(
+            mass,
+            "player",
+            player_id,
+            key,
+            value,
+            dry_run=dry_run,
+            ctx=ctx,
+            require_confirmation=require_confirmation,
+            secret_writes_enabled=secret_writes_enabled,
+        )
+
+    @sub.tool(
+        tags={Tag.CONFIG_WRITE_PLAYER},
+        annotations=ToolAnnotations(
+            title="Save player config (bulk)", destructiveHint=True, idempotentHint=False
+        ),
+        timeout=TIMEOUT_FAST,
+    )
+    async def save_player(
+        player_id: str, values: dict[str, Any], dry_run: bool = False, ctx: Context | None = None
+    ) -> SaveResult:
+        """Bulk-save player config values.
+
+        :param player_id: The player identifier.
+        :param values: key->value map.
+        :param dry_run: When True, return a diff and do not persist.
+        :param ctx: FastMCP context (auto-populated).
+        """
+        return await _write_bulk(
+            mass,
+            "player",
+            player_id,
+            values,
+            dry_run=dry_run,
+            ctx=ctx,
+            require_confirmation=require_confirmation,
+            secret_writes_enabled=secret_writes_enabled,
+        )
+
+    @sub.tool(
+        tags={Tag.CONFIG_WRITE_PLAYER},
+        annotations=ToolAnnotations(
+            title="Save player DSP config", destructiveHint=True, idempotentHint=False
+        ),
+        timeout=TIMEOUT_FAST,
+    )
+    async def save_dsp(
+        player_id: str, dsp: dict[str, Any], dry_run: bool = False, ctx: Context | None = None
+    ) -> SaveResult:
+        """Save a player's DSP configuration (enabled, gains, filter chain).
+
+        The payload is parsed via DSPConfig.from_dict and validated (gains
+        must be within -60..60 dB, filters well-formed). See also:
+        config_get_dsp for the current DSP shape.
+
+        :param player_id: The player identifier.
+        :param dsp: DSPConfig as a dict (enabled, input_gain, output_gain, filters).
+        :param dry_run: When True, report the proposed change without writing.
+        :param ctx: FastMCP context (auto-populated).
+        """
+        import json  # noqa: PLC0415
+
+        from music_assistant_models.dsp import DSPConfig  # noqa: PLC0415
+
+        if len(json.dumps(dsp, default=str)) > _SAVE_PAYLOAD_CAP_BYTES:
+            raise ToolError("save payload exceeds 64 KB cap")
+        try:
+            cfg = DSPConfig.from_dict(dsp)
+            cfg.validate()
+        except ToolError:
+            raise
+        except Exception as exc:
+            raise ToolError(f"invalid DSP config: {exc}") from exc
+        if dry_run:
+            return SaveResult(
+                target_type="player_dsp",
+                target_id=player_id,
+                applied=False,
+                changes=[],
+                requires_reload=False,
+                audit_log_id="",
+                diff=None,
+            )
+        await confirm_or_raise(
+            ctx, f"Save DSP config for player {player_id!r}?", enabled=require_confirmation
+        )
+        audit = _audit_id()
+        LOGGER.info("config_save_dsp player=%s audit_id=%s", player_id, audit)
+        try:
+            await mass.config.save_dsp_config(player_id, cfg)
+        except Exception as exc:
+            raise ToolError(f"DSP save failed: {exc}") from exc
+        return SaveResult(
+            target_type="player_dsp",
+            target_id=player_id,
+            applied=True,
+            changes=[],
+            requires_reload=False,
+            audit_log_id=audit,
+            diff=None,
         )
