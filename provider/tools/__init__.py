@@ -8,6 +8,7 @@ the ``restrict_tag`` middleware.
 
 from __future__ import annotations
 
+from .config import build_config_server
 from .debug import build_debug_server
 from .library import build_library_server
 from .media import build_media_server
@@ -19,6 +20,7 @@ from .queue import build_queue_server
 from .volume import build_volume_server
 
 __all__ = [
+    "build_config_server",
     "build_debug_server",
     "build_library_server",
     "build_media_server",

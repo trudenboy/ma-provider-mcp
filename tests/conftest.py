@@ -354,3 +354,151 @@ def mounted_debug_with_events(mock_mass: MagicMock, fake_event_emitter: Any) -> 
         if callable(close):
             with contextlib.suppress(Exception):
                 close()
+
+
+@pytest.fixture
+def mounted_config(mock_mass) -> Any:
+    """Root FastMCP with the config sub-server mounted, all config tags visible."""
+    import contextlib  # noqa: PLC0415
+
+    from fastmcp import FastMCP  # noqa: PLC0415
+
+    from provider.tools.config import build_config_server  # noqa: PLC0415
+
+    mcp = FastMCP(name="test")
+    mcp.mount(build_config_server(mock_mass, require_confirmation=False), namespace="config")
+    try:
+        yield mcp
+    finally:
+        close = getattr(mcp, "close", None) or getattr(mcp, "shutdown", None)
+        if callable(close):
+            with contextlib.suppress(Exception):
+                close()
+
+
+@pytest.fixture
+def mounted_config_off(mock_mass) -> Any:
+    """Config sub-server with TagFilterMiddleware allowing zero tags."""
+    import contextlib  # noqa: PLC0415
+
+    from fastmcp import FastMCP  # noqa: PLC0415
+
+    from provider.middleware import TagFilterMiddleware  # noqa: PLC0415
+    from provider.server import build_tag_lookup  # noqa: PLC0415
+    from provider.tools.config import build_config_server  # noqa: PLC0415
+
+    mcp = FastMCP(name="test")
+    mcp.mount(build_config_server(mock_mass, require_confirmation=False), namespace="config")
+    mcp.add_middleware(TagFilterMiddleware(lambda: set(), build_tag_lookup(mcp)))
+    try:
+        yield mcp
+    finally:
+        close = getattr(mcp, "close", None) or getattr(mcp, "shutdown", None)
+        if callable(close):
+            with contextlib.suppress(Exception):
+                close()
+
+
+@pytest.fixture
+def mounted_config_no_secret(mock_mass) -> Any:
+    """Config sub-server built with secret writes disabled (value-gate off)."""
+    import contextlib  # noqa: PLC0415
+
+    from fastmcp import FastMCP  # noqa: PLC0415
+
+    from provider.tools.config import build_config_server  # noqa: PLC0415
+
+    mcp = FastMCP(name="test")
+    mcp.mount(
+        build_config_server(mock_mass, require_confirmation=False, secret_writes_enabled=False),
+        namespace="config",
+    )
+    try:
+        yield mcp
+    finally:
+        close = getattr(mcp, "close", None) or getattr(mcp, "shutdown", None)
+        if callable(close):
+            with contextlib.suppress(Exception):
+                close()
+
+
+@pytest.fixture
+def mock_config_targets(mock_mass):
+    """Wire mock_mass.config with provider/core/player config + entries.
+
+    Provides a SECURE_STRING entry (token, requires_reload), an
+    INTEGER-with-range (http_port), and a STRING (log_level). to_dict
+    mirrors MA's __post_serialize__ (secret already masked).
+    """
+    from unittest.mock import AsyncMock, MagicMock  # noqa: PLC0415
+
+    from music_assistant_models.config_entries import ConfigEntry  # noqa: PLC0415
+    from music_assistant_models.enums import ConfigEntryType  # noqa: PLC0415
+
+    entries = {
+        "log_level": ConfigEntry(key="log_level", type=ConfigEntryType.STRING, label="Log level"),
+        "http_port": ConfigEntry(
+            key="http_port", type=ConfigEntryType.INTEGER, label="Port", range=(1, 65535)
+        ),
+        "token": ConfigEntry(
+            key="token", type=ConfigEntryType.SECURE_STRING, label="Token", requires_reload=True
+        ),
+    }
+    # give each entry a current .value so _resolve_entries current-map works
+    entries["log_level"].value = "GLOBAL"
+    entries["http_port"].value = 8099
+    entries["token"].value = "this_value_is_encrypted"
+
+    cfg = MagicMock()
+    cfg.domain = "yandex_music"
+    cfg.values = entries
+    cfg.provider = "yandex_music"
+    cfg.to_dict = MagicMock(
+        return_value={
+            "domain": "yandex_music",
+            "values": {
+                "log_level": {"key": "log_level", "type": "string", "value": "GLOBAL"},
+                "http_port": {"key": "http_port", "type": "integer", "value": 8099},
+                "token": {
+                    "key": "token",
+                    "type": "secure_string",
+                    "value": "this_value_is_encrypted",
+                },
+            },
+        }
+    )
+
+    summary = MagicMock()
+    summary.instance_id = "yandex_music"
+    summary.domain = "yandex_music"
+    summary.name = "Yandex Music"
+    summary.enabled = True
+    summary.player_id = "kitchen"
+    summary.provider = "local_audio"
+
+    mock_mass.config.get_provider_config = AsyncMock(return_value=cfg)
+    mock_mass.config.get_provider_config_entries = AsyncMock(return_value=list(entries.values()))
+    mock_mass.config.get_core_config = AsyncMock(return_value=cfg)
+    mock_mass.config.get_core_config_entries = AsyncMock(return_value=list(entries.values()))
+    mock_mass.config.get_player_config = AsyncMock(return_value=cfg)
+    mock_mass.config.get_player_config_entries = AsyncMock(return_value=list(entries.values()))
+    mock_mass.config.get_provider_configs = AsyncMock(return_value=[summary])
+    mock_mass.config.get_core_configs = AsyncMock(return_value=[summary])
+    mock_mass.config.get_player_configs = AsyncMock(return_value=[summary])
+    mock_mass.config.save_provider_config = AsyncMock(return_value=cfg)
+    mock_mass.config.save_core_config = AsyncMock(return_value=cfg)
+    mock_mass.config.save_player_config = AsyncMock(return_value=cfg)
+    mock_mass.config.save_dsp_config = AsyncMock()
+    mock_mass.config.get_player_dsp_config = MagicMock(
+        return_value=MagicMock(
+            to_dict=MagicMock(
+                return_value={
+                    "enabled": True,
+                    "input_gain": 0.0,
+                    "output_gain": 0.0,
+                    "filters": [],
+                }
+            )
+        )
+    )
+    return mock_mass
