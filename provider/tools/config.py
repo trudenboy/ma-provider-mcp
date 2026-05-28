@@ -13,13 +13,18 @@ invisible via ``TagFilterMiddleware``.
 from __future__ import annotations
 
 import logging
+import time
 from typing import TYPE_CHECKING, Any
 
-from fastmcp import FastMCP
+from fastmcp import Context, FastMCP
 from fastmcp.exceptions import ToolError
 from mcp.types import ToolAnnotations
 
+from ..config_io.differ import compute_diff
+from ..config_io.secret_handler import gate_secret_writes
+from ..config_io.validator import coerce
 from ..models import (
+    ActionResult,
     ConfigEntryDump,
     ConfigEntryList,
     ConfigTarget,
@@ -29,9 +34,11 @@ from ..models import (
     DSPConfigDump,
     PlayerConfigDump,
     ProviderConfigDump,
+    SaveResult,
+    SetValueResult,
 )
 from ..tags import Tag
-from ._common import TIMEOUT_FAST
+from ._common import TIMEOUT_FAST, confirm_or_raise
 
 if TYPE_CHECKING:
     from music_assistant_models.config_entries import (
@@ -126,11 +133,201 @@ async def _resolve_entries(
     return list(entries), current
 
 
+def _audit_id() -> str:
+    """Return a sortable, unique audit id (monotonic, no Date.now/random)."""
+    return f"cfg-{time.time_ns():x}"
+
+
+def _confirm_prompt(target_type: str, target_id: str, keys: list[str]) -> str:
+    """Build the confirmation prompt for a write (core warns about restart).
+
+    :param target_type: "provider" | "core" | "player".
+    :param target_id: The target identifier.
+    :param keys: Config keys being written.
+    """
+    if target_type == "core":
+        return (
+            f"Save core {target_id!r} config ({', '.join(keys)})? "
+            "Core changes may restart subsystems and interrupt ALL playback."
+        )
+    return f"Save {target_type} {target_id!r} config ({', '.join(keys)})?"
+
+
+async def _do_save(
+    mass: MusicAssistant, target_type: str, target_id: str, values: dict[str, Any]
+) -> None:
+    """Delegate to MA's atomic save_*_config (validate+encrypt+persist+reload).
+
+    :param mass: MusicAssistant instance.
+    :param target_type: "provider" | "core" | "player".
+    :param target_id: The target identifier.
+    :param values: Plaintext key→value map to persist (MA encrypts SECURE_STRING).
+    """
+    try:
+        if target_type == "provider":
+            cfg = await mass.config.get_provider_config(target_id)
+            await mass.config.save_provider_config(
+                getattr(cfg, "domain", target_id), values, instance_id=target_id
+            )
+        elif target_type == "core":
+            await mass.config.save_core_config(target_id, values)
+        elif target_type == "player":
+            await mass.config.save_player_config(target_id, values)
+        else:
+            raise ToolError(f"unknown target_type {target_type!r}")
+    except ToolError:
+        raise
+    except Exception as exc:
+        raise ToolError(f"config save failed: {exc}") from exc
+
+
+async def _write_single(
+    mass: MusicAssistant,
+    target_type: str,
+    target_id: str,
+    key: str,
+    value: Any,
+    *,
+    dry_run: bool,
+    ctx: Context | None,
+    require_confirmation: bool,
+    secret_writes_enabled: bool,
+) -> SetValueResult:
+    """Validate → secret-gate → diff → (confirm → audit → save) for one key.
+
+    :param mass: MusicAssistant instance.
+    :param target_type: "provider" | "core" | "player".
+    :param target_id: The target identifier.
+    :param key: Config key to write.
+    :param value: Proposed value (plaintext; MA encrypts SECURE_STRING).
+    :param dry_run: When True, return a diff without writing.
+    :param ctx: FastMCP context (may be None in unit tests).
+    :param require_confirmation: When True, elicit confirmation before writing.
+    :param secret_writes_enabled: Whether SECURE_STRING writes are allowed.
+    """
+    entries_list, current = await _resolve_entries(mass, target_type, target_id, None)
+    entries = {e.key: e for e in entries_list}
+    if key not in entries:
+        raise ToolError(f"unknown key {key!r} for {target_type} {target_id!r}")
+    parsed = coerce(entries[key], value)
+    gate_secret_writes(entries, {key: parsed}, secret_tag_enabled=secret_writes_enabled)
+    diff = compute_diff(
+        target_type=target_type,
+        target_id=target_id,
+        entries=entries,
+        current=current,
+        proposed={key: parsed},
+    )
+    requires_reload = bool(entries[key].requires_reload)
+    if dry_run:
+        return SetValueResult(
+            target_type=target_type,
+            target_id=target_id,
+            key=key,
+            applied=False,
+            requires_reload=requires_reload,
+            audit_log_id="",
+            diff=diff,
+        )
+    await confirm_or_raise(
+        ctx, _confirm_prompt(target_type, target_id, [key]), enabled=require_confirmation
+    )
+    audit = _audit_id()
+    LOGGER.info(
+        "config_write target=%s id=%s key=%s audit_id=%s", target_type, target_id, key, audit
+    )
+    await _do_save(mass, target_type, target_id, {key: parsed})
+    return SetValueResult(
+        target_type=target_type,
+        target_id=target_id,
+        key=key,
+        applied=True,
+        requires_reload=requires_reload,
+        audit_log_id=audit,
+        diff=None,
+    )
+
+
+async def _write_bulk(
+    mass: MusicAssistant,
+    target_type: str,
+    target_id: str,
+    values: dict[str, Any],
+    *,
+    dry_run: bool,
+    ctx: Context | None,
+    require_confirmation: bool,
+    secret_writes_enabled: bool,
+) -> SaveResult:
+    """Validate-all → secret-gate → diff → (confirm → audit → atomic save) for a payload.
+
+    :param mass: MusicAssistant instance.
+    :param target_type: "provider" | "core" | "player".
+    :param target_id: The target identifier.
+    :param values: Proposed key→value map (plaintext; MA encrypts SECURE_STRING).
+    :param dry_run: When True, return a diff without writing.
+    :param ctx: FastMCP context (may be None in unit tests).
+    :param require_confirmation: When True, elicit confirmation before writing.
+    :param secret_writes_enabled: Whether SECURE_STRING writes are allowed.
+    """
+    import json  # noqa: PLC0415
+
+    if len(json.dumps(values, default=str)) > _SAVE_PAYLOAD_CAP_BYTES:
+        raise ToolError("save payload exceeds 64 KB cap")
+    entries_list, current = await _resolve_entries(mass, target_type, target_id, None)
+    entries = {e.key: e for e in entries_list}
+    parsed: dict[str, Any] = {}
+    for key, raw in values.items():
+        if key not in entries:
+            raise ToolError(f"unknown key {key!r} for {target_type} {target_id!r}")
+        parsed[key] = coerce(entries[key], raw)
+    gate_secret_writes(entries, parsed, secret_tag_enabled=secret_writes_enabled)
+    diff = compute_diff(
+        target_type=target_type,
+        target_id=target_id,
+        entries=entries,
+        current=current,
+        proposed=parsed,
+    )
+    requires_reload = any(entries[k].requires_reload for k in parsed)
+    if dry_run:
+        return SaveResult(
+            target_type=target_type,
+            target_id=target_id,
+            applied=False,
+            changes=diff.changes,
+            requires_reload=requires_reload,
+            audit_log_id="",
+            diff=diff,
+        )
+    await confirm_or_raise(
+        ctx, _confirm_prompt(target_type, target_id, list(parsed)), enabled=require_confirmation
+    )
+    audit = _audit_id()
+    LOGGER.info(
+        "config_save target=%s id=%s keys=%s audit_id=%s",
+        target_type,
+        target_id,
+        sorted(parsed),
+        audit,
+    )
+    await _do_save(mass, target_type, target_id, parsed)
+    return SaveResult(
+        target_type=target_type,
+        target_id=target_id,
+        applied=True,
+        changes=diff.changes,
+        requires_reload=requires_reload,
+        audit_log_id=audit,
+        diff=None,
+    )
+
+
 def build_config_server(
     mass: MusicAssistant,
     *,
-    require_confirmation: bool = True,  # noqa: ARG001
-    secret_writes_enabled: bool = True,  # noqa: ARG001
+    require_confirmation: bool = True,
+    secret_writes_enabled: bool = True,
 ) -> FastMCP:
     """Build the ``config`` sub-server.
 
@@ -143,7 +340,12 @@ def build_config_server(
     """
     sub = FastMCP(name="config")
     _register_read_tools(sub, mass)
-    # write registrations land in later tasks
+    _register_provider_write_tools(
+        sub,
+        mass,
+        require_confirmation=require_confirmation,
+        secret_writes_enabled=secret_writes_enabled,
+    )
     return sub
 
 
@@ -307,4 +509,131 @@ def _register_read_tools(sub: FastMCP, mass: MusicAssistant) -> None:
             input_gain=float(raw.get("input_gain", 0.0)),
             output_gain=float(raw.get("output_gain", 0.0)),
             filters=list(raw.get("filters", [])),
+        )
+
+
+def _register_provider_write_tools(
+    sub: FastMCP,
+    mass: MusicAssistant,
+    *,
+    require_confirmation: bool,
+    secret_writes_enabled: bool,
+) -> None:
+    @sub.tool(
+        tags={Tag.CONFIG_WRITE_PROVIDER},
+        annotations=ToolAnnotations(
+            title="Set provider config value",
+            destructiveHint=True,
+            idempotentHint=False,
+        ),
+        timeout=TIMEOUT_FAST,
+    )
+    async def set_provider_value(
+        instance_id: str, key: str, value: Any, dry_run: bool = False, ctx: Context | None = None
+    ) -> SetValueResult:
+        """Set one provider config value.
+
+        Validates the value, gates SECURE_STRING writes behind
+        config:write:secret, then delegates to MA's atomic
+        save_provider_config (validate, encrypt, persist, reload).
+        ``dry_run=True`` returns a before/after diff without writing.
+        See also: config_get_entries for editable keys.
+
+        :param instance_id: Provider instance identifier.
+        :param key: ConfigEntry key to set.
+        :param value: New value.
+        :param dry_run: When True, return a diff and do not persist.
+        :param ctx: FastMCP context (auto-populated).
+        """
+        return await _write_single(
+            mass,
+            "provider",
+            instance_id,
+            key,
+            value,
+            dry_run=dry_run,
+            ctx=ctx,
+            require_confirmation=require_confirmation,
+            secret_writes_enabled=secret_writes_enabled,
+        )
+
+    @sub.tool(
+        tags={Tag.CONFIG_WRITE_PROVIDER},
+        annotations=ToolAnnotations(
+            title="Save provider config (bulk)",
+            destructiveHint=True,
+            idempotentHint=False,
+        ),
+        timeout=TIMEOUT_FAST,
+    )
+    async def save_provider(
+        instance_id: str,
+        values: dict[str, Any],
+        dry_run: bool = False,
+        ctx: Context | None = None,
+    ) -> SaveResult:
+        """Bulk-save provider config values (atomic at MA's layer).
+
+        :param instance_id: Provider instance identifier.
+        :param values: key->value map to apply.
+        :param dry_run: When True, return a diff and do not persist.
+        :param ctx: FastMCP context (auto-populated).
+        """
+        return await _write_bulk(
+            mass,
+            "provider",
+            instance_id,
+            values,
+            dry_run=dry_run,
+            ctx=ctx,
+            require_confirmation=require_confirmation,
+            secret_writes_enabled=secret_writes_enabled,
+        )
+
+    @sub.tool(
+        tags={Tag.CONFIG_WRITE_PROVIDER},
+        annotations=ToolAnnotations(
+            title="Trigger provider config action",
+            destructiveHint=True,
+            idempotentHint=False,
+        ),
+        timeout=TIMEOUT_FAST,
+    )
+    async def trigger_provider_action(
+        instance_id: str,
+        action_key: str,
+        values: dict[str, Any] | None = None,
+        ctx: Context | None = None,
+    ) -> ActionResult:
+        """Invoke a provider config action (e.g. QR login, clear auth).
+
+        Always elicits confirmation, even when require_confirmation is off.
+
+        :param instance_id: Provider instance identifier.
+        :param action_key: The action ConfigEntry key.
+        :param values: Optional intermediate values for the action.
+        :param ctx: FastMCP context (auto-populated).
+        """
+        await confirm_or_raise(
+            ctx,
+            f"Run provider action {action_key!r} on {instance_id!r}?",
+            enabled=True,
+        )
+        cfg = await mass.config.get_provider_config(instance_id)
+        entries = await mass.config.get_provider_config_entries(
+            getattr(cfg, "domain", instance_id),
+            instance_id=instance_id,
+            action=action_key,
+            values=values or {},
+        )
+        audit = _audit_id()
+        LOGGER.info(
+            "config_action provider=%s action=%s audit_id=%s", instance_id, action_key, audit
+        )
+        return ActionResult(
+            instance_id=instance_id,
+            action_key=action_key,
+            new_entries=[_entry_dump(e, getattr(e, "value", None)) for e in entries],
+            extra_data={},
+            audit_log_id=audit,
         )

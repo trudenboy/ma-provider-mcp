@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 from fastmcp.exceptions import ToolError
 from music_assistant_models.config_entries import ConfigEntry
@@ -46,3 +48,18 @@ def test_is_secret_key() -> None:
     assert is_secret_key(_entries(), "token") is True
     assert is_secret_key(_entries(), "log_level") is False
     assert is_secret_key(_entries(), "missing") is False
+
+
+async def test_secret_write_blocked_without_secret_tag_e2e(
+    mounted_config_no_secret: Any, mock_config_targets: Any
+) -> None:
+    """E2e: set_provider_value rejects SECURE_STRING write when secret tag is off."""
+    from fastmcp import Client  # noqa: PLC0415
+
+    async with Client(mounted_config_no_secret) as client:
+        with pytest.raises(ToolError, match="config:write:secret"):
+            await client.call_tool(
+                "config_set_provider_value",
+                {"instance_id": "yandex_music", "key": "token", "value": "x"},
+            )
+    mock_config_targets.config.save_provider_config.assert_not_called()
