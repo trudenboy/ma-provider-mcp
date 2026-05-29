@@ -2,7 +2,7 @@
 id: "0008"
 title: "Surface external/Connect-source playback in player & queue briefs"
 size: M          # S | M | L
-status: inprogress     # todo | inprogress | done
+status: done     # todo | inprogress | done
 priority: P1     # P0 | P1 | P2
 effort_minutes: 15
 feature_id:

@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] — 2026-05-29
+
+### Added
+- Player views now report the controlling provider via `external_source` when
+  audio is driven by an external "Connect"-style source (Spotify Connect,
+  AirPlay, Yandex Ynison).
+
+### Changed
+- A player streaming from an external source now correctly shows `playing` /
+  `paused` instead of `idle`: playback state is read from the active queue,
+  matching what Music Assistant's own interface shows.
+- The currently playing item (in player and queue views) shows the real track
+  title for external sources instead of the source wrapper name.
+
 ## [0.6.2] — 2026-05-29
 
 ### Fixed
