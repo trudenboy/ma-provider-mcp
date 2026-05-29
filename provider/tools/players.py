@@ -40,12 +40,18 @@ def build_players_server(mass: MusicAssistant) -> FastMCP:
 
         Returns ``PlayerBrief`` items with ``player_id``, ``name``, ``state``,
         ``powered``, ``volume_level``, ``available``, ``enabled``,
-        ``needs_setup``, ``active_group``, ``synced_to`` and the currently
-        playing item (if any). ``state`` summarises usability — values are
-        ``unavailable`` (offline), ``disabled`` (admin-disabled),
-        ``needs_setup`` (first-run config pending), ``synced`` (member of an
-        active sync group; its queue belongs to the group leader), or the
-        normal playback states (``idle`` / ``playing`` / ``paused`` / ...).
+        ``needs_setup``, ``active_group``, ``synced_to``, ``external_source``
+        and the currently playing item (if any). ``state`` summarises
+        usability — values are ``unavailable`` (offline), ``disabled``
+        (admin-disabled), ``needs_setup`` (first-run config pending),
+        ``synced`` (member of an active sync group; its queue belongs to the
+        group leader), or the normal playback states
+        (``idle`` / ``playing`` / ``paused`` / ...). When a player is being
+        driven by an external "Connect"-style source (e.g. Spotify Connect,
+        AirPlay, Yandex Ynison), ``state`` reflects the active queue
+        (``playing`` / ``paused``) rather than ``idle``, ``external_source``
+        holds the controlling provider instance id, and ``current_item``
+        shows the real track title rather than the source wrapper name.
         Offline and admin-disabled players are hidden by default — flip the
         corresponding ``include_*`` flag to get them back. Does not include
         queue contents — use the ``queue`` tools for that.
@@ -67,8 +73,7 @@ def build_players_server(mass: MusicAssistant) -> FastMCP:
             return_disabled=include_disabled,
         )
         return [
-            to_brief_player(p, mass.player_queues.get_active_queue(p.player_id))
-            for p in players
+            to_brief_player(p, mass.player_queues.get_active_queue(p.player_id)) for p in players
         ]
 
     @sub.tool(

@@ -42,7 +42,9 @@ def build_queue_server(mass: MusicAssistant, *, require_confirmation: bool = Tru
         shuffle / repeat flags and the requested lookahead. Note that
         ``QueueBrief.queue_id`` is the identifier the mutation tools
         (``set_shuffle``, ``clear_queue``, ``transfer_queue``) expect — it is
-        distinct from ``player_id``.
+        distinct from ``player_id``. For a queue fed by an external plugin
+        source (Connect / AirPlay / Ynison), the current item's ``name`` is
+        the real track title rather than the source wrapper name.
 
         :param player_id: Player identifier from ``PlayerBrief.player_id``.
         :param include_items: How many lookahead items to materialise. Clamped
