@@ -190,7 +190,10 @@ def _register_logs_tool(sub: FastMCP, mass: MusicAssistant) -> None:
             canonical log and its rotated siblings (``.log.1`` … ``.log.5``) are
             allowed.
         """
-        return tail.tail(
+        # Offload the synchronous file scan (up to the 10 MB cap) to a worker
+        # thread so it never stalls MA's single event loop.
+        return await asyncio.to_thread(
+            tail.tail,
             lines=lines,
             level=level,
             component_regex=component_regex,
