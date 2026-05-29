@@ -17,7 +17,7 @@ from typing import Any
 import pytest
 from fastmcp import Client, FastMCP
 
-from provider.tools import build_players_server
+from provider.tools import build_players_server, build_queue_server
 
 
 def _player(
@@ -300,9 +300,7 @@ async def test_get_player_returns_unavailable_player(
     assert result.data.state == "unavailable"
 
 
-async def test_get_player_reports_external_source(
-    mock_mass: Any, mounted_players: FastMCP
-) -> None:
+async def test_get_player_reports_external_source(mock_mass: Any, mounted_players: FastMCP) -> None:
     """An idle player driven by a Connect source reports playing + provider."""
     player = _player(player_id="lenco", name="Lenco LS-500", state="idle")
     mock_mass.players.get_player.return_value = player
@@ -336,8 +334,6 @@ def _ns(obj: Any) -> Any:
 
 async def test_queue_get_active_queue_external_item_title(mock_mass: Any) -> None:
     """queue_get_active_queue surfaces the real title for an AUDIO_SOURCE item."""
-    from provider.tools import build_queue_server
-
     raw = json.loads(
         Path(__file__).parent.joinpath("fixtures/queue_external_audio_source.json").read_text()
     )
