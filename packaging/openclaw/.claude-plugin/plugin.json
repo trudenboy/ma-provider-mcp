@@ -1,0 +1,12 @@
+{
+  "name": "music-assistant",
+  "version": "0.6.0",
+  "description": "Control Music Assistant — playback, library, queues, and players — from OpenClaw over the Model Context Protocol.",
+  "author": {
+    "name": "ma-provider-mcp contributors",
+    "url": "https://github.com/trudenboy/ma-provider-mcp"
+  },
+  "homepage": "https://github.com/trudenboy/ma-provider-mcp",
+  "license": "MIT",
+  "keywords": ["music-assistant", "mcp", "music", "playback", "streamable-http"]
+}

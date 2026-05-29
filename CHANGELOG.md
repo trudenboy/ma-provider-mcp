@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] — 2026-05-29
+
+### Added
+- **Connect Wizard presets for OpenClaw and Hermes.** The wizard now mints a
+  per-client token and renders a ready-to-paste snippet for the OpenClaw CLI
+  (`openclaw mcp set …`) and for Hermes (`~/.hermes/config.yaml`), alongside
+  the existing clients. Both target the server's streamable-HTTP endpoint with
+  a bearer token.
+- **Installable OpenClaw plugin bundle** under `packaging/openclaw/`. The
+  Claude-format bundle pre-declares the Music Assistant MCP server over
+  streamable-HTTP — with the token supplied via the `MA_TOKEN` environment
+  variable — and ships a skill guide so the agent knows when to use the tools.
+
 ## [0.5.2] — 2026-05-29
 
 ### Fixed

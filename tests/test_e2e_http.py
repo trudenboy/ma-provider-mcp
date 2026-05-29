@@ -113,7 +113,15 @@ async def test_delete_method_reaches_asgi(method_echo_client: TestClient) -> Non
 
 
 async def test_get_method_reaches_asgi(method_echo_client: TestClient) -> None:
-    """GET is forwarded — required so FastMCP can open server-initiated SSE."""
+    """GET is forwarded — required so FastMCP can open server-initiated SSE.
+
+    Also the OpenClaw-bundle compatibility guard: OpenClaw's bundle-mcp client
+    opens the optional ``GET`` SSE stream *before* ``POST initialize`` and bails
+    if that GET is a non-2xx (OpenClaw issue #72757 — it 405s against POST-only
+    servers). The bridge must hand GET to the ASGI app rather than 405 it, so a
+    GET reaching the endpoint resolves to FastMCP's SSE stream (or 401 when the
+    bearer token is absent), never a method-not-allowed.
+    """
     resp = await method_echo_client.get("/mcp/v1/", headers={"Origin": "http://localhost:8095"})
     assert resp.status == 200
     assert (await resp.read()) == b"GET"
