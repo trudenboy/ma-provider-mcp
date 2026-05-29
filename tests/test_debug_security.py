@@ -1,4 +1,9 @@
 """Cross-cutting security tests: off-by-default, masking, redaction, description pinning."""
+# ruff: noqa: PLC0415
+#   Fixtures import provider modules lazily (inside the test body). A file-level
+#   suppression is used instead of per-line directives so the intent survives the
+#   upstream import-path rewrite, which lengthens ``from provider.X`` lines and
+#   reflows them — detaching any trailing per-line directive.
 
 from __future__ import annotations
 
@@ -21,12 +26,12 @@ async def test_off_by_default_hides_all_debug_tools(mounted_debug_off: Any) -> N
 
 async def test_enabling_single_tag_exposes_only_that_group(mock_mass: MagicMock) -> None:
     """With only Tag.DEBUG_INSPECT allowed, only the 3 inspect tools are visible."""
-    from fastmcp import FastMCP  # noqa: PLC0415
+    from fastmcp import FastMCP
 
-    from provider.middleware import TagFilterMiddleware  # noqa: PLC0415
-    from provider.server import build_tag_lookup  # noqa: PLC0415
-    from provider.tags import Tag  # noqa: PLC0415
-    from provider.tools.debug import build_debug_server  # noqa: PLC0415
+    from provider.middleware import TagFilterMiddleware
+    from provider.server import build_tag_lookup
+    from provider.tags import Tag
+    from provider.tools.debug import build_debug_server
 
     mcp = FastMCP(name="test")
     mcp.mount(build_debug_server(mock_mass, require_confirmation=False), namespace="debug")
