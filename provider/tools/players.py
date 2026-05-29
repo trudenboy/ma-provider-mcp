@@ -66,7 +66,10 @@ def build_players_server(mass: MusicAssistant) -> FastMCP:
             return_unavailable=include_unavailable,
             return_disabled=include_disabled,
         )
-        return [to_brief_player(p) for p in players]
+        return [
+            to_brief_player(p, mass.player_queues.get_active_queue(p.player_id))
+            for p in players
+        ]
 
     @sub.tool(
         tags={Tag.QUERY_PLAYERS},
@@ -89,7 +92,9 @@ def build_players_server(mass: MusicAssistant) -> FastMCP:
         :param player_id: Player identifier (from ``PlayerBrief.player_id``).
         """
         player = mass.players.get_player(player_id)
-        return to_brief_player(player) if player is not None else None
+        if player is None:
+            return None
+        return to_brief_player(player, mass.player_queues.get_active_queue(player_id))
 
     @sub.tool(
         tags={Tag.CONTROL_PLAYERS},

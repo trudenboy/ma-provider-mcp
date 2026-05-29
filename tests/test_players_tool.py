@@ -296,3 +296,28 @@ async def test_get_player_returns_unavailable_player(
     assert result.data.player_id == "gone"
     assert result.data.available is False
     assert result.data.state == "unavailable"
+
+
+async def test_get_player_reports_external_source(
+    mock_mass: Any, mounted_players: FastMCP
+) -> None:
+    """An idle player driven by a Connect source reports playing + provider."""
+    player = _player(player_id="lenco", name="Lenco LS-500", state="idle")
+    mock_mass.players.get_player.return_value = player
+    queue = SimpleNamespace(
+        state=SimpleNamespace(value="playing"),
+        current_item=SimpleNamespace(
+            name="Yandex Music Connect (Ynison)",
+            streamdetails=SimpleNamespace(
+                media_type=SimpleNamespace(value="audio_source"),
+                provider="yandex_ynison--PL8BnL7a",
+                stream_metadata=SimpleNamespace(title="Behind Your Walls"),
+            ),
+        ),
+    )
+    mock_mass.player_queues.get_active_queue.return_value = queue
+    async with Client(mounted_players) as client:
+        result = await client.call_tool("players_get_player", {"player_id": "lenco"})
+    assert result.data.state == "playing"
+    assert result.data.external_source == "yandex_ynison--PL8BnL7a"
+    assert result.data.current_item == "Behind Your Walls"
