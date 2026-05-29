@@ -61,7 +61,6 @@ _TRACKED_PACKAGES = (
 
 _RELOAD_POLL_SECONDS = 5.0
 _RELOAD_POLL_INTERVAL = 0.1
-_RELOAD_LOCK = asyncio.Lock()
 
 
 def _safe_get(obj: Any, name: str, default: Any = None) -> Any:
@@ -89,7 +88,7 @@ def _readonly(title: str) -> ToolAnnotations:
 
 
 def _register_reload_tool(
-    sub: FastMCP, mass: MusicAssistant, *, require_confirmation: bool
+    sub: FastMCP, mass: MusicAssistant, *, require_confirmation: bool, reload_lock: asyncio.Lock
 ) -> None:
     @sub.tool(
         tags={Tag.DEBUG_RELOAD},
@@ -123,7 +122,7 @@ def _register_reload_tool(
         except Exception as exc:
             raise ToolError(f"provider instance_id={instance_id!r} not configured") from exc
 
-        async with _RELOAD_LOCK:
+        async with reload_lock:
             LOGGER.info(
                 "MCP debug_reload_provider triggered: instance_id=%s",
                 instance_id,
@@ -208,6 +207,7 @@ def build_debug_server(
     require_confirmation: bool = True,
     event_buffer: EventBuffer | None = None,
     logs_enabled: bool = True,
+    reload_lock: asyncio.Lock | None = None,
 ) -> FastMCP:
     """Build the ``debug`` sub-server.
 
@@ -220,13 +220,21 @@ def build_debug_server(
     :param logs_enabled: Whether the ``DEBUG_LOGS`` capability is enabled. When
         ``False``, ``debug_health_summary`` skips its log-error read and reports
         ``DEBUG_LOGS`` as a disabled capability instead.
+    :param reload_lock: Lock serialising ``debug_reload_provider`` for this
+        runtime. Defaults to a fresh per-server lock so independent servers
+        (e.g. test instances) never serialise against one another.
     """
     sub = FastMCP(name="debug")
     _register_inspect_tools(sub, mass)
     _register_logs_tool(sub, mass)
     _register_events_tools(sub, mass, event_buffer)
     _register_providers_tools(sub, mass)
-    _register_reload_tool(sub, mass, require_confirmation=require_confirmation)
+    _register_reload_tool(
+        sub,
+        mass,
+        require_confirmation=require_confirmation,
+        reload_lock=reload_lock if reload_lock is not None else asyncio.Lock(),
+    )
     _register_health_tool(sub, mass, buffer=event_buffer, logs_enabled=logs_enabled)
     return sub
 

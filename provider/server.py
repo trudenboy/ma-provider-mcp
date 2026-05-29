@@ -174,6 +174,7 @@ class MCPServerRuntime:
                 require_confirmation=require_confirmation,
                 event_buffer=self._event_buffer,
                 logs_enabled=Tag.DEBUG_LOGS in enabled_tags(self._config),
+                reload_lock=self._reload_lock,
             ),
             namespace="debug",
         )
