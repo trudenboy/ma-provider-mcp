@@ -9,7 +9,10 @@ from typing import Any
 import pytest
 from fastmcp import Client
 
-import provider.debug.event_buffer as ev_buf
+# Use the ``from provider.debug import …`` form (not ``import provider.debug.… as``):
+# the upstream import-path rewrite only translates ``from provider.`` imports, so
+# the aliased ``import`` form survives un-rewritten and breaks the bundled tests.
+from provider.debug import event_buffer as ev_buf
 from provider.debug.event_buffer import EventBuffer
 
 
