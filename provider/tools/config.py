@@ -19,6 +19,8 @@ from typing import TYPE_CHECKING, Any
 from fastmcp import Context, FastMCP
 from fastmcp.exceptions import ToolError
 from mcp.types import ToolAnnotations
+from music_assistant_models.constants import SECURE_STRING_SUBSTITUTE
+from music_assistant_models.enums import ConfigEntryType
 
 from ..config_io.differ import compute_diff
 from ..config_io.secret_handler import gate_secret_writes
@@ -41,6 +43,8 @@ from ..tags import Tag
 from ._common import TIMEOUT_FAST, TIMEOUT_INTERACTIVE, confirm_or_raise
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from music_assistant_models.config_entries import (
         ConfigEntry,
         CoreConfig,
@@ -55,6 +59,19 @@ LOGGER = logging.getLogger("music_assistant.providers.fastmcp_server.config")
 
 _PAYLOAD_CAP_BYTES = 256 * 1024
 _SAVE_PAYLOAD_CAP_BYTES = 64 * 1024
+
+
+def _resolve_secret_enabled(flag: bool | Callable[[], bool]) -> bool:
+    """Resolve the secret-write gate at call time.
+
+    The runtime passes a callable that reads the current
+    ``CONF_CONFIG_WRITE_SECRET`` value so a hot-swapped permission toggle
+    takes effect on the next request (mirrors the TagFilterMiddleware
+    closure). Tests pass a plain bool.
+
+    :param flag: Either a plain bool or a zero-arg callable returning one.
+    """
+    return flag() if callable(flag) else flag
 
 
 def _readonly(title: str) -> ToolAnnotations:
@@ -87,6 +104,13 @@ def _values_from_raw(raw: dict[str, Any]) -> tuple[list[ConfigValueDump], bool]:
 def _entry_dump(entry: ConfigEntry, current: Any) -> ConfigEntryDump:
     """Map a ConfigEntry + current value to ConfigEntryDump."""
     opts = [o.value for o in entry.options] if entry.options else None
+    # Mask secrets: _resolve_entries reads raw ConfigEntry.value, bypassing
+    # the to_dict()/__post_serialize__ hook the sibling read tools use.
+    current_value = (
+        SECURE_STRING_SUBSTITUTE
+        if entry.type == ConfigEntryType.SECURE_STRING and current is not None
+        else current
+    )
     return ConfigEntryDump(
         key=entry.key,
         type=entry.type.value,
@@ -101,7 +125,7 @@ def _entry_dump(entry: ConfigEntry, current: Any) -> ConfigEntryDump:
         requires_reload=entry.requires_reload,
         depends_on=entry.depends_on,
         action=entry.action,
-        current_value=current,
+        current_value=current_value,
     )
 
 
@@ -191,7 +215,7 @@ async def _write_single(
     dry_run: bool,
     ctx: Context | None,
     require_confirmation: bool,
-    secret_writes_enabled: bool,
+    secret_writes_enabled: bool | Callable[[], bool],
 ) -> SetValueResult:
     """Validate → secret-gate → diff → (confirm → audit → save) for one key.
 
@@ -203,14 +227,17 @@ async def _write_single(
     :param dry_run: When True, return a diff without writing.
     :param ctx: FastMCP context (may be None in unit tests).
     :param require_confirmation: When True, elicit confirmation before writing.
-    :param secret_writes_enabled: Whether SECURE_STRING writes are allowed.
+    :param secret_writes_enabled: Bool or callable returning bool; resolved
+        per request so a hot-swapped toggle takes effect immediately.
     """
     entries_list, current = await _resolve_entries(mass, target_type, target_id, None)
     entries = {e.key: e for e in entries_list}
     if key not in entries:
         raise ToolError(f"unknown key {key!r} for {target_type} {target_id!r}")
     parsed = coerce(entries[key], value)
-    gate_secret_writes(entries, {key: parsed}, secret_tag_enabled=secret_writes_enabled)
+    gate_secret_writes(
+        entries, {key: parsed}, secret_tag_enabled=_resolve_secret_enabled(secret_writes_enabled)
+    )
     diff = compute_diff(
         target_type=target_type,
         target_id=target_id,
@@ -257,7 +284,7 @@ async def _write_bulk(
     dry_run: bool,
     ctx: Context | None,
     require_confirmation: bool,
-    secret_writes_enabled: bool,
+    secret_writes_enabled: bool | Callable[[], bool],
 ) -> SaveResult:
     """Validate-all → secret-gate → diff → (confirm → audit → atomic save) for a payload.
 
@@ -268,7 +295,8 @@ async def _write_bulk(
     :param dry_run: When True, return a diff without writing.
     :param ctx: FastMCP context (may be None in unit tests).
     :param require_confirmation: When True, elicit confirmation before writing.
-    :param secret_writes_enabled: Whether SECURE_STRING writes are allowed.
+    :param secret_writes_enabled: Bool or callable returning bool; resolved
+        per request so a hot-swapped toggle takes effect immediately.
     """
     import json  # noqa: PLC0415
 
@@ -281,7 +309,9 @@ async def _write_bulk(
         if key not in entries:
             raise ToolError(f"unknown key {key!r} for {target_type} {target_id!r}")
         parsed[key] = coerce(entries[key], raw)
-    gate_secret_writes(entries, parsed, secret_tag_enabled=secret_writes_enabled)
+    gate_secret_writes(
+        entries, parsed, secret_tag_enabled=_resolve_secret_enabled(secret_writes_enabled)
+    )
     diff = compute_diff(
         target_type=target_type,
         target_id=target_id,
@@ -327,16 +357,17 @@ def build_config_server(
     mass: MusicAssistant,
     *,
     require_confirmation: bool = True,
-    secret_writes_enabled: bool = True,
+    secret_writes_enabled: bool | Callable[[], bool] = True,
 ) -> FastMCP:
     """Build the ``config`` sub-server.
 
     :param mass: MusicAssistant instance.
     :param require_confirmation: When True (default), every write elicits
         confirmation before mutating.
-    :param secret_writes_enabled: When True, SECURE_STRING values may be
-        written; when False, such writes are rejected (the orthogonal
-        config:write:secret value-gate). Read tools ignore this.
+    :param secret_writes_enabled: Bool or zero-arg callable returning bool.
+        When False (or the callable returns False), SECURE_STRING writes are
+        rejected. The runtime passes a callable so a hot-swapped permission
+        toggle takes effect on the next request without a rebuild.
     """
     sub = FastMCP(name="config")
     _register_read_tools(sub, mass)
@@ -529,7 +560,7 @@ def _register_provider_write_tools(
     mass: MusicAssistant,
     *,
     require_confirmation: bool,
-    secret_writes_enabled: bool,
+    secret_writes_enabled: bool | Callable[[], bool],
 ) -> None:
     @sub.tool(
         tags={Tag.CONFIG_WRITE_PROVIDER},
@@ -656,7 +687,7 @@ def _register_core_write_tools(
     mass: MusicAssistant,
     *,
     require_confirmation: bool,
-    secret_writes_enabled: bool,
+    secret_writes_enabled: bool | Callable[[], bool],
 ) -> None:
     @sub.tool(
         tags={Tag.CONFIG_WRITE_CORE},
@@ -726,7 +757,11 @@ def _register_core_write_tools(
 
 
 def _register_player_write_tools(
-    sub: FastMCP, mass: MusicAssistant, *, require_confirmation: bool, secret_writes_enabled: bool
+    sub: FastMCP,
+    mass: MusicAssistant,
+    *,
+    require_confirmation: bool,
+    secret_writes_enabled: bool | Callable[[], bool],
 ) -> None:
     @sub.tool(
         tags={Tag.CONFIG_WRITE_PLAYER},

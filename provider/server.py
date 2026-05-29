@@ -183,7 +183,9 @@ class MCPServerRuntime:
             build_config_server(
                 self._mass,
                 require_confirmation=require_confirmation,
-                secret_writes_enabled=bool(self._config.get_value(CONF_CONFIG_WRITE_SECRET)),
+                secret_writes_enabled=lambda: bool(
+                    self._config.get_value(CONF_CONFIG_WRITE_SECRET)
+                ),
             ),
             namespace="config",
         )

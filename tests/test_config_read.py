@@ -71,3 +71,23 @@ async def test_get_dsp_unknown_player_raises(mounted_config: Any, mock_mass: Any
     mock_mass.config.get_player_config = AsyncMock(side_effect=KeyError("nope"))
     with pytest.raises(ToolError, match="not found"):
         await _call(mounted_config, "get_dsp", player_id="nope")
+
+
+async def test_get_entries_masks_secret_current_value(
+    mounted_config: Any,
+    mock_config_targets: Any,  # noqa: ARG001
+) -> None:
+    """config_get_entries must mask SECURE_STRING current_value.
+
+    Regression for PR #99 review finding B.
+    """
+    from music_assistant_models.constants import SECURE_STRING_SUBSTITUTE
+
+    result = await _call(
+        mounted_config, "get_entries", target_type="provider", target_id="yandex_music"
+    )
+    by_key = {e.key: e for e in result.data.entries}
+    assert by_key["token"].type == "secure_string"
+    assert by_key["token"].current_value == SECURE_STRING_SUBSTITUTE
+    # the raw fixture secret value must not leak
+    assert "raw-secret-xyz" not in str(result.data)

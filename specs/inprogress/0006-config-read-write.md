@@ -86,7 +86,10 @@ the rest of the provider.
    `music_assistant_models.constants.SECURE_STRING_SUBSTITUTE` via MA's
    `Config.to_dict()` / `__post_serialize__` hook. The provider carries
    **no** masking logic of its own. A plaintext secret never appears in
-   any read response.
+   any read response. `config_get_entries.current_value` is also masked
+   for SECURE_STRING entries — the entries path reads `ConfigEntry.value`
+   directly rather than via `to_dict()`, so `_entry_dump` applies the
+   same substitution.
 3. A write touching a `SECURE_STRING` entry (`config_set_*_value` or
    `config_save_*` whose payload includes such a key) raises `ToolError`
    naming `config:write:secret` **unless** that tag is enabled. The
@@ -95,7 +98,10 @@ the rest of the provider.
    MA's persistence/encryption layer when the gate is closed. The whole
    call is rejected (no partial save through MA) — the provider does not
    split a payload, so a mixed secret+non-secret payload without the
-   secret tag fails atomically with the secret key named.
+   secret tag fails atomically with the secret key named. The gate is
+   evaluated per-request from the live config (not baked at provider
+   start), so a hot-swapped `config:write:secret` toggle takes effect on
+   the next request without a restart.
 4. When the secret tag **is** enabled, the provider hands the plaintext
    to `save_*_config`, which encrypts it via `Config.to_raw()`'s
    `ENCRYPT_CALLBACK` before writing to storage — the provider itself

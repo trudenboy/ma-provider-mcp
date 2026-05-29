@@ -447,7 +447,7 @@ def mock_config_targets(mock_mass: Any) -> Any:
     # give each entry a current .value so _resolve_entries current-map works
     entries["log_level"].value = "GLOBAL"
     entries["http_port"].value = 8099
-    entries["token"].value = "this_value_is_encrypted"
+    entries["token"].value = "raw-secret-xyz"
 
     cfg = MagicMock()
     cfg.domain = "yandex_music"
