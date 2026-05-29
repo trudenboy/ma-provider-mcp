@@ -292,10 +292,14 @@ def to_brief_queue(queue: Any, items: Sequence[Any] | None = None) -> QueueBrief
     brief_items: list[QueueItemBrief] = []
     if items:
         for it in items:
+            now_playing = _external_now_playing(it)
+            item_name = (
+                now_playing[1] if now_playing and now_playing[1] else str(getattr(it, "name", ""))
+            )
             brief_items.append(
                 QueueItemBrief(
                     item_id=str(getattr(it, "queue_item_id", "")),
-                    name=str(getattr(it, "name", "")),
+                    name=item_name,
                     duration=_int(getattr(it, "duration", None)),
                     artists=_names(getattr(getattr(it, "media_item", None), "artists", None)),
                 )

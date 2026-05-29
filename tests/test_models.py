@@ -870,6 +870,36 @@ def test_to_brief_player_no_active_queue_legacy_behaviour() -> None:
     assert brief.external_source is None
 
 
+def test_to_brief_queue_relabels_external_item() -> None:
+    """An AUDIO_SOURCE item shows the real track title; normal items keep theirs."""
+    external = _audio_source_item(
+        provider="yandex_ynison--PL8BnL7a",
+        title="Behind Your Walls",
+        name="Yandex Music Connect (Ynison)",
+    )
+    external.queue_item_id = "ext"
+    external.duration = None
+    external.media_item = None
+    normal = SimpleNamespace(
+        queue_item_id="n1",
+        name="Ordinary Song",
+        duration=120,
+        media_item=SimpleNamespace(artists=[SimpleNamespace(name="A")]),
+        streamdetails=None,
+    )
+    queue = SimpleNamespace(
+        queue_id="q",
+        current_index=0,
+        items=2,
+        shuffle_enabled=False,
+        repeat_mode=SimpleNamespace(value="off"),
+        available=True,
+    )
+    brief = to_brief_queue(queue, items=[external, normal])
+    names = [it.name for it in brief.items]
+    assert names == ["Behind Your Walls", "Ordinary Song"]
+
+
 _DEBUG_CLASSES = [
     ("PlayerInspect", {"player_id", "raw", "state", "truncated"}),
     ("QueueInspect", {"queue_id", "raw", "current_item", "truncated"}),
