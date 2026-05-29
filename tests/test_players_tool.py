@@ -8,7 +8,9 @@ in-process helpers.
 from __future__ import annotations
 
 import contextlib
+import json
 from collections.abc import Iterator
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -321,3 +323,30 @@ async def test_get_player_reports_external_source(
     assert result.data.state == "playing"
     assert result.data.external_source == "yandex_ynison--PL8BnL7a"
     assert result.data.current_item == "Behind Your Walls"
+
+
+def _ns(obj: Any) -> Any:
+    """Recursively turn dicts/lists into attribute-accessible namespaces."""
+    if isinstance(obj, dict):
+        return SimpleNamespace(**{k: _ns(v) for k, v in obj.items()})
+    if isinstance(obj, list):
+        return [_ns(v) for v in obj]
+    return obj
+
+
+async def test_queue_get_active_queue_external_item_title(mock_mass: Any) -> None:
+    """queue_get_active_queue surfaces the real title for an AUDIO_SOURCE item."""
+    from provider.tools import build_queue_server
+
+    raw = json.loads(
+        Path(__file__).parent.joinpath("fixtures/queue_external_audio_source.json").read_text()
+    )
+    queue = _ns(raw)
+    mock_mass.player_queues.get_active_queue.return_value = queue
+    mock_mass.player_queues.items.return_value = [queue.current_item]
+
+    mcp = FastMCP(name="test")
+    mcp.mount(build_queue_server(mock_mass), namespace="queue")
+    async with Client(mcp) as client:
+        result = await client.call_tool("queue_get_active_queue", {"player_id": "lenco"})
+    assert result.data.items[0].name == "Behind Your Walls"
