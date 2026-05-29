@@ -735,8 +735,10 @@ def test_player_brief_external_source_defaults_none() -> None:
     assert to_brief_player(player).external_source is None
 
 
-def _audio_source_item(*, provider: str, title: str | None, name: str = "Wrapper") -> SimpleNamespace:
-    """A queue item whose current stream is a plugin AUDIO_SOURCE."""
+def _audio_source_item(
+    *, provider: str, title: str | None, name: str = "Wrapper"
+) -> SimpleNamespace:
+    """Build a queue item stub whose stream is a plugin AUDIO_SOURCE."""
     return SimpleNamespace(
         name=name,
         streamdetails=SimpleNamespace(
@@ -748,11 +750,13 @@ def _audio_source_item(*, provider: str, title: str | None, name: str = "Wrapper
 
 
 def test_external_now_playing_returns_provider_and_title() -> None:
+    """``_external_now_playing`` returns (provider, title) for an AUDIO_SOURCE item."""
     item = _audio_source_item(provider="yandex_ynison--PL8BnL7a", title="Behind Your Walls")
     assert _external_now_playing(item) == ("yandex_ynison--PL8BnL7a", "Behind Your Walls")
 
 
 def test_external_now_playing_none_for_normal_track() -> None:
+    """``_external_now_playing`` returns ``None`` for a normal track item."""
     item = SimpleNamespace(
         name="Real Track",
         streamdetails=SimpleNamespace(
@@ -765,11 +769,13 @@ def test_external_now_playing_none_for_normal_track() -> None:
 
 
 def test_external_now_playing_none_when_no_streamdetails() -> None:
+    """``_external_now_playing`` returns ``None`` when there are no stream details."""
     assert _external_now_playing(SimpleNamespace(name="x", streamdetails=None)) is None
     assert _external_now_playing(None) is None
 
 
 def test_external_now_playing_title_may_be_none() -> None:
+    """``_external_now_playing`` returns ``(provider, None)`` when the title is absent."""
     item = _audio_source_item(provider="airplay--1", title=None)
     assert _external_now_playing(item) == ("airplay--1", None)
 

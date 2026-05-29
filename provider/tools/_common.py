@@ -208,29 +208,9 @@ def to_brief_player(player: Any, active_queue: Any = None) -> PlayerBrief:
         active_group_val = _str_or_none(getattr(player, "active_group", None))
         synced_to_val = _str_or_none(getattr(player, "synced_to", None))
 
-    # Volume / mute fields also live canonically on ``Player.state`` — the
-    # raw dataclass attrs are caches that lag, and ``group_volume`` is
-    # only ever populated on the state for SyncGroupPlayer (the per-player
-    # ``volume_level`` is already read above; this block adds the mute
-    # signal and the group-level pair). Reading state-first means the
-    # SyncGroupPlayer's brief reports a real ``group_volume`` instead of
-    # the bare ``None`` that the un-cached property returns.
-    if player_state is not None and hasattr(player_state, "volume_muted"):
-        volume_muted_val = (
-            bool(player_state.volume_muted) if player_state.volume_muted is not None else None
-        )
-    else:
-        raw_volume_muted = getattr(player, "volume_muted", None)
-        volume_muted_val = bool(raw_volume_muted) if raw_volume_muted is not None else None
-
-    if player_state is not None and hasattr(player_state, "group_volume"):
-        group_volume_val = _int(player_state.group_volume)
-        raw_group_muted = getattr(player_state, "group_volume_muted", None)
-        group_volume_muted_val = bool(raw_group_muted) if raw_group_muted is not None else None
-    else:
-        group_volume_val = _int(getattr(player, "group_volume", None))
-        raw_group_muted = getattr(player, "group_volume_muted", None)
-        group_volume_muted_val = bool(raw_group_muted) if raw_group_muted is not None else None
+    volume_muted_val, group_volume_val, group_volume_muted_val = _volume_fields(
+        player, player_state
+    )
 
     # The cached ``playback_state`` of an unusable device is whatever MA last
     # saw (usually ``"idle"`` or ``"playing"`` for a sync follower), which is
@@ -354,6 +334,36 @@ def _str_or_none(value: Any) -> str | None:
     if value is None:
         return None
     return str(value)
+
+
+def _volume_fields(player: Any, player_state: Any) -> tuple[bool | None, int | None, bool | None]:
+    """Extract ``(volume_muted, group_volume, group_volume_muted)`` from a player object.
+
+    Volume/mute fields live canonically on ``Player.state`` — the raw dataclass
+    attrs are caches that lag. ``group_volume`` is only ever populated on the
+    state for SyncGroupPlayer. Reading state-first means the SyncGroupPlayer's
+    brief reports a real ``group_volume`` instead of the cached ``None``.
+
+    :param player: a Player-like object.
+    :param player_state: the resolved ``Player.state`` object (may be ``None``).
+    """
+    if player_state is not None and hasattr(player_state, "volume_muted"):
+        raw_vm = player_state.volume_muted
+        volume_muted_val: bool | None = bool(raw_vm) if raw_vm is not None else None
+    else:
+        raw_vm = getattr(player, "volume_muted", None)
+        volume_muted_val = bool(raw_vm) if raw_vm is not None else None
+
+    if player_state is not None and hasattr(player_state, "group_volume"):
+        group_volume_val = _int(player_state.group_volume)
+        raw_gm = getattr(player_state, "group_volume_muted", None)
+        group_volume_muted_val: bool | None = bool(raw_gm) if raw_gm is not None else None
+    else:
+        group_volume_val = _int(getattr(player, "group_volume", None))
+        raw_gm = getattr(player, "group_volume_muted", None)
+        group_volume_muted_val = bool(raw_gm) if raw_gm is not None else None
+
+    return volume_muted_val, group_volume_val, group_volume_muted_val
 
 
 def _external_now_playing(queue_item: Any) -> tuple[str, str | None] | None:
