@@ -19,6 +19,7 @@ from provider.models import (
     TrackBrief,
 )
 from provider.tools._common import (
+    _external_now_playing,
     page_args,
     to_brief_album,
     to_brief_artist,
@@ -732,6 +733,45 @@ def test_player_brief_external_source_defaults_none() -> None:
         current_media=None,
     )
     assert to_brief_player(player).external_source is None
+
+
+def _audio_source_item(*, provider: str, title: str | None, name: str = "Wrapper") -> SimpleNamespace:
+    """A queue item whose current stream is a plugin AUDIO_SOURCE."""
+    return SimpleNamespace(
+        name=name,
+        streamdetails=SimpleNamespace(
+            media_type=SimpleNamespace(value="audio_source"),
+            provider=provider,
+            stream_metadata=SimpleNamespace(title=title),
+        ),
+    )
+
+
+def test_external_now_playing_returns_provider_and_title() -> None:
+    item = _audio_source_item(provider="yandex_ynison--PL8BnL7a", title="Behind Your Walls")
+    assert _external_now_playing(item) == ("yandex_ynison--PL8BnL7a", "Behind Your Walls")
+
+
+def test_external_now_playing_none_for_normal_track() -> None:
+    item = SimpleNamespace(
+        name="Real Track",
+        streamdetails=SimpleNamespace(
+            media_type=SimpleNamespace(value="track"),
+            provider="yandex_music--abc",
+            stream_metadata=None,
+        ),
+    )
+    assert _external_now_playing(item) is None
+
+
+def test_external_now_playing_none_when_no_streamdetails() -> None:
+    assert _external_now_playing(SimpleNamespace(name="x", streamdetails=None)) is None
+    assert _external_now_playing(None) is None
+
+
+def test_external_now_playing_title_may_be_none() -> None:
+    item = _audio_source_item(provider="airplay--1", title=None)
+    assert _external_now_playing(item) == ("airplay--1", None)
 
 
 _DEBUG_CLASSES = [

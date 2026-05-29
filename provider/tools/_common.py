@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 from fastmcp.exceptions import ToolError
 from mcp.shared.exceptions import McpError
 from mcp.types import INVALID_REQUEST, METHOD_NOT_FOUND
+from music_assistant_models.enums import MediaType
 
 from ..models import (
     AlbumBrief,
@@ -326,6 +327,33 @@ def _str_or_none(value: Any) -> str | None:
     if value is None:
         return None
     return str(value)
+
+
+def _external_now_playing(queue_item: Any) -> tuple[str, str | None] | None:
+    """Return ``(provider_instance_id, track_title)`` for a plugin source item.
+
+    Detects a "Connect"-style external source (Spotify Connect, AirPlay,
+    Yandex Ynison) — these surface as a single queue item whose stream is a
+    :attr:`MediaType.AUDIO_SOURCE`. Returns ``None`` for normal tracks, for
+    items without stream details, and for ``None``.
+
+    :param queue_item: a queue item to inspect (may be ``None``).
+    """
+    sd = getattr(queue_item, "streamdetails", None)
+    if sd is None:
+        return None
+    media_type = getattr(sd, "media_type", None)
+    media_type_val = (
+        str(getattr(media_type, "value", media_type)) if media_type is not None else None
+    )
+    if media_type_val != MediaType.AUDIO_SOURCE.value:
+        return None
+    provider = _str_or_none(getattr(sd, "provider", None))
+    if provider is None:
+        return None
+    metadata = getattr(sd, "stream_metadata", None)
+    title = _str_or_none(getattr(metadata, "title", None)) if metadata is not None else None
+    return provider, title
 
 
 def to_resource_text(value: Any) -> str | None:
