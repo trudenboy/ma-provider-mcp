@@ -207,6 +207,7 @@ def build_debug_server(
     *,
     require_confirmation: bool = True,
     event_buffer: EventBuffer | None = None,
+    logs_enabled: bool = True,
 ) -> FastMCP:
     """Build the ``debug`` sub-server.
 
@@ -216,6 +217,9 @@ def build_debug_server(
     :param event_buffer: A started ``EventBuffer`` instance. When ``None``
         the events tools still mount but report ``current_size=0`` and
         empty snapshots — useful for tests that only exercise other groups.
+    :param logs_enabled: Whether the ``DEBUG_LOGS`` capability is enabled. When
+        ``False``, ``debug_health_summary`` skips its log-error read and reports
+        ``DEBUG_LOGS`` as a disabled capability instead.
     """
     sub = FastMCP(name="debug")
     _register_inspect_tools(sub, mass)
@@ -223,7 +227,7 @@ def build_debug_server(
     _register_events_tools(sub, mass, event_buffer)
     _register_providers_tools(sub, mass)
     _register_reload_tool(sub, mass, require_confirmation=require_confirmation)
-    _register_health_tool(sub, mass, buffer=event_buffer)
+    _register_health_tool(sub, mass, buffer=event_buffer, logs_enabled=logs_enabled)
     return sub
 
 
@@ -515,7 +519,7 @@ def _register_providers_tools(sub: FastMCP, mass: MusicAssistant) -> None:
 
 
 def _register_health_tool(
-    sub: FastMCP, mass: MusicAssistant, *, buffer: EventBuffer | None
+    sub: FastMCP, mass: MusicAssistant, *, buffer: EventBuffer | None, logs_enabled: bool
 ) -> None:
     @sub.tool(
         tags={Tag.DEBUG_PROVIDERS},
@@ -580,10 +584,16 @@ def _register_health_tool(
                 }
 
         log_errors: int | None = None
-        try:
-            log_errors = SafeLogTail(mass).count_errors_last_5min()
-        except Exception:
+        if not logs_enabled:
+            # DEBUG_LOGS is off — do not read the log file (mirrors the events
+            # gate above; reading here would bypass the disabled permission).
             disabled_capabilities.append("DEBUG_LOGS")
+        else:
+            try:
+                # Offload the synchronous scan off MA's event loop (see tail_log).
+                log_errors = await asyncio.to_thread(SafeLogTail(mass).count_errors_last_5min)
+            except Exception:
+                disabled_capabilities.append("DEBUG_LOGS")
 
         return HealthSummary(
             providers_loaded=loaded,
