@@ -2,7 +2,7 @@
 id: "0006"
 title: "Config namespace — view and edit MA core / provider / player settings via MCP"
 size: L
-status: inprogress
+status: done
 priority: P1
 effort_minutes: 420
 feature_id:
