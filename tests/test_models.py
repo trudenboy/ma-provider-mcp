@@ -722,6 +722,18 @@ def test_to_brief_queue_available_defaults_true_when_attr_missing() -> None:
     assert to_brief_queue(queue).available is True
 
 
+def test_player_brief_external_source_defaults_none() -> None:
+    """A self-driven player exposes ``external_source = None`` by default."""
+    player = SimpleNamespace(
+        player_id="p1",
+        name="Speaker",
+        playback_state=SimpleNamespace(value="idle"),
+        volume_level=None,
+        current_media=None,
+    )
+    assert to_brief_player(player).external_source is None
+
+
 _DEBUG_CLASSES = [
     ("PlayerInspect", {"player_id", "raw", "state", "truncated"}),
     ("QueueInspect", {"queue_id", "raw", "current_item", "truncated"}),
