@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] — 2026-05-29
+
+### Added
+- New advanced server setting "Lean schemas for Config/Debug tools"
+  (off by default). When enabled, the Config and Debug tools omit their
+  machine-readable output schemas, cutting roughly 5,000 tokens of per-request
+  context on MCP hosts that load every tool schema up-front. Tool results are
+  unchanged; only the structured-output type hints are dropped. Leave it off
+  for Claude clients, which defer tool schemas automatically.
+
 ## [0.7.1] — 2026-05-29
 
 ### Fixed

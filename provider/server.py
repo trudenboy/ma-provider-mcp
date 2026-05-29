@@ -12,6 +12,7 @@ from .constants import (
     CONF_DEBUG_EVENTS,
     CONF_ENFORCE_AUDIENCE,
     CONF_EXTRA_ALLOWED_ORIGINS,
+    CONF_LEAN_ADMIN_SCHEMA,
     CONF_MOUNT_PATH,
     CONF_REQUIRE_AUTH,
     CONF_REQUIRE_CONFIRMATION,
@@ -140,6 +141,7 @@ class MCPServerRuntime:
         )
 
         require_confirmation = bool(self._config.get_value(CONF_REQUIRE_CONFIRMATION) or False)
+        lean_admin_schema = bool(self._config.get_value(CONF_LEAN_ADMIN_SCHEMA) or False)
         mcp.mount(build_library_server(self._mass), namespace="library")
         mcp.mount(
             build_queue_server(self._mass, require_confirmation=require_confirmation),
@@ -175,6 +177,7 @@ class MCPServerRuntime:
                 event_buffer=self._event_buffer,
                 logs_enabled=Tag.DEBUG_LOGS in enabled_tags(self._config),
                 reload_lock=self._reload_lock,
+                lean_schema=lean_admin_schema,
             ),
             namespace="debug",
         )
@@ -189,6 +192,7 @@ class MCPServerRuntime:
                 secret_writes_enabled=lambda: bool(
                     self._config.get_value(CONF_CONFIG_WRITE_SECRET)
                 ),
+                lean_schema=lean_admin_schema,
             ),
             namespace="config",
         )

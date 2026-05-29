@@ -34,6 +34,7 @@ from .constants import (
     CONF_EDIT_QUEUE,
     CONF_ENFORCE_AUDIENCE,
     CONF_EXTRA_ALLOWED_ORIGINS,
+    CONF_LEAN_ADMIN_SCHEMA,
     CONF_MOUNT_PATH,
     CONF_QUERY_LIBRARY,
     CONF_QUERY_METADATA,
@@ -190,6 +191,22 @@ def build_config_entries(
                 "the external URL from the active client connection — set it "
                 "if your reverse proxy strips the `X-Forwarded-Host` / "
                 "`X-Ingress-Path` headers."
+            ),
+            required=False,
+        ),
+        ConfigEntry(
+            key=CONF_LEAN_ADMIN_SCHEMA,
+            type=ConfigEntryType.BOOLEAN,
+            label="Lean schemas for Config/Debug tools",
+            default_value=False,
+            category="Server",
+            advanced=True,
+            description=(
+                "Omit machine-readable output schemas from the Config and Debug "
+                "tools to shrink the per-request context they cost. Leave off for "
+                "Claude clients (which defer tool schemas anyway); enable only for "
+                "MCP hosts that load every schema up-front. Tool results are "
+                "unaffected — only the structured-output type hints are dropped."
             ),
             required=False,
         ),

@@ -40,7 +40,12 @@ from ..models import (
     SetValueResult,
 )
 from ..tags import Tag
-from ._common import TIMEOUT_FAST, TIMEOUT_INTERACTIVE, confirm_or_raise
+from ._common import (
+    TIMEOUT_FAST,
+    TIMEOUT_INTERACTIVE,
+    confirm_or_raise,
+    lean_schema_view,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -358,6 +363,7 @@ def build_config_server(
     *,
     require_confirmation: bool = True,
     secret_writes_enabled: bool | Callable[[], bool] = True,
+    lean_schema: bool = False,
 ) -> FastMCP:
     """Build the ``config`` sub-server.
 
@@ -368,23 +374,26 @@ def build_config_server(
         When False (or the callable returns False), SECURE_STRING writes are
         rejected. The runtime passes a callable so a hot-swapped permission
         toggle takes effect on the next request without a rebuild.
+    :param lean_schema: When True, tools omit their ``outputSchema`` to shrink
+        the namespace's context footprint for hosts without tool-search.
     """
     sub = FastMCP(name="config")
-    _register_read_tools(sub, mass)
+    target = lean_schema_view(sub) if lean_schema else sub
+    _register_read_tools(target, mass)
     _register_provider_write_tools(
-        sub,
+        target,
         mass,
         require_confirmation=require_confirmation,
         secret_writes_enabled=secret_writes_enabled,
     )
     _register_core_write_tools(
-        sub,
+        target,
         mass,
         require_confirmation=require_confirmation,
         secret_writes_enabled=secret_writes_enabled,
     )
     _register_player_write_tools(
-        sub,
+        target,
         mass,
         require_confirmation=require_confirmation,
         secret_writes_enabled=secret_writes_enabled,

@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
-from typing import TYPE_CHECKING, Any, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
 from fastmcp.exceptions import ToolError
 from mcp.shared.exceptions import McpError
@@ -26,7 +26,7 @@ from ..models import (
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from fastmcp import Context
+    from fastmcp import Context, FastMCP
 
 MAX_PAGE = 200
 DEFAULT_PAGE = 50
@@ -43,6 +43,47 @@ TIMEOUT_BULK = 60.0
 # 10s (TIMEOUT_FAST) times out mid-confirmation; allow a generous human-scale
 # window.
 TIMEOUT_INTERACTIVE = 120.0
+
+
+class _LeanToolView:
+    """A pass-through view of a FastMCP sub-server with a lean tool decorator.
+
+    Forwards every attribute to the wrapped server, except ``tool``: its
+    decorator defaults ``output_schema=None`` so tools registered through this
+    view omit the auto-generated ``outputSchema``. Tools still register on the
+    wrapped server; this object is a thin facade, not a separate registry.
+    """
+
+    def __init__(self, sub: FastMCP) -> None:
+        self._sub = sub
+
+    def tool(self, *args: Any, **kwargs: Any) -> Any:
+        # An explicit output_schema still wins; we only supply the default.
+        kwargs.setdefault("output_schema", None)
+        return self._sub.tool(*args, **kwargs)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._sub, name)
+
+
+def lean_schema_view(sub: FastMCP) -> FastMCP:
+    """Return a view of ``sub`` whose tools omit their output schema.
+
+    FastMCP otherwise auto-generates an ``outputSchema`` from each tool's
+    return dataclass; those schemas dominate the gated config/debug namespaces'
+    context footprint. Register a namespace's tools through this view to shrink
+    that footprint for MCP hosts without tool-search deferred loading. The typed
+    return value is unaffected — FastMCP still serializes it into the tool
+    result's text content.
+
+    Unlike mutating ``sub.tool`` in place, this leaves the FastMCP instance
+    untouched, so it does not depend on ``tool`` being a writable attribute.
+
+    :param sub: The FastMCP sub-server to wrap.
+    """
+    # The view duck-types the subset of FastMCP that the tool builders use
+    # (the ``tool`` decorator); typed as FastMCP so call sites stay clean.
+    return cast("FastMCP", _LeanToolView(sub))
 
 
 async def confirm_or_raise(ctx: Context | None, prompt: str, *, enabled: bool) -> None:
