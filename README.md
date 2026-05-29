@@ -15,19 +15,23 @@
 
 Exposes MA's library, queue, playback, players, and metadata controllers as a
 [Model Context Protocol](https://modelcontextprotocol.io/) server, accessible to
-Claude Code, Codex, and any other MCP-aware LLM client.
+Claude, Cursor, Codex, the OpenClaw and Hermes multi-agent orchestrators, and any
+other MCP-aware client. Optional `debug` and `config` namespaces add
+troubleshooting and settings management for power users.
 
 ## Highlights
 
 - Built on **PrefectHQ FastMCP v3** — no homebrew SDK glue.
 - **No core MA changes required.** Authentication delegates to
   `mass.webserver.auth.authenticate_with_token` (handles both JWT and legacy tokens).
-- **16-permission tag-based access control** (query / control / edit / delete × 4 categories);
-  defaults: reads on, all mutations off.
+- **Tag-based access control** — 16 action permissions (query / control / edit / delete × 4)
+  plus 3 MCP-resource toggles; reads on, all mutations off by default. Two further
+  off-by-default namespaces (`debug`, `config`) add 5 + 5 capability flags.
 - **Mounted into MA's existing webserver** at `/mcp/v1` — reuses TLS, reverse proxy,
   and Home Assistant ingress out of the box. No second port, no extra firewall rule.
-- 8 namespaced sub-servers, exposing tools as `library_search_tracks`,
-  `queue_get_active_queue`, `playback_play_media`, etc.
+- 8 always-on namespaced sub-servers (library, queue, playback, players, playlists,
+  volume, media, metadata) plus the optional `debug` and `config` namespaces — exposing
+  tools as `library_search_tracks`, `queue_get_active_queue`, `playback_play_media`, etc.
 
 ## Usage
 
@@ -39,7 +43,7 @@ per-client token (`MCP — <Client>`, revocable individually under
 Profile → Long-lived access tokens) and shows the ready-to-paste snippet.
 Cursor users get an extra **Add to Cursor** one-click deeplink. Supports
 Claude Desktop, Claude Code, Cursor, Windsurf, VSCode, ChatGPT
-Connectors, Codex CLI, Gemini CLI, Cline, and Zed.
+Connectors, Codex CLI, Gemini CLI, Cline, Zed, OpenClaw, and Hermes.
 
 ### Manual
 
@@ -59,7 +63,7 @@ claude mcp add ma --transport http \
 
 ## Permissions
 
-The provider config exposes 16 permission booleans, grouped by category:
+The provider config exposes 16 action-permission booleans, grouped by category:
 
 | Category   | Verbs                                                                |
 |------------|----------------------------------------------------------------------|
@@ -67,6 +71,13 @@ The provider config exposes 16 permission booleans, grouped by category:
 | Control    | playback, volume, players, media (announcements)                     |
 | Edit       | library (add), queue (move/save), playlists (create/add/reorder), favorites (add) |
 | Delete     | library (remove), queue (clear), playlists (delete), favorites (remove) |
+
+Three further **MCP Resources** toggles control which `library://`,
+`player://` / `queue://`, and prompt resources are advertised. Two optional,
+off-by-default namespaces add their own flags: **Debug** (5 — inspect, logs,
+events, providers, reload) and **Config** (5 — read, edit provider / core /
+player, allow secret writes; writes delegate to MA's atomic save). Every
+capability outside the Query group is off by default.
 
 Each maps to a tag (`query:library`, `control:playback`, …). A custom
 `TagFilterMiddleware` filters `tools/list` / `resources/list` / `prompts/list`
@@ -99,4 +110,4 @@ uv run mypy provider
 
 ## License
 
-[Apache-2.0](LICENSE)
+[MIT](LICENSE)
