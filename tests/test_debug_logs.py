@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, cast
@@ -11,6 +12,7 @@ from fastmcp import Client
 from fastmcp.exceptions import ToolError
 
 from provider.debug.log_reader import SafeLogTail
+from provider.models import LogTailResult
 
 if TYPE_CHECKING:
     from music_assistant.mass import MusicAssistant
@@ -217,10 +219,6 @@ async def test_debug_tail_log_runs_off_event_loop_thread(
     event loop. This pins that ``tail_log`` dispatches the read via a worker
     thread (it would fail if the tool called ``SafeLogTail.tail`` directly).
     """
-    import threading
-
-    from provider.models import LogTailResult
-
     main_thread = threading.current_thread()
     captured: dict[str, Any] = {}
 

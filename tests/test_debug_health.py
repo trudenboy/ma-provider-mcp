@@ -8,9 +8,10 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
-from fastmcp import Client
+from fastmcp import Client, FastMCP
 
 from provider.debug import log_reader
+from provider.tools.debug import build_debug_server
 
 
 @pytest.fixture
@@ -135,10 +136,6 @@ async def test_health_summary_skips_log_read_when_logs_disabled(
     Reading logs to count errors when the operator disabled log access bypasses
     the permission. The capability is reported as disabled instead.
     """
-    from fastmcp import FastMCP
-
-    from provider.debug import log_reader
-    from provider.tools.debug import build_debug_server
 
     def boom(_self: Any, **_kwargs: Any) -> int:
         raise AssertionError("logs must not be read when DEBUG_LOGS is disabled")

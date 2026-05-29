@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1] — 2026-05-29
+
+### Fixed
+- The log-tail and health-summary debug tools no longer perform their log-file
+  scan on Music Assistant's event loop, preventing playback stutter on
+  low-power hardware while a scan runs.
+- `debug_health_summary` no longer reads the log file when the log-access
+  capability is disabled; it reports the capability as disabled instead of
+  silently bypassing the permission.
+- Provider reloads triggered over MCP no longer serialize against unrelated
+  Music Assistant server instances.
+- Reduced CPU overhead when the debug inspect tools serialize large objects.
+
 ## [0.7.0] — 2026-05-29
 
 ### Added

@@ -26,7 +26,7 @@ def test_charge_estimates_bytes_without_json_encoding() -> None:
 
     quote_state = _State(max_depth=10, max_str=1000, max_total_bytes=1_000_000)
     quote_state.charge('a"b')
-    assert quote_state.bytes_used == len('a"b'.encode()) + 2  # 5, not json's 6
+    assert quote_state.bytes_used == len(b'a"b') + 2  # 5, not json's 6
 
     none_state = _State(max_depth=10, max_str=1000, max_total_bytes=1_000_000)
     none_state.charge(None)
