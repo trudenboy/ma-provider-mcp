@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 from fastmcp.exceptions import ToolError
 from mcp.shared.exceptions import McpError
@@ -238,9 +238,9 @@ def to_brief_player(player: Any, active_queue: Any = None) -> PlayerBrief:
     if active_queue is not None:
         now_playing = _external_now_playing(getattr(active_queue, "current_item", None))
         if now_playing is not None:
-            external_source = now_playing[0]
-            if now_playing[1]:
-                current_item = now_playing[1]
+            external_source = now_playing.instance_id
+            if now_playing.title:
+                current_item = now_playing.title
 
     return PlayerBrief(
         player_id=str(getattr(player, "player_id", "")),
@@ -274,7 +274,9 @@ def to_brief_queue(queue: Any, items: Sequence[Any] | None = None) -> QueueBrief
         for it in items:
             now_playing = _external_now_playing(it)
             item_name = (
-                now_playing[1] if now_playing and now_playing[1] else str(getattr(it, "name", ""))
+                now_playing.title
+                if now_playing and now_playing.title
+                else str(getattr(it, "name", ""))
             )
             brief_items.append(
                 QueueItemBrief(
@@ -366,8 +368,33 @@ def _volume_fields(player: Any, player_state: Any) -> tuple[bool | None, int | N
     return volume_muted_val, group_volume_val, group_volume_muted_val
 
 
-def _external_now_playing(queue_item: Any) -> tuple[str, str | None] | None:
-    """Return ``(provider_instance_id, track_title)`` for a plugin source item.
+def safe_active_queue(mass: Any, player_id: str) -> Any:
+    """Resolve a player's active queue, degrading to ``None`` on any error.
+
+    MA's queue resolver walks ``player.state`` and recurses through sync
+    leaders / group players, so a single partially-populated player could
+    otherwise raise and take down the whole ``list_players`` response. On any
+    failure this degrades to "no active queue" — the brief still renders, just
+    without external-source surfacing.
+
+    :param mass: the Music Assistant instance.
+    :param player_id: the player whose active queue to resolve.
+    """
+    try:
+        return mass.player_queues.get_active_queue(player_id)
+    except Exception:
+        return None
+
+
+class ExternalNowPlaying(NamedTuple):
+    """An external (Connect-style) source's controlling provider and track title."""
+
+    instance_id: str
+    title: str | None
+
+
+def _external_now_playing(queue_item: Any) -> ExternalNowPlaying | None:
+    """Return the controlling provider and track title for a plugin source item.
 
     Detects a "Connect"-style external source (Spotify Connect, AirPlay,
     Yandex Ynison) — these surface as a single queue item whose stream is a
@@ -391,7 +418,7 @@ def _external_now_playing(queue_item: Any) -> tuple[str, str | None] | None:
         return None
     metadata = getattr(sd, "stream_metadata", None)
     title = _str_or_none(getattr(metadata, "title", None)) if metadata is not None else None
-    return provider, title
+    return ExternalNowPlaying(provider, title)
 
 
 def to_resource_text(value: Any) -> str | None:

@@ -38,8 +38,9 @@ def build_queue_server(mass: MusicAssistant, *, require_confirmation: bool = Tru
         """
         Return the active queue for a player, or ``None`` if the player is idle.
 
-        Returns ``QueueBrief`` with ``queue_id``, ``state``, ``current_item``,
-        shuffle / repeat flags and the requested lookahead. Note that
+        Returns ``QueueBrief`` with ``queue_id``, ``current_index``,
+        ``item_count``, shuffle / repeat flags, ``available`` and up to
+        ``include_items`` lookahead ``items``. Note that
         ``QueueBrief.queue_id`` is the identifier the mutation tools
         (``set_shuffle``, ``clear_queue``, ``transfer_queue``) expect — it is
         distinct from ``player_id``. For a queue fed by an external plugin

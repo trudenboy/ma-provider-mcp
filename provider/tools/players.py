@@ -10,7 +10,7 @@ from mcp.types import ToolAnnotations
 
 from ..models import PlayerBrief
 from ..tags import Tag
-from ._common import TIMEOUT_FAST, TIMEOUT_MUTATION, to_brief_player
+from ._common import TIMEOUT_FAST, TIMEOUT_MUTATION, safe_active_queue, to_brief_player
 
 if TYPE_CHECKING:
     from music_assistant.mass import MusicAssistant
@@ -72,9 +72,7 @@ def build_players_server(mass: MusicAssistant) -> FastMCP:
             return_unavailable=include_unavailable,
             return_disabled=include_disabled,
         )
-        return [
-            to_brief_player(p, mass.player_queues.get_active_queue(p.player_id)) for p in players
-        ]
+        return [to_brief_player(p, safe_active_queue(mass, p.player_id)) for p in players]
 
     @sub.tool(
         tags={Tag.QUERY_PLAYERS},
@@ -99,7 +97,7 @@ def build_players_server(mass: MusicAssistant) -> FastMCP:
         player = mass.players.get_player(player_id)
         if player is None:
             return None
-        return to_brief_player(player, mass.player_queues.get_active_queue(player_id))
+        return to_brief_player(player, safe_active_queue(mass, player_id))
 
     @sub.tool(
         tags={Tag.CONTROL_PLAYERS},
