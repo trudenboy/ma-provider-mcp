@@ -780,6 +780,19 @@ def test_external_now_playing_title_may_be_none() -> None:
     assert _external_now_playing(item) == ("airplay--1", None)
 
 
+def test_external_now_playing_accepts_legacy_plugin_source() -> None:
+    """The deprecated ``plugin_source`` media type is still treated as external."""
+    item = SimpleNamespace(
+        name="Wrapper",
+        streamdetails=SimpleNamespace(
+            media_type=SimpleNamespace(value="plugin_source"),
+            provider="spotify--1",
+            stream_metadata=SimpleNamespace(title="Some Song"),
+        ),
+    )
+    assert _external_now_playing(item) == ("spotify--1", "Some Song")
+
+
 def _queue(*, state: str, current_item: SimpleNamespace | None) -> SimpleNamespace:
     return SimpleNamespace(state=SimpleNamespace(value=state), current_item=current_item)
 

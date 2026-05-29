@@ -383,7 +383,8 @@ def _external_now_playing(queue_item: Any) -> tuple[str, str | None] | None:
     media_type_val = (
         str(getattr(media_type, "value", media_type)) if media_type is not None else None
     )
-    if media_type_val != MediaType.AUDIO_SOURCE.value:
+    # PLUGIN_SOURCE is the deprecated alias kept for one-release back-compat.
+    if media_type_val not in {MediaType.AUDIO_SOURCE.value, MediaType.PLUGIN_SOURCE.value}:
         return None
     provider = _str_or_none(getattr(sd, "provider", None))
     if provider is None:
