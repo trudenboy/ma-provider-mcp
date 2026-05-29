@@ -145,8 +145,15 @@ def to_brief_radio(radio: Any) -> RadioBrief:
     )
 
 
-def to_brief_player(player: Any) -> PlayerBrief:
-    """Convert a Player-like object to ``PlayerBrief``."""
+def to_brief_player(player: Any, active_queue: Any = None) -> PlayerBrief:
+    """Convert a Player-like object to ``PlayerBrief``.
+
+    :param player: a Player-like object.
+    :param active_queue: the player's active ``PlayerQueue`` (or ``None``).
+        When present, its ``state`` is the authoritative play/pause signal —
+        it is what MA's own UI reads — and an external plugin source surfaces
+        through it.
+    """
     # MA's :class:`Player` exposes ``playback_state`` (an enum); ``state`` is
     # only a serialisation alias and is not present on the Python object.
     # Read both so test stubs and any older shim still resolve.
@@ -239,6 +246,21 @@ def to_brief_player(player: Any) -> PlayerBrief:
         state_value = "needs_setup"
     elif synced_to_val is not None or active_group_val is not None:
         state_value = "synced"
+    elif active_queue is not None:
+        queue_state = getattr(active_queue, "state", None)
+        state_value = (
+            str(getattr(queue_state, "value", queue_state))
+            if queue_state is not None
+            else state_value
+        )
+
+    external_source: str | None = None
+    if active_queue is not None:
+        now_playing = _external_now_playing(getattr(active_queue, "current_item", None))
+        if now_playing is not None:
+            external_source = now_playing[0]
+            if now_playing[1]:
+                current_item = now_playing[1]
 
     return PlayerBrief(
         player_id=str(getattr(player, "player_id", "")),
@@ -255,6 +277,7 @@ def to_brief_player(player: Any) -> PlayerBrief:
         volume_muted=volume_muted_val,
         group_volume=group_volume_val,
         group_volume_muted=group_volume_muted_val,
+        external_source=external_source,
     )
 
 

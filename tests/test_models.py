@@ -774,6 +774,102 @@ def test_external_now_playing_title_may_be_none() -> None:
     assert _external_now_playing(item) == ("airplay--1", None)
 
 
+def _queue(*, state: str, current_item: SimpleNamespace | None) -> SimpleNamespace:
+    return SimpleNamespace(state=SimpleNamespace(value=state), current_item=current_item)
+
+
+def test_to_brief_player_external_source_playing() -> None:
+    """Idle player + active queue playing an AUDIO_SOURCE reports the real state."""
+    player = SimpleNamespace(
+        player_id="lenco",
+        name="Lenco LS-500",
+        playback_state=SimpleNamespace(value="idle"),
+        volume_level=None,
+        current_media=None,
+    )
+    queue = _queue(
+        state="playing",
+        current_item=_audio_source_item(
+            provider="yandex_ynison--PL8BnL7a", title="Behind Your Walls"
+        ),
+    )
+    brief = to_brief_player(player, active_queue=queue)
+    assert brief.state == "playing"
+    assert brief.external_source == "yandex_ynison--PL8BnL7a"
+    assert brief.current_item == "Behind Your Walls"
+
+
+def test_to_brief_player_normal_active_queue_unchanged() -> None:
+    """A normal track in the active queue leaves external_source None."""
+    player = SimpleNamespace(
+        player_id="p",
+        name="Speaker",
+        playback_state=SimpleNamespace(value="playing"),
+        volume_level=None,
+        current_media=SimpleNamespace(uri="ym://track/1", title="Song"),
+    )
+    normal_item = SimpleNamespace(
+        name="Song",
+        streamdetails=SimpleNamespace(
+            media_type=SimpleNamespace(value="track"),
+            provider="yandex_music--x",
+            stream_metadata=None,
+        ),
+    )
+    brief = to_brief_player(player, active_queue=_queue(state="playing", current_item=normal_item))
+    assert brief.external_source is None
+    assert brief.state == "playing"
+    assert brief.current_item == "Song"
+
+
+def test_to_brief_player_blocking_ladder_wins_over_queue() -> None:
+    """An unavailable player keeps state=unavailable even with a playing queue."""
+    player = SimpleNamespace(
+        player_id="p",
+        name="Offline",
+        playback_state=SimpleNamespace(value="idle"),
+        volume_level=None,
+        current_media=None,
+        available=False,
+    )
+    queue = _queue(
+        state="playing",
+        current_item=_audio_source_item(provider="airplay--1", title="X"),
+    )
+    assert to_brief_player(player, active_queue=queue).state == "unavailable"
+
+
+def test_to_brief_player_synced_wins_over_queue() -> None:
+    """A sync follower keeps state=synced even though its leader's queue plays."""
+    player = SimpleNamespace(
+        player_id="p",
+        name="Follower",
+        playback_state=SimpleNamespace(value="idle"),
+        volume_level=None,
+        current_media=None,
+        synced_to="leader",
+    )
+    queue = _queue(
+        state="playing",
+        current_item=_audio_source_item(provider="airplay--1", title="X"),
+    )
+    assert to_brief_player(player, active_queue=queue).state == "synced"
+
+
+def test_to_brief_player_no_active_queue_legacy_behaviour() -> None:
+    """With active_queue omitted, state comes from player.playback_state."""
+    player = SimpleNamespace(
+        player_id="p",
+        name="Speaker",
+        playback_state=SimpleNamespace(value="idle"),
+        volume_level=None,
+        current_media=None,
+    )
+    brief = to_brief_player(player)
+    assert brief.state == "idle"
+    assert brief.external_source is None
+
+
 _DEBUG_CLASSES = [
     ("PlayerInspect", {"player_id", "raw", "state", "truncated"}),
     ("QueueInspect", {"queue_id", "raw", "current_item", "truncated"}),
