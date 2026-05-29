@@ -51,11 +51,15 @@ and bearer-token auth — no runtime/server code changes.
    `transport: "streamable-http"` and `Authorization: "Bearer ${MA_TOKEN}"`,
    and `packaging/openclaw/.claude-plugin/plugin.json` parses as JSON with a
    non-empty `name`.
-6. A regression guard pins that the server's MCP endpoint treats `GET` as a
-   handled method (HTTP 401 without auth — **not** 405), so OpenClaw's
-   bundle-mcp client (which opens the optional `GET` SSE stream before
-   `POST initialize`, OpenClaw issue #72757) is not tripped by a POST-only
-   405.
+6. A regression guard pins that the ASGI bridge **forwards** `GET` to the
+   mounted app rather than short-circuiting it with a 405. This matters
+   because OpenClaw's bundle-mcp client opens the optional `GET` SSE stream
+   before `POST initialize` and bails on a non-2xx GET (OpenClaw issue
+   #72757, which 405s against POST-only servers). The *live* server's GET
+   response (401 without a token, SSE with one — never 405) was verified
+   manually against a running instance; the automated test covers only the
+   bridge layer, since the e2e fixtures use a method-echo ASGI double rather
+   than the real FastMCP app.
 
 ## Test Plan
 
@@ -72,11 +76,14 @@ and bearer-token auth — no runtime/server code changes.
   `.mcp.json` and `plugin.json` parse; the `ma` server entry has the
   streamable-HTTP transport and `${MA_TOKEN}` bearer header; `plugin.json`
   has a non-empty `name`.
-- `tests/test_e2e_http.py` (or equivalent) — assert an unauthenticated
-  `GET` to the mounted MCP endpoint returns 401, never 405 (AC 6).
-- Manual: install the bundle into a live OpenClaw (`openclaw plugins
-  install`), set `MA_TOKEN`, confirm `ma` tools load — gated before the
-  ClawHub `package publish` release step.
+- `tests/test_e2e_http.py::test_get_method_reaches_asgi` — assert the bridge
+  forwards `GET` to the mounted ASGI app instead of 405-ing the verb (bridge
+  layer; AC 6). The live server's 401-not-405 GET response is verified
+  manually (below), not in CI — the e2e fixtures mount a method-echo double.
+- Manual: (1) `curl -X GET <base>/mcp/v1` returns 401, not 405. (2) install
+  the bundle into a live OpenClaw (`openclaw plugins install`), set
+  `MA_TOKEN`, confirm `ma` tools load — gated before the ClawHub
+  `package publish` release step.
 
 ## Sequence Diagram
 

@@ -25,8 +25,9 @@ This is a Claude-format bundle (`.claude-plugin/plugin.json` + `.mcp.json` +
 #    Authorization header — never commit it into the bundle).
 export MA_TOKEN="<your-music-assistant-token>"
 
-# 2. Install the bundle (from a local checkout or, once published, by name).
-openclaw plugins install ./packaging/openclaw
+# 2. Install the bundle. Point the installer at the bundle directory (the
+#    folder containing .claude-plugin/), or, once published, install by name.
+openclaw plugins install <path-to-bundle>
 
 # 3. Restart the OpenClaw gateway so the ma_* tools load.
 ```

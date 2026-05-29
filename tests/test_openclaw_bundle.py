@@ -17,7 +17,8 @@ from pathlib import Path
 
 import pytest
 
-BUNDLE_DIR = Path(__file__).resolve().parents[1] / "packaging" / "openclaw"
+REPO_ROOT = Path(__file__).resolve().parents[1]
+BUNDLE_DIR = REPO_ROOT / "packaging" / "openclaw"
 
 
 @pytest.fixture
@@ -60,3 +61,14 @@ def test_mcp_json_uses_env_token_header(mcp_json: dict) -> None:
 def test_plugin_manifest_has_name(plugin_json: dict) -> None:
     """The Claude-format manifest carries a non-empty ``name``."""
     assert plugin_json.get("name")
+
+
+def test_plugin_version_tracks_provider_version(plugin_json: dict) -> None:
+    """The bundle manifest version stays in lockstep with ``provider/VERSION``.
+
+    Nothing auto-syncs the two, so this guard forces a version bump to update
+    both files together rather than letting the bundle advertise a stale
+    version forever.
+    """
+    provider_version = (REPO_ROOT / "provider" / "VERSION").read_text(encoding="utf-8").strip()
+    assert plugin_json["version"] == provider_version

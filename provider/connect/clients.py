@@ -33,6 +33,12 @@ class ClientSpec:
     filename: str = ""
 
 
+# Templates substitute ``{{TOKEN}}`` / ``{{URL}}`` by plain string replacement
+# (page.py), with no shell/JSON/YAML escaping. That is safe only because the
+# token is an MA-minted JWT (alphabet ``[A-Za-z0-9_-.]``) and the URL is the
+# server's own base URL — neither can contain a quote, backslash, ``$`` or
+# whitespace. If MA ever issues opaque tokens from a wider alphabet, the
+# shell (OpenClaw) and YAML (Hermes) templates would need escaping.
 CLIENTS: tuple[ClientSpec, ...] = (
     ClientSpec(
         id="claude-code",
