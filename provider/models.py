@@ -337,7 +337,7 @@ class ConfigEntryDump:
 
     key: str
     type: str
-    label: str
+    label: str | None
     default_value: Any
     required: bool
     description: str | None
