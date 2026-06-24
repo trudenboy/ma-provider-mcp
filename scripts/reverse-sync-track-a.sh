@@ -45,6 +45,34 @@ transform() {
     -e 's#\bmusic_assistant\.providers\.fastmcp_server\.#provider.#g'
 }
 
+# --- guard: surface hunks the transform could not safely handle -----------------
+# Warns (does not abort) so a partially-mappable PR — e.g. a Copilot-review
+# follow-up that edits strings.json / translations, which live inline in
+# provider/config.py here — is loud instead of silently mis-applied.
+guard_diff() {  # $1 = transformed diff file ; returns 1 if anything was flagged
+  local f="$1" flagged=0 hits
+  # 1. residual upstream paths in file headers => hunk targets a path outside the
+  #    provider/ + tests/ mapping (strings.json maps to a file we don't have;
+  #    music_assistant/translations/* doesn't map at all).
+  hits="$(grep -nE '^(diff --git|---|\+\+\+) .*music_assistant/' "$f" || true)"
+  if [[ -n "$hits" ]]; then
+    echo "  ⚠ UNMAPPED upstream path(s) — reconcile by hand (likely strings.json /"
+    echo "    translations → provider/config.py inline descriptions):"
+    sed 's/^/      /' <<<"$hits"
+    flagged=1
+  fi
+  # 2. forward-sync-unsafe module import. The fork rewrite only catches the
+  #    `from provider.` form; `import provider.X [as Y]` slips through unrewritten
+  #    and breaks upstream (no top-level `provider` package there).
+  hits="$(grep -nE '^\+[[:space:]]*import[[:space:]]+provider\.' "$f" || true)"
+  if [[ -n "$hits" ]]; then
+    echo "  ⚠ forward-sync-unsafe import — rewrite to 'from provider.X import …':"
+    sed 's/^/      /' <<<"$hits"
+    flagged=1
+  fi
+  return "$flagged"
+}
+
 # --- guard: never operate on a dirty tree (forward-sync clobbers provider/ whole) -
 if [[ "$MODE" != "--check" ]]; then
   if ! git diff --quiet || ! git diff --cached --quiet; then
@@ -59,6 +87,8 @@ fail=0
 for pr in $PRS; do
   echo "=== PR #$pr ==="
   gh pr diff "$pr" --repo "$REPO" | transform > "$WORK/$pr.diff"
+
+  guard_diff "$WORK/$pr.diff" || fail=1
 
   if [[ "$MODE" == "--check" ]]; then
     # --check validates each diff against the PRISTINE tree independently, so the
