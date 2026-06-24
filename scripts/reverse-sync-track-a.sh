@@ -32,6 +32,16 @@ PRS="${PRS:-4391 4390 4377 4392}"
 BRANCH="${BRANCH:-reverse-sync/track-a}"
 MODE="${1:-apply}"
 
+# Reject unknown args so a mistyped flag (e.g. `--chek`) can't silently fall
+# through to the mutating apply path.
+case "$MODE" in
+  apply | --check) ;;
+  *)
+    echo "ERROR: unknown argument '$MODE' — use '--check' (dry run) or no argument (apply)." >&2
+    exit 2
+    ;;
+esac
+
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
 WORK="$(mktemp -d)"
@@ -118,7 +128,9 @@ if [[ "$MODE" == "--check" ]]; then
 fi
 
 echo "Rejected hunks to reconcile:"
-git ls-files --others --exclude-standard '*.rej' | sed 's/^/  /' || true
+# find, not `git ls-files --exclude-standard`, so a developer's global
+# core.excludesfile ignoring *.rej can't hide rejects from the summary.
+find . -path ./.venv -prune -o -name '*.rej' -print | sed 's/^/  /' || true
 echo
 echo "Working-tree changes:"
 git --no-pager diff --stat
