@@ -119,11 +119,15 @@ All non-trivial changes go through a pull request — never push directly to
    AI-drafted replies are allowed here (see *AI Policy Alignment*, rule 4).
    Replies to a **human** reviewer chiming into the same thread must be
    human-written from that point on.
-3. **Version + changelog.** *After* review feedback is addressed, bump the
-   `VERSION` file (PEP 440 — `1.2.0` stable, `1.2.0b1` beta) and add a
-   `CHANGELOG.md` entry following the rules in **Changelog Discipline**
-   below — in the same PR. The release pipeline tags and publishes
-   automatically when the new `VERSION` lands on `dev`.
+3. **Changelog (+ maintainer-owned version).** *After* review feedback is
+   addressed, add a `CHANGELOG.md` entry following the rules in **Changelog
+   Discipline** below — in the same PR. The `VERSION` file is **owned by the
+   maintainer** (`.github/CODEOWNERS`) and protected on `dev`:
+   do **not** bump it in a contributor PR — a `VERSION` change requires the
+   maintainer's Code-Owner approval to merge. The maintainer sets the version
+   (typically at merge/release time, matching the changelog entry), and the
+   release pipeline tags and publishes automatically when the new `VERSION`
+   lands on `dev`.
 4. **Ask before merging.** Always request explicit maintainer approval to
    merge. Do not self-merge or enable auto-merge without it. (Auto-merge is
    reserved for `distribute.yml`-generated wrapper-sync PRs from
@@ -297,10 +301,12 @@ relax the rule.
 - **No prose between `## [version]` and the first `### Category`.**
   Release-note tooling collects bullets that appear *after* the first
   category heading; intro paragraphs are silently dropped.
-- **One entry per version.** When the PR bumps `VERSION` from `X.Y.Z`
-  to `X.Y.(Z+1)`, add a single `## [X.Y.(Z+1)] - YYYY-MM-DD` block
-  above the existing top-most version, populated with the categories
-  the PR touches. Do not retroactively edit older version blocks.
+- **One entry per version.** For the release that lands these changes
+  (`X.Y.Z` → `X.Y.(Z+1)`), add a single `## [X.Y.(Z+1)] - YYYY-MM-DD`
+  block above the existing top-most version, populated with the categories
+  the PR touches. Do not retroactively edit older version blocks. The
+  matching `VERSION` bump is applied by the maintainer (see *Pull Request
+  Workflow* step 3).
 
 ## Debugging
 
