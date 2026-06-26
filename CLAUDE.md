@@ -44,10 +44,16 @@ Operational rules for AI assistants working in this repo:
    posting. **If a human reviewer joins the same thread, rule 3 takes over
    from that point on** — every reply after that human comment must be
    human-written.
-5. **AI co-author trailers** (`Co-Authored-By: Claude ...`) are encouraged
-   in this repo's commits as honest disclosure. They are stripped at the
-   upstream boundary by `upstream-pr.yml.j2` so they don't appear in
-   `music-assistant/server` history.
+5. **AI co-author trailers** (`Co-Authored-By: <agent> ...`) are encouraged
+   in this repo's commits as honest disclosure. Use the identity of the agent
+   that actually did the work — e.g. `Co-Authored-By: Cursor
+   <cursoragent@cursor.com>`, `Co-Authored-By: Claude <model>
+   <noreply@anthropic.com>`, or the line your tool documents. Do **not** copy
+   another tool's example trailer, invent a model string, or duplicate a
+   trailer your environment already injects. Wrong attribution is worse than
+   omitting the trailer. These trailers are stripped at the upstream boundary
+   by `upstream-pr.yml.j2` so they don't appear in `music-assistant/server`
+   history.
 
 ## Development Commands
 
