@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] — 2026-06-29
+
+### Added
+- Explicit `playback_pause` and `playback_resume` tools that always pause or
+  resume, instead of the `playback_play_pause` toggle flipping the wrong way
+  when the current state is unknown.
+- A `players_ungroup_player` tool to remove a player from its sync group.
+- A `queue_set_repeat` tool to set the repeat mode (`off` / `one` / `all`).
+
 ## [0.9.0] — 2026-06-26
 
 ### Added

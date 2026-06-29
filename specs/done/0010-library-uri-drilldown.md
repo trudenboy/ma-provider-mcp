@@ -2,7 +2,7 @@
 id: "0010"
 title: "Library URI briefs and album/artist drill-down tools"
 size: M
-status: inprogress
+status: done
 priority: P1
 effort_minutes: 20
 feature_id:
