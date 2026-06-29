@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0] — 2026-06-29
+
+### Added
+- A `queue_add_to_queue` tool to enqueue media with explicit placement modes
+  (append, play next, play now, replace next, replace) and an optional absolute
+  `index`, returning a confirmation that names the newly added row.
+- `queue_get_active_queue` now reports `next_insertable_index`, `index_in_buffer`,
+  and a per-item absolute `index`, so an agent can choose a valid
+  `queue_add_to_queue(index=…)` position instead of guessing. An optional
+  `items_from_current` flag fetches the lookahead window from the current
+  playback position.
+
 ## [0.10.0] — 2026-06-29
 
 ### Added

@@ -2,7 +2,7 @@
 id: "0013"
 title: "Expose queue insert indices for agent ergonomics"
 size: S
-status: inprogress
+status: done
 priority: P1
 effort_minutes: 15
 feature_id:
