@@ -124,6 +124,54 @@ sequenceDiagram
 - Category keys are lowercased identifiers (`server`, `debug`); `config.py`
   passes the identifier, `strings.json` carries the display label.
 
+## Spike Findings (2026-06-29)
+
+Investigated MA core + the upstream tree before scoping the implementation:
+
+1. **No runtime `strings.json` loader.** The installed `music_assistant` package
+   has no code that reads a provider's `strings.json` at runtime. Strings are a
+   build-time source: `build_translations_source` compiles every provider's
+   `strings.json` into `music_assistant/translations/en.json`, which MA reads at
+   runtime. An **out-of-tree provider's `strings.json` is never compiled into the
+   installed MA's `en.json`**, so it would not resolve standalone.
+
+2. **`ConfigEntry.label` is required** (`label: str`) and is the documented
+   *fallback* "when no translation for the key is present"; `translation_key`
+   (default `settings.{key}`) selects the translation that overrides it. So
+   **inline `label` and `strings.json` coexist** — inline is the standalone
+   fallback, strings.json/en.json is the upstream translation. Removing inline
+   labels would break standalone label display (per finding 1).
+
+3. **Upstream `fastmcp_server` already ships a `strings.json`** and our
+   forward-sync (`rsync --delete` of our tree, which lacks the file) **deletes
+   it** and reverts `config.py` to our inline-literal form — *that* is why
+   `check_config_entries` fails on #4486, not a fundamental incompatibility.
+
+4. **The upstream provider has diverged from this repo.** Its `config.py` builds
+   entries via a helper that takes `label`/`category` as **variables** (not
+   literals — likely why its inline usage passes the hook), and its
+   `config_categories` are permission-themed
+   (`query_permissions`, `control_permissions`, `edit_permissions`,
+   `delete_permissions`, `mcp_resources`, `mcp_config`) — different from this
+   repo's `Server` / `Debug`. Config-entry keys differ too (`open_connect`,
+   `require_auth`, `mount_path`, `enforce_audience`, `extra_allowed_origins`).
+
+### Revised strategy (lower risk, additive)
+
+- **Add `provider/strings.json`** (config_entries + config_categories) and
+  **keep the inline `label`/`description`** in `config.py` as the standalone
+  fallback — additive, no standalone breakage, no runtime-loader dependency.
+- Normalise `category` strings to keys (`server`, `debug`) and define their
+  labels under `config_categories` so the hook's category check passes.
+- The hook flags *hardcoded literals*; mirror upstream's pattern (label/category
+  sourced so they pair with a `strings.json` key) so both inline-fallback and
+  the hook are satisfied. Confirm against the actual `check_config_entries`
+  source before finalising.
+- **Reconcile with the upstream-evolved provider first.** Decide whether to
+  adopt upstream's diverged `config.py`/`strings.json`/category scheme or
+  overwrite it with ours — #4486 currently does the latter, clobbering its
+  `strings.json`. This is a prerequisite decision, not a detail.
+
 ## Risks / Open Questions
 
 1. **Standalone loading (highest risk).** Does MA resolve `provider/strings.json`
