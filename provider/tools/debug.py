@@ -591,10 +591,12 @@ def _register_health_tool(
             else:
                 from datetime import datetime  # noqa: PLC0415
 
+                from music_assistant.helpers.datetime import now as ma_now  # noqa: PLC0415
+
                 subscribed_at = datetime.fromisoformat(stats.subscribed_since)
                 elapsed_min = max(
                     1.0 / 60,
-                    (datetime.now().astimezone() - subscribed_at).total_seconds() / 60.0,
+                    (ma_now() - subscribed_at).total_seconds() / 60.0,
                 )
                 events_per_min = {
                     et: round(count / elapsed_min, 2) for et, count in stats.by_type.items()

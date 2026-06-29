@@ -110,7 +110,9 @@ class SafeLogTail:
             raise ToolError(f"log file {name!r} not found")
 
         component_filter = re.compile(component_regex) if component_regex else None
-        now = datetime.now().astimezone()
+        from music_assistant.helpers.datetime import now as ma_now  # noqa: PLC0415
+
+        now = ma_now()
 
         raw_lines, bytes_scanned, truncated = self._read_last_lines(path, lines)
 
