@@ -16,7 +16,8 @@ from provider.tools._common import (
     artist_albums_from_uri,
 )
 from provider.tools.library import build_library_server
-from tests.media_fakes import (
+
+from .media_fakes import (
     fake_album,
     fake_artist,
     fake_media_item,

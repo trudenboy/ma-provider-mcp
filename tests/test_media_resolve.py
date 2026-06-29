@@ -40,7 +40,8 @@ from provider.tools._common import (
 )
 from provider.tools.library import build_library_server
 from provider.tools.metadata import build_metadata_server
-from tests.media_fakes import fake_media_item
+
+from .media_fakes import fake_media_item
 
 
 @pytest.fixture
