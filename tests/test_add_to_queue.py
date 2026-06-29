@@ -288,7 +288,7 @@ async def test_add_to_queue_index_rejects_buffered(
         return_value=[_queue_item(item_id="i0", uri="u", name="n")] * 5
     )
     async with Client(mounted_queue) as client:
-        with pytest.raises(ToolError, match="insertable position"):
+        with pytest.raises(ToolError, match="index_in_buffer=2"):
             await client.call_tool(
                 "queue_add_to_queue",
                 {"queue_id": "q1", "uri": "spotify://track/1", "index": 2},

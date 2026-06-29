@@ -2,7 +2,7 @@
 id: "0012"
 title: "Add add_to_queue tool with placement modes and ack result"
 size: M
-status: inprogress
+status: done
 priority: P1
 effort_minutes: 20
 feature_id:
