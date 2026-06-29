@@ -31,7 +31,11 @@ def _now() -> datetime:
     template-generated (cannot be hand-edited). Tests replace this
     module-level callable to control timestamps deterministically.
     """
-    return datetime.now().astimezone()
+    # Deferred: a top-level music_assistant import would pull the full package
+    # init (and optional deps) at module load; here it runs inside the host.
+    from music_assistant.helpers.datetime import now as ma_now  # noqa: PLC0415
+
+    return ma_now()
 
 
 class EventBuffer:
