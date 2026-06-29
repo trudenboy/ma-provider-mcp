@@ -2,7 +2,7 @@
 id: "0014"
 title: "Migrate inlined ConfigEntry strings to strings.json for upstream conformance"
 size: L
-status: todo
+status: inprogress
 priority: P1
 effort_minutes: 45
 feature_id:
@@ -171,6 +171,51 @@ Investigated MA core + the upstream tree before scoping the implementation:
   adopt upstream's diverged `config.py`/`strings.json`/category scheme or
   overwrite it with ours — #4486 currently does the latter, clobbering its
   `strings.json`. This is a prerequisite decision, not a detail.
+
+## Implementation recipe (from upstream's exact pattern)
+
+Diffing the upstream `fastmcp_server` (≈ an older snapshot of *this* config.py +
+the conformance work) against ours gives the precise target:
+
+- **Static entries** (open_connect, require_auth, mount_path, require_confirmation,
+  enforce_audience, extra_allowed_origins, connect_external_url,
+  debug_event_buffer_capacity, **+ our lean_schema**): upstream **omits `label`
+  and `description`** on the `ConfigEntry(...)` call; text lives in `strings.json`
+  `config_entries.<key>`. `category="server"` / `"debug"` (common categories).
+- **Permission entries** (`_bool(...)`): keep the label as a positional arg to
+  `_bool` (hidden from the hook, which only flags literals *at a ConfigEntry
+  call*), and set `category` to a **granular key** — `query_permissions` /
+  `control_permissions` / `edit_permissions` / `delete_permissions` /
+  `mcp_resources` / `mcp_config` — each defined in the provider `strings.json`
+  `config_categories`.
+
+### Blocker: `ConfigEntry.label` is required in our models pin
+
+Omitting `label` raises `TypeError: missing required keyword-only argument
+'label'` against our installed `music_assistant_models` (1.1.126) — `label: str`
+has no default. Upstream runs a newer models build where `label` is optional, so
+the clean pattern needs a **models-version bump** here first.
+
+### Two implementation options
+
+- **(A) Proper / upstream-aligned.** Bump `music_assistant_models` to a version
+  with optional `label` → omit `label`/`description` on static entries → author
+  `strings.json`. Matches upstream; strings reach Lokalise. Cost: dependency bump
+  (verify such a version exists) + config.py restructure.
+- **(B) Loophole / no models bump.** Route **every** entry through a `_bool`-style
+  helper so `label`/`category` are always variables at the `ConfigEntry` call
+  (the hook only flags literals) → `check_config_entries` passes with no
+  strings.json and no models bump. Cost: strings stay English-only (defeats the
+  hook intent; upstream reviewers may object); doesn't satisfy
+  `build_translations_source`.
+
+### Orthogonal: `build_translations_source` / `en.json`
+
+Either way, the upstream `build_translations_source` hook regenerates
+`translations/en.json` from all `strings.json`. After `rsync --delete` removes
+upstream's `strings.json`, stale `fastmcp_server` entries left in `en.json` make
+the regen diff → hook fails. Fix at the **sync layer** (`ma-provider-tools`):
+after rsync, run the translation build and commit the regenerated `en.json`.
 
 ## Risks / Open Questions
 
