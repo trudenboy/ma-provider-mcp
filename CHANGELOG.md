@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.1] — 2026-06-29
+
+### Fixed
+- Event and log timestamps now use Music Assistant's shared datetime helper,
+  keeping the provider compatible when inlined into Music Assistant core. No
+  user-facing behaviour change.
+
 ## [0.12.0] — 2026-06-29
 
 ### Changed
