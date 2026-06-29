@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from provider.config import build_config_entries
 
@@ -18,8 +18,9 @@ COMMON_CATEGORIES = {"server", "debug", "generic", "advanced"}
 STRINGS_PATH = Path(__file__).parent.parent / "provider" / "strings.json"
 
 
-def _load_strings() -> dict:
-    return json.loads(STRINGS_PATH.read_text(encoding="utf-8"))
+def _load_strings() -> dict[str, Any]:
+    data: dict[str, Any] = json.loads(STRINGS_PATH.read_text(encoding="utf-8"))
+    return data
 
 
 def test_strings_json_is_valid_with_required_keys() -> None:
