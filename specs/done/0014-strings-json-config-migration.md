@@ -2,7 +2,7 @@
 id: "0014"
 title: "Migrate inlined ConfigEntry strings to strings.json for upstream conformance"
 size: L
-status: inprogress
+status: done
 priority: P1
 effort_minutes: 45
 feature_id:
