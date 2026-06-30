@@ -144,6 +144,18 @@ provider repo is the source of truth; sync to the integration fork and
 upstream PR submission run automatically through `ma-provider-tools`
 workflows (`sync-to-fork.yml`, `upstream-pr.yml`).
 
+**Reverse-sync (incoming).** Contributions made *upstream* against the inlined
+provider (someone editing `music_assistant/providers/fastmcp_server/` directly in
+`music-assistant/server`) are detected and ported back here automatically by the
+`ma-provider-tools` reverse-sync radar. They arrive as **draft** PRs on a
+`reverse-sync/<domain>-pr<N>` branch, crediting the upstream author via
+`Co-authored-by`. A PR labelled **`needs-human`** applied with conflicts: it
+carries `<<<<<<<` markers (and the upstream change may need adapting to this
+repo's current code) — resolve them, drop the label, and treat it like any other
+PR (review, changelog, maintainer approval). `VERSION` / `translations/en.json`
+are never touched by reverse-sync; bump them as usual. Do **not** manually
+re-port a change the radar already opened a PR for.
+
 This provider is intended to be inlined into
 `music_assistant/providers/fastmcp_server` upstream eventually — that is the
 target shape, not a possibility. Any code that lints / type-checks here
