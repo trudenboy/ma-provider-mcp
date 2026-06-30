@@ -104,10 +104,6 @@ def _is_request_via_ha_ingress(request: web.Request) -> bool:
         return False
 
 
-<<<<<<< ours
-def _scheme_guard(request: web.Request) -> web.Response | None:
-    """Reject plaintext-http credential traffic from untrusted-transport hosts.
-=======
 def _forwarded_scheme_is_https(request: web.Request) -> bool:
     """
     Return True if a reverse proxy reports the public hop was HTTPS.
@@ -131,7 +127,6 @@ def _forwarded_scheme_is_https(request: web.Request) -> bool:
 def _scheme_guard(ctx: WizardContext, request: web.Request) -> web.Response | None:
     """
     Reject plaintext-http credential traffic from untrusted-transport hosts.
->>>>>>> theirs
 
     ``/connect/login`` carries the MA admin password; ``/connect/exchange``
     and ``/connect/token`` carry bootstrap / session tokens. Over plain HTTP

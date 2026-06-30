@@ -28,15 +28,13 @@
       "label": "Connect Wizard external URL (fallback)",
       "description": "Optional explicit base URL the Connect Wizard should open at (e.g. `https://ha.example.com/<addon-slug>` for Home Assistant add-on ingress). Used only when the wizard cannot auto-detect the external URL from the active client connection — set it if your reverse proxy strips the `X-Forwarded-Host` / `X-Ingress-Path` headers."
     },
-<<<<<<< ours
     "lean_admin_schema": {
       "label": "Lean schemas for Config/Debug tools",
       "description": "Omit machine-readable output schemas from the Config and Debug tools to shrink the per-request context they cost. Leave off for Claude clients (which defer tool schemas anyway); enable only for MCP hosts that load every schema up-front. Tool results are unaffected — only the structured-output type hints are dropped."
-=======
+    },
     "trust_forwarded_proto": {
       "label": "Trust reverse-proxy forwarded scheme",
       "description": "Treat the Connect Wizard request as HTTPS when a trusted reverse proxy reports `X-Forwarded-Proto: https` (or `X-Forwarded-Scheme: https`), even though the proxy-to-MA hop is plain HTTP. Enable this only when MA sits behind a reverse proxy (nginx, Nginx Proxy Manager, Traefik, Caddy, ...) that terminates TLS and is configured to set this header and strip any client-supplied copy. Without it, the wizard refuses to mint credentials over the proxy because it sees plaintext HTTP from a non-loopback host. Leave OFF if MA is directly reachable — any LAN client could otherwise spoof the header."
->>>>>>> theirs
     },
     "debug_event_buffer_capacity": {
       "label": "Debug: event buffer capacity",

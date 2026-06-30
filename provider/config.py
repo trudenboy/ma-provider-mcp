@@ -145,11 +145,15 @@ def build_config_entries(
             required=False,
         ),
         ConfigEntry(
-<<<<<<< ours
             key=CONF_LEAN_ADMIN_SCHEMA,
-=======
+            type=ConfigEntryType.BOOLEAN,
+            default_value=False,
+            category="server",
+            advanced=True,
+            required=False,
+        ),
+        ConfigEntry(
             key=CONF_TRUST_FORWARDED_PROTO,
->>>>>>> theirs
             type=ConfigEntryType.BOOLEAN,
             default_value=False,
             category="server",
