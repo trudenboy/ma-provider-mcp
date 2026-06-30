@@ -45,6 +45,7 @@ from .constants import (
     CONF_RES_LIBRARY,
     CONF_RES_PLAYER,
     CONF_RES_PROMPTS,
+    CONF_TRUST_FORWARDED_PROTO,
     DEFAULT_MOUNT_PATH,
 )
 
@@ -144,7 +145,11 @@ def build_config_entries(
             required=False,
         ),
         ConfigEntry(
+<<<<<<< ours
             key=CONF_LEAN_ADMIN_SCHEMA,
+=======
+            key=CONF_TRUST_FORWARDED_PROTO,
+>>>>>>> theirs
             type=ConfigEntryType.BOOLEAN,
             default_value=False,
             category="server",
