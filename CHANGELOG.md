@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.0] — 2026-07-01
+
+### Added
+- A `trust_forwarded_proto` server setting (advanced, off by default). When MA
+  runs behind a TLS-terminating reverse proxy (nginx, Nginx Proxy Manager,
+  Traefik, Caddy, …), enabling it lets the Connect Wizard mint tokens by
+  trusting the proxy's `X-Forwarded-Proto: https` / `X-Forwarded-Scheme: https`
+  header as proof the public hop was HTTPS. Leave it off when MA is directly
+  reachable — the header is otherwise spoofable by any client on the network.
+
+### Fixed
+- The Connect Wizard now populates the "Pick your AI client" list immediately
+  after a username/password sign-in, instead of showing an empty list until the
+  page was reloaded.
+
 ## [0.12.2] — 2026-06-30
 
 ### Fixed
