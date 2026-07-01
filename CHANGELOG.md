@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.1] — 2026-07-01
+
+### Fixed
+- Adding a track at a specific position in the queue (`queue_add_to_queue` with
+  an `index`) no longer fails on recent Music Assistant releases; the media to
+  enqueue is now resolved in a version-tolerant way.
+- Reading configuration entries (`config_get_entries`) now returns the localized
+  label and description for server settings instead of empty values, matching
+  the text shown in the Music Assistant UI.
+
 ## [0.13.0] — 2026-07-01
 
 ### Added

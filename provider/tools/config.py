@@ -109,6 +109,10 @@ def _values_from_raw(raw: dict[str, Any]) -> tuple[list[ConfigValueDump], bool]:
 def _entry_dump(entry: ConfigEntry, current: Any) -> ConfigEntryDump:
     """Map a ConfigEntry + current value to ConfigEntryDump."""
     opts = [o.value for o in entry.options] if entry.options else None
+    # Label/description are resolved from the translations at serialization
+    # (server-category entries leave the raw attributes None), so read the
+    # localized values via to_dict() instead of the bare attributes.
+    localized = entry.to_dict()
     # Mask secrets: _resolve_entries reads raw ConfigEntry.value, bypassing
     # the to_dict()/__post_serialize__ hook the sibling read tools use.
     current_value = (
@@ -119,10 +123,10 @@ def _entry_dump(entry: ConfigEntry, current: Any) -> ConfigEntryDump:
     return ConfigEntryDump(
         key=entry.key,
         type=entry.type.value,
-        label=entry.label,
+        label=localized.get("label"),
         default_value=entry.default_value,
         required=entry.required,
-        description=entry.description,
+        description=localized.get("description"),
         options=opts,
         range=entry.range,
         advanced=getattr(entry, "advanced", False),
