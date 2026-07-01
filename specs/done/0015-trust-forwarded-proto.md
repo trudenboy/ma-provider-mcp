@@ -2,7 +2,7 @@
 id: "0015"
 title: "Trust reverse-proxy forwarded scheme for the Connect Wizard"
 size: M          # S | M | L
-status: inprogress     # todo | inprogress | done
+status: done     # todo | inprogress | done
 priority: P1     # P0 | P1 | P2
 effort_minutes: 15
 feature_id:
