@@ -12,7 +12,7 @@ import pytest
 from fastmcp import Client
 from fastmcp.exceptions import ToolError
 
-from provider.debug.log_reader import SafeLogTail
+from provider.debug.log_reader import _MAX_RESPONSE_BYTES, SafeLogTail
 from provider.models import LogTailResult
 
 if TYPE_CHECKING:
@@ -464,8 +464,6 @@ def test_tail_oversized_record_truncated_by_bytes(log_root: Path) -> None:
     Multi-byte UTF-8 (Cyrillic/CJK) must not blow the response budget when the
     character count is under it but the encoded size is several times larger.
     """
-    from provider.debug.log_reader import _MAX_RESPONSE_BYTES  # noqa: PLC0415
-
     big = "я" * 100_000  # 200k bytes in UTF-8
     _write_log(log_root, _line(1000, "ERROR", "c.a", big))
 
