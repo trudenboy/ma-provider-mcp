@@ -203,8 +203,9 @@ def _register_logs_tool(sub: FastMCP, mass: MusicAssistant) -> None:
             record text, including traceback lines.
         :param since_seconds: When set, only records within this many seconds
             of "now" are returned.
-        :param before: ISO timestamp cursor — only records strictly older are
-            returned; use the value from ``next_call_hint`` to page deeper.
+        :param before: Paging cursor — an ISO timestamp, or the exact
+            ``offset:<n>`` value from a previous result's ``next_call_hint``
+            (the offset form is lossless when many records share a timestamp).
         :param name: Log file basename within ``$HOME/.musicassistant/``. Only the
             canonical log and its rotated siblings (``.log.1`` … ``.log.5``) are
             allowed.

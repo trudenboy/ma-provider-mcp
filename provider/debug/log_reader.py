@@ -98,6 +98,7 @@ class _Record:
     """One log record: a parsed header line plus its continuation lines."""
 
     entry: LogLine
+    offset: int
     approx_bytes: int = field(init=False)
 
     def __post_init__(self) -> None:
@@ -152,7 +153,9 @@ class SafeLogTail:
         :param component_regex: Filter by component name regex.
         :param search: Case-insensitive regex over the full record text.
         :param since_seconds: Filter to records from the last N seconds.
-        :param before: ISO timestamp cursor — only records strictly older.
+        :param before: Paging cursor — an ISO timestamp, or the exact
+            ``offset:<n>`` value from a previous result's ``next_call_hint``
+            (offset paging is lossless for records sharing one timestamp).
         :param name: Log file name (must be in ALLOWED set).
         """
         lines = max(1, min(int(lines), 2000))
@@ -163,13 +166,14 @@ class SafeLogTail:
         min_level = self._parse_level(level)
         component_filter = self._compile(component_regex, "component_regex", 0)
         search_filter = self._compile(search, "search", re.IGNORECASE)
-        before_cutoff = self._parse_before(before)
+        before_cutoff, before_offset = self._parse_before(before)
         from music_assistant.helpers.datetime import now  # noqa: PLC0415
 
         current_time = now()
 
         state = _ScanState()
         collected: list[LogLine] = []
+        oldest_offset: int | None = None
         budget = _MAX_RESPONSE_BYTES
         has_more = False
         response_truncated = False
@@ -177,6 +181,8 @@ class SafeLogTail:
         for record in self._iter_records_backwards(path, state):
             entry = record.entry
             when = self._entry_datetime(entry)
+            if before_offset is not None and record.offset >= before_offset:
+                continue
             if before_cutoff is not None and (when is None or when >= before_cutoff):
                 continue
             # Records are scanned newest-first; once one falls out of the
@@ -206,20 +212,24 @@ class SafeLogTail:
                 response_truncated = True
                 break
             if not collected and record.approx_bytes > budget:
-                # A single oversized record (giant traceback) is cut, not dropped.
+                # A single oversized record (giant traceback) is cut, not
+                # dropped — sliced on encoded bytes so multi-byte UTF-8
+                # content cannot blow past the response budget.
+                cut = entry.message.encode("utf-8", errors="replace")[:budget]
                 entry = LogLine(
                     timestamp=entry.timestamp,
                     level=entry.level,
                     component=entry.component,
-                    message=entry.message[:budget] + "\n…[message truncated]",
+                    message=cut.decode("utf-8", errors="ignore") + "\n…[message truncated]",
                 )
                 response_truncated = True
             budget -= record.approx_bytes
             collected.append(entry)
+            oldest_offset = record.offset
 
         collected.reverse()
         hint = self._build_hint(
-            collected,
+            oldest_offset,
             name=name,
             has_more=has_more,
             response_truncated=response_truncated,
@@ -350,17 +360,28 @@ class SafeLogTail:
             raise ToolError(f"invalid regex in {param!r}: {exc}") from exc
 
     @staticmethod
-    def _parse_before(before: str | None) -> datetime | None:
-        """Parse the ``before`` cursor into an aware datetime."""
+    def _parse_before(before: str | None) -> tuple[datetime | None, int | None]:
+        """Parse the ``before`` cursor: an ISO timestamp or an ``offset:<n>`` marker."""
         if before is None:
-            return None
+            return None, None
+        if before.startswith("offset:"):
+            try:
+                offset = int(before.removeprefix("offset:"))
+            except ValueError as exc:
+                raise ToolError(f"invalid offset cursor in 'before': {before!r}") from exc
+            if offset < 0:
+                raise ToolError(f"invalid offset cursor in 'before': {before!r}")
+            return None, offset
         try:
             cutoff = datetime.fromisoformat(before)
         except ValueError as exc:
-            raise ToolError(f"invalid ISO timestamp in 'before': {before!r}") from exc
+            raise ToolError(
+                f"invalid 'before' cursor {before!r}: expected an ISO timestamp "
+                "or an 'offset:<n>' value from next_call_hint"
+            ) from exc
         if cutoff.tzinfo is None:
             cutoff = cutoff.astimezone()
-        return cutoff
+        return cutoff, None
 
     @staticmethod
     def _entry_datetime(entry: LogLine) -> datetime | None:
@@ -387,7 +408,7 @@ class SafeLogTail:
 
     def _build_hint(
         self,
-        collected: list[LogLine],
+        oldest_offset: int | None,
         *,
         name: str,
         has_more: bool,
@@ -395,8 +416,13 @@ class SafeLogTail:
         state: _ScanState,
     ) -> str | None:
         """Compose the ready-to-use follow-up instruction for an incomplete page."""
-        oldest_ts = next((e.timestamp for e in collected if e.timestamp), None)
-        page = f"before={oldest_ts!r}" if oldest_ts else "a narrower since_seconds="
+        # Page by file offset, not timestamp — offsets are lossless when many
+        # records share one millisecond timestamp (error bursts).
+        page = (
+            f"before='offset:{oldest_offset}'"
+            if oldest_offset is not None
+            else "a narrower since_seconds="
+        )
         if response_truncated:
             return (
                 "Response size budget reached; narrow with level=/search=/"
@@ -416,8 +442,8 @@ class SafeLogTail:
             )
         return None
 
-    def _iter_lines_backwards(self, path: Path, state: _ScanState) -> Iterator[str]:
-        """Yield complete log lines newest-first, up to the 10 MB scan cap."""
+    def _iter_lines_backwards(self, path: Path, state: _ScanState) -> Iterator[tuple[int, str]]:
+        """Yield ``(byte_offset, line)`` pairs newest-first, up to the 10 MB scan cap."""
         with path.open("rb") as fh:
             fh.seek(0, os.SEEK_END)
             position = fh.tell()
@@ -429,16 +455,21 @@ class SafeLogTail:
                 buffer = fh.read(read_size) + buffer
                 state.bytes_scanned += read_size
                 parts = buffer.split(b"\n")
+                offsets = []
+                acc = position
+                for part in parts:
+                    offsets.append(acc)
+                    acc += len(part) + 1
                 # parts[0] may be a partial line continuing into the unread
                 # region — keep it buffered until more data arrives.
                 buffer = parts[0]
-                for raw in reversed(parts[1:]):
-                    if raw:
-                        yield raw.decode("utf-8", errors="replace")
+                for idx in range(len(parts) - 1, 0, -1):
+                    if parts[idx]:
+                        yield offsets[idx], parts[idx].decode("utf-8", errors="replace")
             if position == 0:
                 state.reached_start = True
                 if buffer:
-                    yield buffer.decode("utf-8", errors="replace")
+                    yield 0, buffer.decode("utf-8", errors="replace")
             elif state.bytes_scanned >= _MAX_SCAN_BYTES:
                 # The remaining buffer is a partial fragment of an unread line — drop it.
                 state.truncated = True
@@ -446,12 +477,12 @@ class SafeLogTail:
     def _iter_records_backwards(self, path: Path, state: _ScanState) -> Iterator[_Record]:
         """Group lines into records (header + continuations), newest-first."""
         pending: list[str] = []
-        for raw in self._iter_lines_backwards(path, state):
+        for offset, raw in self._iter_lines_backwards(path, state):
             match = _LOG_LINE_RE.match(raw)
             if match is None:
                 pending.append(raw)
                 continue
-            yield self._build_record(match, list(reversed(pending)))
+            yield self._build_record(match, list(reversed(pending)), offset)
             pending.clear()
         if pending and not state.truncated:
             # Headerless lines at the very start of the file — surface them
@@ -460,10 +491,11 @@ class SafeLogTail:
                 yield _Record(
                     entry=LogLine(
                         timestamp=None, level=None, component=None, message=self._redact(raw)
-                    )
+                    ),
+                    offset=0,
                 )
 
-    def _build_record(self, match: re.Match[str], continuation: list[str]) -> _Record:
+    def _build_record(self, match: re.Match[str], continuation: list[str], offset: int) -> _Record:
         """Assemble a parsed record from a header match and its continuation lines."""
         ts_raw = match["ts"].replace(",", ".").replace(" ", "T")
         try:
@@ -479,7 +511,8 @@ class SafeLogTail:
                 level=match["level"],
                 component=component,
                 message=message,
-            )
+            ),
+            offset=offset,
         )
 
     @staticmethod

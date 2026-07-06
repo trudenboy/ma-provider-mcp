@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -429,3 +430,48 @@ async def test_e2e_debug_log_stats(mounted_debug: Any, tmp_log_dir: Path) -> Non
     assert result.data.total_records > 0
     assert result.data.level_counts["ERROR"] >= 1
     assert len(result.data.top_components) > 0
+
+
+def test_tail_offset_cursor_survives_same_timestamp_burst(log_root: Path) -> None:
+    """Paging via the hint's offset cursor never loses same-timestamp records.
+
+    A timestamp-only cursor drops tied records (ms resolution + error bursts);
+    the hint must page by file offset so every record is reachable.
+    """
+    body = "".join(_line(1000, "ERROR", "c.a", f"burst {i}") for i in range(5))
+    _write_log(log_root, body)
+
+    page1 = SafeLogTail().tail(lines=2, level="ERROR")
+    assert [ln.message for ln in page1.lines] == ["burst 3", "burst 4"]
+    assert page1.has_more is True
+    assert page1.next_call_hint is not None
+    match = re.search(r"before='(offset:\d+)'", page1.next_call_hint)
+    assert match, f"hint lacks offset cursor: {page1.next_call_hint!r}"
+
+    page2 = SafeLogTail().tail(lines=2, level="ERROR", before=match.group(1))
+    assert [ln.message for ln in page2.lines] == ["burst 1", "burst 2"]
+    match2 = re.search(r"before='(offset:\d+)'", page2.next_call_hint or "")
+    assert match2
+
+    page3 = SafeLogTail().tail(lines=2, level="ERROR", before=match2.group(1))
+    assert [ln.message for ln in page3.lines] == ["burst 0"]
+    assert page3.has_more is False
+
+
+def test_tail_oversized_record_truncated_by_bytes(log_root: Path) -> None:
+    """A single oversized record is cut against the byte budget, not characters.
+
+    Multi-byte UTF-8 (Cyrillic/CJK) must not blow the response budget when the
+    character count is under it but the encoded size is several times larger.
+    """
+    from provider.debug.log_reader import _MAX_RESPONSE_BYTES  # noqa: PLC0415
+
+    big = "я" * 100_000  # 200k bytes in UTF-8
+    _write_log(log_root, _line(1000, "ERROR", "c.a", big))
+
+    result = SafeLogTail().tail(lines=5)
+    assert result.response_truncated is True
+    assert len(result.lines) == 1
+    encoded = result.lines[0].message.encode("utf-8", errors="replace")
+    assert len(encoded) <= _MAX_RESPONSE_BYTES + 100  # small slack for the marker
+    assert "…[message truncated]" in result.lines[0].message
