@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.4] — 2026-07-06
+
+### Changed
+- The `playback_play_media` tool's `radio_mode` parameter is renamed to
+  `radio`. With `radio` enabled the queue now plays an endless dynamic radio
+  playlist seeded from the given artist, album, track, playlist, or genre —
+  powered by Music Assistant's radio playlist engine — instead of the
+  deprecated queue-level radio mode. Unresolvable URIs and browse folders are
+  rejected with a clear error before anything is enqueued.
+
 ## [0.13.3] — 2026-07-03
 
 ### Changed
