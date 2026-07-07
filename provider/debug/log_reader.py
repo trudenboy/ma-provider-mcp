@@ -128,13 +128,6 @@ class SafeLogTail:
         """
         self._mass = mass
 
-    @property
-    def _root(self) -> Path:
-        """Effective log root — prefer ``mass.storage_path`` when bound."""
-        if self._mass is not None:
-            return Path(self._mass.storage_path)
-        return self.ROOT
-
     def tail(
         self,
         *,
@@ -317,6 +310,13 @@ class SafeLogTail:
         )
 
     # --- internal helpers ---
+
+    @property
+    def _root(self) -> Path:
+        """Effective log root — prefer ``mass.storage_path`` when bound."""
+        if self._mass is not None:
+            return Path(self._mass.storage_path)
+        return self.ROOT
 
     def _safe_path(self, name: str) -> Path:
         """Validate and resolve a log file path.
