@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.0] — 2026-07-07
+
+### Added
+- New `debug_log_stats` tool: a cheap aggregate view of the server log —
+  record counts per level, the most active components, and the covered time
+  range — for scoping a problem before pulling raw log lines.
+- `debug_tail_log` gained a `search` parameter (case-insensitive regex over
+  the full record text, including traceback lines) and a `before` timestamp
+  cursor for paging into older entries.
+- `debug_tail_log` results now report `has_more` and `response_truncated`
+  flags plus a ready-to-use `next_call_hint` describing how to fetch the rest
+  when a page is incomplete.
+
+### Changed
+- `debug_tail_log` filters (level, component, search, time window) now apply
+  *before* the line limit, so `lines=5` with a level filter returns the five
+  most recent matching records — previously filters only ran within the last
+  N raw lines, making rare errors unreachable in chatty logs.
+- The `level` filter is now a case-insensitive minimum-severity threshold
+  (e.g. `warning` also returns errors); unknown level names are rejected with
+  the list of valid values.
+- Tool responses are bounded by an internal size budget so very long records
+  can no longer overflow the MCP client's per-result limits.
+
+### Fixed
+- Multi-line log records are returned whole: a traceback following an error
+  line is now part of that error's message instead of being silently dropped
+  when filtering by level.
+- The error counter in `debug_health_summary` now counts CRITICAL entries and
+  is no longer capped by the previous 2000-line window.
+
 ## [0.13.4] — 2026-07-06
 
 ### Changed
