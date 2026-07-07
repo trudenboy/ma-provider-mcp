@@ -2,7 +2,7 @@
 id: "0017"
 title: "Log tail rework: filter-then-tail, traceback grouping, search, budgets, stats"
 size: M
-status: inprogress
+status: done
 priority: P1
 effort_minutes: 20
 feature_id:
