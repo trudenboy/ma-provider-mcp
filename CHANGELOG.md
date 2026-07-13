@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.4] — 2026-07-13
+
+### Changed
+- **Bundled FastMCP bumped from `3.3.1` to `3.4.4`.** Picks up upstream
+  security hardening (SSRF protections for IPv6 transition addresses,
+  OAuth redirect validation, event-store replay isolation) plus fixes for
+  proxy session teardown races and JSON-schema discriminator handling.
+  The 3.4.3 Host/Origin guard that broke reverse-proxied ASGI deployments
+  is opt-in again in 3.4.4, so the MCP endpoint keeps working unchanged
+  behind Music Assistant's webserver.
+
 ## [0.14.3] — 2026-07-10
 
 ### Changed
@@ -1175,4 +1186,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 8 sub-servers (`library`, `queue`, `playback`, `players`, `playlists`,
   `volume`, `media`, `metadata`); `library://`, `player://`, `queue://`
   resources; canned prompts.
-- Reverse-synced upstream PR #4313 (WIP)
