@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.0] — 2026-07-16
+
+### Added
+- New queue curation tools mirroring Music Assistant's native queue
+  operations: `queue_remove_item` removes one or more up-next rows by item
+  id and returns a per-item acknowledgement (`removed`, `skipped_played`,
+  `skipped_buffered`, `not_found`) — a stale id never aborts the batch and
+  removal is verified rather than assumed; `queue_move_item` moves a row up,
+  down, or to play next; `queue_move_item_to_end` sends a row to the queue
+  tail. Both movers return the reordered queue so agents confirm the new
+  order in a single call.
+- `queue_remove_item` honours the "Confirm destructive operations" setting;
+  the setting's description now lists it.
+
 ## [0.15.0] — 2026-07-16
 
 ### Added

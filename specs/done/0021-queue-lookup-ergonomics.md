@@ -2,7 +2,7 @@
 id: "0021"
 title: "Agent ergonomics: queue_id alias for queue lookup + hardened find_and_play prompt"
 size: S
-status: inprogress
+status: done
 priority: P1
 effort_minutes: 10
 feature_id:
