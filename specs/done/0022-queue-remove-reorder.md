@@ -2,7 +2,7 @@
 id: "0022"
 title: "Queue curation tools: remove items and reorder rows with an honest structured ack"
 size: M
-status: inprogress
+status: done
 priority: P1
 effort_minutes: 20
 feature_id:
