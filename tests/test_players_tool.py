@@ -385,5 +385,5 @@ async def test_queue_get_active_queue_requires_an_identifier(mock_mass: Any) -> 
     mcp = FastMCP(name="test")
     mcp.mount(build_queue_server(mock_mass), namespace="queue")
     async with Client(mcp) as client:
-        with pytest.raises(ToolError, match="player_id"):
+        with pytest.raises(ToolError, match=r"player_id.*queue_id"):
             await client.call_tool("queue_get_active_queue", {})

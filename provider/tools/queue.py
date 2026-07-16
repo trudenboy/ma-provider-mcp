@@ -190,9 +190,7 @@ def build_queue_server(  # noqa: PLR0915 -- one sub-server registers all queue t
         plugin source (Connect / AirPlay / Ynison), the current item's ``name``
         is the real track title rather than the source wrapper name.
 
-        :param player_id: Preferred identifier — ``PlayerBrief.player_id``.
-            Either this or ``queue_id`` may be supplied; both resolve the same
-            active queue for a normal player.
+        :param player_id: Player identifier from ``PlayerBrief.player_id``.
         :param include_items: How many items to materialise. Clamped to the
             ``[0, 500]`` range — 500 matches MA's own queue page size and the
             ``queue://`` resource cap, preventing a hostile or sloppy client from
@@ -201,15 +199,12 @@ def build_queue_server(  # noqa: PLR0915 -- one sub-server registers all queue t
             ``current_index`` rather than the queue start. ``items_start_index``
             in the response reflects the offset used.
         :param queue_id: Convenience alias for ``player_id`` when an agent
-            passes the queue identifier instead. Provide one or the other.
+            passes the queue identifier instead. Supply one of the two;
+            ignored when ``player_id`` is given.
         """
-        # Accept queue_id when agents pass the queue label instead of player_id;
-        # for normal player queues the values coincide.
         target = player_id or queue_id
         if not target:
-            raise ToolError(
-                "Provide player_id or queue_id (PlayerBrief.player_id for the player to inspect)."
-            )
+            raise ToolError("Provide player_id (from PlayerBrief.player_id) or queue_id.")
         queue = mass.player_queues.get_active_queue(target)
         if queue is None:
             return None
