@@ -2,7 +2,7 @@
 id: "0023"
 title: "Opt-in simplified tool discovery (search_tools / call_tool / get_tool_schema)"
 size: L
-status: inprogress
+status: done
 priority: P1
 effort_minutes: 40
 feature_id:
