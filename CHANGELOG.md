@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.0] — 2026-07-16
+
+### Added
+- `queue_get_active_queue` accepts `queue_id` as a convenience alias for
+  `player_id` — agents frequently pass the queue identifier under the wrong
+  parameter name, and for a player-backed queue the two values coincide.
+  Calling the tool with neither identifier now returns a clear error naming
+  both parameters.
+
+### Changed
+- The `find_and_play` prompt stops gracefully and reports "not found" when
+  every search returns no results (instead of retrying in a loop), and
+  resolves the target player via `players_list_players` before starting
+  playback.
+
 ## [0.14.4] — 2026-07-13
 
 ### Changed
