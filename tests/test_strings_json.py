@@ -50,7 +50,8 @@ def test_every_category_is_known_or_declared(mock_mass: MagicMock) -> None:
 
 
 def test_static_entries_carry_no_inline_text(mock_mass: MagicMock) -> None:
-    """All static entries are de-literalized — ``strings.json`` owns their text.
+    """
+    All static entries are de-literalized — ``strings.json`` owns their text.
 
     Only ``LABEL``-type entries may carry inline text: their content is composed
     at runtime (e.g. the endpoint info label embeds the live ``base_url``).

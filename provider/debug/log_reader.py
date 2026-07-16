@@ -1,4 +1,5 @@
-"""Stateless tail reader for ``mass.storage_path / musicassistant.log``.
+"""
+Stateless tail reader for ``mass.storage_path / musicassistant.log``.
 
 The reader is constrained by four load-bearing invariants:
 
@@ -118,7 +119,8 @@ class SafeLogTail:
     ALLOWED = frozenset(["musicassistant.log"] + [f"musicassistant.log.{i}" for i in range(1, 6)])
 
     def __init__(self, mass: MusicAssistant | None = None) -> None:
-        """Build a tail reader optionally bound to a live MA instance.
+        """
+        Build a tail reader optionally bound to a live MA instance.
 
         :param mass: When provided, the log root is taken from
             ``mass.storage_path`` — honouring custom ``--data-dir`` deployments
@@ -139,7 +141,8 @@ class SafeLogTail:
         before: str | None = None,
         name: str = "musicassistant.log",
     ) -> LogTailResult:
-        """Return the last ``lines`` matching records from the named log file.
+        """
+        Return the last ``lines`` matching records from the named log file.
 
         :param lines: Maximum number of matching records to return (clamped to 2000).
         :param level: Minimum severity threshold, case-insensitive (e.g. "warning").
@@ -244,7 +247,8 @@ class SafeLogTail:
         since_seconds: int | None = None,
         name: str = "musicassistant.log",
     ) -> LogStatsResult:
-        """Aggregate the log window: per-level counts, top components, time range.
+        """
+        Aggregate the log window: per-level counts, top components, time range.
 
         :param since_seconds: Restrict to records from the last N seconds.
         :param name: Log file name (must be in ALLOWED set).
@@ -298,7 +302,8 @@ class SafeLogTail:
         )
 
     def count_errors_last_5min(self, *, name: str = "musicassistant.log") -> int:
-        """Count ERROR-and-above entries in the last 5 minutes (used by health_summary).
+        """
+        Count ERROR-and-above entries in the last 5 minutes (used by health_summary).
 
         :param name: Log file name (must be in ALLOWED set).
         """
@@ -319,7 +324,8 @@ class SafeLogTail:
         return self.ROOT
 
     def _safe_path(self, name: str) -> Path:
-        """Validate and resolve a log file path.
+        """
+        Validate and resolve a log file path.
 
         :param name: The requested log file name.
         :raises ToolError: If name contains traversal characters, is not in ALLOWED, or symlink escapes.
@@ -517,7 +523,8 @@ class SafeLogTail:
 
     @staticmethod
     def _redact(text: str) -> str:
-        """Redact common secret patterns (bearer tokens, credentials, passwords).
+        """
+        Redact common secret patterns (bearer tokens, credentials, passwords).
 
         :param text: The input string.
         :return: The text with secrets replaced by <redacted>.

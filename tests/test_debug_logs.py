@@ -28,7 +28,8 @@ def test_tail_returns_last_n_lines(tmp_log_dir: Path) -> None:  # noqa: ARG001 -
 
 
 def test_tail_parses_real_ma_log_line_format(tmp_path: Path) -> None:
-    """Pin parser support for both MA-runtime and Python-default log shapes.
+    """
+    Pin parser support for both MA-runtime and Python-default log shapes.
 
     Reproduces the regression caught live in the dev container: real MA writes
     ``<ts> <LEVEL> (<thread>) [<component>] <msg>``, the synthetic fixture used
@@ -60,7 +61,8 @@ def test_tail_parses_real_ma_log_line_format(tmp_path: Path) -> None:
 
 
 def test_tail_prefers_mass_storage_path_over_class_root(tmp_path: Path) -> None:
-    """When constructed with ``mass``, SafeLogTail reads from ``mass.storage_path``.
+    """
+    When constructed with ``mass``, SafeLogTail reads from ``mass.storage_path``.
 
     Pins the regression that surfaced live in the dev container: MA is started
     with ``--data-dir /data`` so the real log lives at ``/data/musicassistant.log``,
@@ -147,7 +149,8 @@ def test_symlink_escape_rejected(tmp_log_dir: Path) -> None:
 
 
 def test_scan_bytes_cap_marks_truncated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The 10 MB scan cap fires when filters keep skipping records.
+    """
+    The 10 MB scan cap fires when filters keep skipping records.
 
     With filter-then-tail semantics the scan exits early once the page fills,
     so the cap is observable only when the filter never matches — the reader
@@ -174,7 +177,8 @@ def test_scan_bytes_cap_marks_truncated(tmp_path: Path, monkeypatch: pytest.Monk
 def test_scan_bytes_cap_drops_partial_first_line(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """When the byte cap fires mid-line, the partial leading fragment must be dropped.
+    """
+    When the byte cap fires mid-line, the partial leading fragment must be dropped.
 
     Without the guard, the backwards line iterator would emit a tail substring
     of a real line as a headerless record — which slips past level filtering
@@ -223,7 +227,8 @@ async def test_e2e_debug_tail_log_invalid_name(mounted_debug: Any, tmp_log_dir: 
 async def test_debug_tail_log_runs_off_event_loop_thread(
     mounted_debug: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The blocking log read is offloaded to a worker thread, not the event loop.
+    """
+    The blocking log read is offloaded to a worker thread, not the event loop.
 
     Synchronous file I/O up to the 10 MB scan cap must not run on MA's single
     event loop. This pins that ``tail_log`` dispatches the read via a worker
@@ -433,7 +438,8 @@ async def test_e2e_debug_log_stats(mounted_debug: Any, tmp_log_dir: Path) -> Non
 
 
 def test_tail_offset_cursor_survives_same_timestamp_burst(log_root: Path) -> None:
-    """Paging via the hint's offset cursor never loses same-timestamp records.
+    """
+    Paging via the hint's offset cursor never loses same-timestamp records.
 
     A timestamp-only cursor drops tied records (ms resolution + error bursts);
     the hint must page by file offset so every record is reachable.
@@ -459,7 +465,8 @@ def test_tail_offset_cursor_survives_same_timestamp_burst(log_root: Path) -> Non
 
 
 def test_tail_oversized_record_truncated_by_bytes(log_root: Path) -> None:
-    """A single oversized record is cut against the byte budget, not characters.
+    """
+    A single oversized record is cut against the byte budget, not characters.
 
     Multi-byte UTF-8 (Cyrillic/CJK) must not blow the response budget when the
     character count is under it but the encoded size is several times larger.

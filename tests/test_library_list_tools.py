@@ -20,7 +20,8 @@ def library_server(mock_mass: Any) -> FastMCP:
 
 
 class TestListToolsRequestFullItems:
-    """The list tools must pin ``summary=False`` on ``library_items``.
+    """
+    The list tools must pin ``summary=False`` on ``library_items``.
 
     Since upstream music-assistant/server#4693 the controllers default to
     slim summary items; the pin keeps full models flowing into the
