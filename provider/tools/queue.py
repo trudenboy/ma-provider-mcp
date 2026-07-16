@@ -162,9 +162,10 @@ def build_queue_server(  # noqa: PLR0915 -- one sub-server registers all queue t
         timeout=TIMEOUT_FAST,
     )  # type: ignore[untyped-decorator, unused-ignore]
     async def get_active_queue(
-        player_id: str,
+        player_id: str = "",
         include_items: int = 25,
         items_from_current: bool = False,
+        queue_id: str = "",
     ) -> QueueBrief | None:
         """
         Return the active queue for a player, or ``None`` if the player is idle.
@@ -184,10 +185,10 @@ def build_queue_server(  # noqa: PLR0915 -- one sub-server registers all queue t
 
         ``QueueBrief.queue_id`` is the identifier the mutation tools
         (``set_shuffle``, ``set_repeat``, ``add_to_queue``, ``clear_queue``,
-        ``transfer_queue``) expect — it is
-        distinct from ``player_id``. For a queue fed by an external plugin
-        source (Connect / AirPlay / Ynison), the current item's ``name`` is
-        the real track title rather than the source wrapper name.
+        ``transfer_queue``) expect; for a standard player-backed queue that
+        value equals ``PlayerBrief.player_id``. For a queue fed by an external
+        plugin source (Connect / AirPlay / Ynison), the current item's ``name``
+        is the real track title rather than the source wrapper name.
 
         :param player_id: Player identifier from ``PlayerBrief.player_id``.
         :param include_items: How many items to materialise. Clamped to the
@@ -197,8 +198,14 @@ def build_queue_server(  # noqa: PLR0915 -- one sub-server registers all queue t
         :param items_from_current: When ``True``, fetch ``items`` from
             ``current_index`` rather than the queue start. ``items_start_index``
             in the response reflects the offset used.
+        :param queue_id: Convenience alias for ``player_id`` when an agent
+            passes the queue identifier instead. Supply one of the two;
+            ignored when ``player_id`` is given.
         """
-        queue = mass.player_queues.get_active_queue(player_id)
+        target = player_id or queue_id
+        if not target:
+            raise ToolError("Provide player_id (from PlayerBrief.player_id) or queue_id.")
+        queue = mass.player_queues.get_active_queue(target)
         if queue is None:
             return None
         limit = min(max(include_items, 0), MAX_QUEUE_ITEMS)
