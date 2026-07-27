@@ -13,7 +13,7 @@ import asyncio
 import logging
 import secrets
 from typing import TYPE_CHECKING, Any
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 from ._revoke import list_user_tokens, revoke_token_by_id
 
@@ -36,7 +36,12 @@ async def handle_open_connect_action(
     base_url: str = "",
     session_id: str | None = None,
     external_base_url: str | None = None,
+<<<<<<< ours
 ) -> None:
+=======
+    setup_callback_path: str | None = None,
+) -> str:
+>>>>>>> theirs
     """
     Open the Connect Wizard in the user's browser via MA's auth-session signal.
 
@@ -55,6 +60,8 @@ async def handle_open_connect_action(
         optional ingress path prefix) to prepend to the wizard URL. When
         omitted, falls back to a path-only URL that the browser resolves
         against its own origin.
+    :param setup_callback_path: Optional setup-flow callback path to signal
+        after the wizard generates a client configuration.
     """
     del base_url  # kept in signature for backwards compatibility; ignored
 
@@ -89,13 +96,24 @@ async def handle_open_connect_action(
         # Path-only fallback — browser resolves against its own origin. Works
         # for direct access; loses any reverse-proxy / ingress path prefix.
         url = f"{mount}/connect"
+    fragment_params: list[str] = []
     if bootstrap:
         # Carry the bootstrap in the URL fragment, not the query string.
         # Fragments are never sent to the server (so they don't appear in
         # aiohttp access logs or any reverse-proxy log), and they're not
         # sent in the Referer header on cross-origin navigation. Query
         # strings were leaking the bootstrap into both.
-        url = f"{url}#bootstrap={quote(bootstrap, safe='')}"
+        fragment_params.append(f"bootstrap={quote(bootstrap, safe='')}")
+    if setup_callback_path is not None:
+        if not setup_callback_path.startswith("/setup_flow/callback/"):
+            msg = f"Invalid setup callback path: {setup_callback_path}"
+            raise ValueError(msg)
+        if external_base_url:
+            ingress_prefix = urlsplit(external_base_url).path.rstrip("/")
+            setup_callback_path = f"{ingress_prefix}{setup_callback_path}"
+        fragment_params.append(f"setup_callback={quote(setup_callback_path, safe='')}")
+    if fragment_params:
+        url = f"{url}#{'&'.join(fragment_params)}"
 
     object_id = session_id or f"mcp-connect-{secrets.token_urlsafe(8)}"
     _signal_auth_session(mass, session_id=object_id, url=url)
