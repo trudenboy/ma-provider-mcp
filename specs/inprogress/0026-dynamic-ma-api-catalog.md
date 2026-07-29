@@ -50,6 +50,10 @@ bounded responses.
    rejected while the MCP endpoint itself remains operational.
 10. If the MA registry contract is incompatible, only the dynamic catalog is
     disabled; health diagnostics explain the structural failure.
+11. The provider remains compatible with MA's current instance-owned config
+    API and guided setup flow: config actions use the dedicated invoke command,
+    the Connect Wizard returns a one-shot URL, and setup completes through an
+    ingress-aware callback after a client configuration is generated.
 
 ## Test Plan
 
@@ -66,6 +70,8 @@ bounded responses.
 - A machine-readable parity matrix covers every removed curated tool and runs
   representative profile/recipe parity cases for each namespace.
 - Existing functional tests are retargeted to canonical names and recipes.
+- Current upstream setup-flow, config-action, and inlined-layout compatibility
+  tests are reverse-synced from MA PRs #5017, #5030, and #5072.
 - The full pytest, Ruff, mypy, pre-commit and upstream-copy gates pass.
 
 ## UX Flows

@@ -26,6 +26,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The opt-in `meta_tool_discovery` setting is replaced by independent
   `dynamic_api_read`, `dynamic_api_control`, `dynamic_api_write`, and
   `dynamic_api_system` gates.
+- Provider configuration now follows MA's instance-owned config contract;
+  config actions use `invoke_provider_config_action` and the Connect Wizard
+  returns a one-shot URL instead of the retired `AUTH_SESSION` event.
+- New installations use MA's guided setup flow. The Connect Wizard keeps the
+  flow open until a client configuration is generated, including behind a
+  Home Assistant ingress prefix.
+
+### Fixed
+- Provider sources and tests remain compatible with the current inlined
+  `music-assistant/server` layout and its strict type checks.
 
 ## [0.17.0] — 2026-07-16
 

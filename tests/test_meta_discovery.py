@@ -13,6 +13,7 @@ from provider.constants import (
     CONF_DYNAMIC_API_READ,
     CONF_DYNAMIC_API_SYSTEM,
     CONF_DYNAMIC_API_WRITE,
+    DEFAULT_MOUNT_PATH,
     HOT_SWAPPABLE_KEYS,
 )
 from provider.dynamic_api import DynamicEntry, DynamicRisk
@@ -69,7 +70,7 @@ async def test_listing_is_permanently_collapsed() -> None:
 
 def test_dynamic_config_entries_replace_meta_toggle(mock_mass: Any) -> None:
     """Four risk gates replace the former discovery-mode switch."""
-    entries = {entry.key: entry for entry in build_config_entries(mock_mass, {})}
+    entries = {entry.key: entry for entry in build_config_entries(mock_mass, DEFAULT_MOUNT_PATH)}
     keys = {
         CONF_DYNAMIC_API_READ,
         CONF_DYNAMIC_API_CONTROL,
