@@ -10,6 +10,10 @@ from typing import TYPE_CHECKING, Any
 from .constants import (
     CONF_DEBUG_EVENT_BUFFER_CAPACITY,
     CONF_DEBUG_EVENTS,
+    CONF_DYNAMIC_API_CONTROL,
+    CONF_DYNAMIC_API_READ,
+    CONF_DYNAMIC_API_SYSTEM,
+    CONF_DYNAMIC_API_WRITE,
     CONF_ENFORCE_AUDIENCE,
     CONF_EXTRA_ALLOWED_ORIGINS,
     CONF_LEAN_ADMIN_SCHEMA,
@@ -143,14 +147,11 @@ class MCPServerRuntime:
             ``new`` here would always be empty — the caller's set is the only
             reliable signal.
         """
-        from .constants import CONF_META_TOOL_DISCOVERY, PERMISSION_KEYS  # noqa: PLC0415
+        from .constants import DYNAMIC_API_KEYS, PERMISSION_KEYS  # noqa: PLC0415
 
         # ``set().issubset(...)`` is True, so an empty ``changed_keys`` (no-op
         # call) classifies as permission-only and skips a pointless restart.
-        # The meta-discovery flag rides the same path: the transform reads it
-        # through a closure over ``_config``, so assigning the new config below
-        # is the entire swap.
-        permission_only = changed_keys.issubset(PERMISSION_KEYS | {CONF_META_TOOL_DISCOVERY})
+        permission_only = changed_keys.issubset(PERMISSION_KEYS | DYNAMIC_API_KEYS)
 
         self._config = new_config
         if permission_only and hasattr(self, "_allowed_tags"):
@@ -201,12 +202,10 @@ class MCPServerRuntime:
         mcp = FastMCP(
             name="music-assistant",
             instructions=(
-                "Music Assistant MCP server: control playback, browse the library, "
-                "manage queues, and inspect players. Tools are namespaced by category "
-                "(library_, queue_, playback_, players_, playlists_, volume_, media_, "
-                "metadata_). Resources expose URI-addressable views: library://artist/{id}, "
-                "library://album/{id}, library://track/{id}, library://playlist/{id}, "
-                "player://{id}, queue://{id}."
+                "Music Assistant MCP server with on-demand discovery. Use search_tools, "
+                "then get_tool_schema for one canonical ma_api:* or mcp_api:* command, "
+                "then execute it through call_tool. Responses default to compact mode. "
+                "Resources expose library://, player:// and queue:// views."
             ),
             auth=verifier,
         )
@@ -332,15 +331,34 @@ class MCPServerRuntime:
         self._event_buffer.start()
 
     def _register_meta_discovery(self, mcp: Any) -> None:
-        """Install the opt-in simplified tool discovery (meta-tool) layer."""
-        from .constants import CONF_META_TOOL_DISCOVERY  # noqa: PLC0415
+        """Install the permanent dynamic command discovery layer."""
+        from fastmcp.server.dependencies import get_access_token  # noqa: PLC0415
+
+        from .dynamic_api import DynamicAPIAdapter, DynamicPolicy  # noqa: PLC0415
         from .meta_discovery import register_meta_discovery  # noqa: PLC0415
 
+        def config_bool(key: str, *, default: bool = False) -> bool:
+            """Read booleans while preserving defaults for older installations."""
+            value = self._config.get_value(key)
+            return default if value is None else bool(value)
+
+        adapter = DynamicAPIAdapter(
+            self._mass,
+            policy_provider=lambda: DynamicPolicy(
+                read=config_bool(CONF_DYNAMIC_API_READ, default=True),
+                control=config_bool(CONF_DYNAMIC_API_CONTROL),
+                write=config_bool(CONF_DYNAMIC_API_WRITE),
+                system=config_bool(CONF_DYNAMIC_API_SYSTEM),
+            ),
+            auth_required_provider=lambda: config_bool(CONF_REQUIRE_AUTH, default=True),
+            confirmation_provider=lambda: config_bool(CONF_REQUIRE_CONFIRMATION, default=True),
+            token_provider=get_access_token,
+        )
         register_meta_discovery(
             mcp,
-            enabled=lambda: bool(self._config.get_value(CONF_META_TOOL_DISCOVERY)),
             allowed_tags_provider=lambda: self._allowed_tags,
             lookup_component_tags=build_tag_lookup(mcp),
+            dynamic_adapter=adapter,
         )
 
     def _apply_tag_filter(self, mcp: Any, allowed: set[Any]) -> None:

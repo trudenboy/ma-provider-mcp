@@ -28,8 +28,10 @@ _HAVE_MA_MODELS = importlib.util.find_spec("music_assistant_models") is not None
     reason="needs fastmcp + music_assistant + music_assistant_models installed",
 )
 @pytest.mark.asyncio
-async def test_runtime_lists_namespaced_tools(mock_mass: MagicMock, mock_config: MagicMock) -> None:
-    """``MCPServerRuntime`` builds without errors and exposes namespaced tools."""
+async def test_runtime_lists_permanent_meta_tools(
+    mock_mass: MagicMock, mock_config: MagicMock
+) -> None:
+    """``MCPServerRuntime`` exposes only the permanent discovery surface."""
     from fastmcp import Client  # noqa: PLC0415
 
     from provider.server import MCPServerRuntime  # noqa: PLC0415
@@ -43,11 +45,7 @@ async def test_runtime_lists_namespaced_tools(mock_mass: MagicMock, mock_config:
         async with Client(runtime._mcp) as client:
             tools = await client.list_tools()
             names = {t.name for t in tools}
-            # 4 query tags enabled by default → tools from library + queue + players + metadata
-            assert any(name.startswith("library_") for name in names), names
-            assert any(name.startswith("queue_") for name in names), names
-            # Mutation-only namespaces should not appear under default config
-            assert not any(name.startswith("volume_") for name in names), names
+            assert names == {"search_tools", "get_tool_schema", "call_tool"}
     finally:
         await runtime.stop()
 

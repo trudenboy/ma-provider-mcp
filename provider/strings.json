@@ -32,9 +32,21 @@
       "label": "Lean schemas for Config/Debug tools",
       "description": "Omit machine-readable output schemas from the Config and Debug tools to shrink the per-request context they cost. Leave off for Claude clients (which defer tool schemas anyway); enable only for MCP hosts that load every schema up-front. Tool results are unaffected — only the structured-output type hints are dropped."
     },
-    "meta_tool_discovery": {
-      "label": "Simplified tool discovery",
-      "description": "Expose only three meta-tools (search_tools, get_tool_schema, call_tool) instead of the full tool list. Agents discover capabilities on demand via ranked search, fetch one schema at a time, and execute through the call_tool proxy — cutting the per-session context cost for MCP hosts that load every tool schema up-front. Permission flags and destructive-operation confirmation still apply to proxied calls. Leave off for hosts that defer tool schemas natively (e.g. Claude)."
+    "dynamic_api_read": {
+      "label": "Dynamic API: read commands",
+      "description": "Expose read-only commands discovered from Music Assistant's live API registry. Enabled by default. The client still sees only the three compact discovery tools."
+    },
+    "dynamic_api_control": {
+      "label": "Dynamic API: playback and device control",
+      "description": "Expose live MA commands that control players, queues and playback. Disabled by default."
+    },
+    "dynamic_api_write": {
+      "label": "Dynamic API: library and configuration writes",
+      "description": "Expose live MA commands that mutate library or user data. Disabled by default and subject to destructive-operation confirmation."
+    },
+    "dynamic_api_system": {
+      "label": "Dynamic API: system administration",
+      "description": "Expose system, authentication, diagnostics, task and configuration commands. Disabled by default; every invocation requires client confirmation."
     },
     "trust_forwarded_proto": {
       "label": "Trust reverse-proxy forwarded scheme",
@@ -167,7 +179,8 @@
     "edit_permissions": "Edit Permissions",
     "delete_permissions": "Delete Permissions",
     "mcp_resources": "MCP Resources",
-    "mcp_config": "Config"
+    "mcp_config": "Config",
+    "dynamic_api": "Dynamic MA API"
   },
   "manifest": {
     "description": "Exposes Music Assistant as a Model Context Protocol (MCP) server for Claude, Codex, and other MCP-aware LLM clients."

@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 async def test_config_server_mounted_and_visible(
     mock_mass: MagicMock, mock_config: MagicMock
 ) -> None:
-    """Config sub-server is mounted and tools are visible through the root MCP."""
+    """Config sub-server stays internal behind the permanent meta surface."""
     mock_config.get_value.side_effect = lambda key, default=None: {
         "config_read": True,
         "config_write_provider": True,
@@ -24,8 +24,7 @@ async def test_config_server_mounted_and_visible(
 
         async with Client(runtime._mcp) as client:
             names = {t.name for t in await client.list_tools()}
-        assert "config_get_provider" in names
-        assert "config_set_provider_value" in names
+        assert names == {"search_tools", "get_tool_schema", "call_tool"}
     finally:
         await runtime.stop()
 
@@ -50,6 +49,6 @@ async def test_config_secret_flag_threaded(mock_mass: MagicMock, mock_config: Ma
 
         async with Client(runtime._mcp) as client:
             names = {t.name for t in await client.list_tools()}
-        assert "config_set_provider_value" in names
+        assert names == {"search_tools", "get_tool_schema", "call_tool"}
     finally:
         await runtime.stop()
