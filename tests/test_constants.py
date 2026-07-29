@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from provider.constants import (
-    CONF_META_TOOL_DISCOVERY,
+    DYNAMIC_API_KEYS,
     HOT_SWAPPABLE_KEYS,
     PERMISSION_KEYS,
     RESOURCE_KEYS,
@@ -11,7 +11,7 @@ from provider.constants import (
 
 
 def test_permission_keys_count() -> None:
-    """26 permission keys: 4 verbs x 4 categories + 5 debug tags + 5 config tags."""
+    """Twenty-six curated permission keys map one-to-one onto tags."""
     assert len(PERMISSION_KEYS) == 26
 
 
@@ -20,9 +20,9 @@ def test_resource_keys_count() -> None:
     assert len(RESOURCE_KEYS) == 3
 
 
-def test_hot_swappable_includes_perm_resource_and_meta_keys() -> None:
+def test_hot_swappable_includes_permission_and_resource_keys() -> None:
     """Hot-swappable set is exactly this union — anything else triggers a runtime restart."""
-    assert PERMISSION_KEYS | RESOURCE_KEYS | {CONF_META_TOOL_DISCOVERY} == HOT_SWAPPABLE_KEYS
+    assert PERMISSION_KEYS | RESOURCE_KEYS | DYNAMIC_API_KEYS == HOT_SWAPPABLE_KEYS
 
 
 def test_no_overlap_perm_resource() -> None:

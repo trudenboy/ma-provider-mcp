@@ -5,6 +5,45 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.18.0] — 2026-07-29
+
+### Added
+- Dynamic discovery of Music Assistant's live API command registry under
+  canonical `ma_api:*` names, including MA-native authentication, scope
+  checks, impersonation context, independent risk gates, confirmation, and
+  bounded compact/full responses.
+- Sixteen `mcp_api:*` recipes retain composite provider-specific behavior;
+  declarative profiles and recipes cover all 86 curated operations, including
+  the recommendation-row API from provider PR #199.
+- Command profiles now provide executable compatibility aliases, compact
+  projectors, risk overrides and MCP annotations while schemas remain derived
+  from the live MA handler signatures.
+
+### Changed
+- The MCP tool surface is permanently reduced to `search_tools`,
+  `get_tool_schema`, and `call_tool`. Full schemas are fetched only for the
+  selected command, minimizing client context usage while newly registered MA
+  domains become available without provider changes or restarts.
+- Former curated public names are removed. They remain search aliases and
+  produce migration hints pointing to their canonical replacement.
+- The opt-in `meta_tool_discovery` setting is replaced by independent
+  `dynamic_api_read`, `dynamic_api_control`, `dynamic_api_write`, and
+  `dynamic_api_system` gates.
+- Provider configuration now follows MA's instance-owned config contract;
+  config actions use `invoke_provider_config_action` and the Connect Wizard
+  returns a one-shot URL instead of the retired `AUTH_SESSION` event.
+- New installations use MA's guided setup flow. The Connect Wizard keeps the
+  flow open until a client configuration is generated, including behind a
+  Home Assistant ingress prefix.
+
+### Fixed
+- Provider sources and tests remain compatible with the current inlined
+  `music-assistant/server` layout and its strict type checks.
+- Recipe operations preserve their individual required arguments, permission
+  tags and MA scopes, and execute inside MA's request authentication context.
+- Compact response limits now cover nested collections; registry contract drift
+  is isolated to the dynamic MA catalog and reported by the debug health summary.
+
 ## [0.17.0] — 2026-07-16
 
 ### Added

@@ -3,13 +3,13 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 from fastmcp import Context, FastMCP
 from mcp.types import ToolAnnotations
 from music_assistant_models.enums import MediaType
 
-from ..models import RecommendationFolderBrief, TrackBrief
+from ..models import RecommendationFolderBrief, RecommendationItemBrief, TrackBrief
 from ..tags import Tag
 from ._common import TIMEOUT_QUERY, page_args, resolve_typed_uri, to_brief_track
 
@@ -33,6 +33,7 @@ def build_metadata_server(mass: MusicAssistant) -> FastMCP:
     sub: FastMCP = FastMCP(name="metadata")
 
     @sub.tool(
+        name="recommendations",
         tags={Tag.QUERY_METADATA},
         annotations=ToolAnnotations(
             title="Recommendations",
@@ -43,26 +44,52 @@ def build_metadata_server(mass: MusicAssistant) -> FastMCP:
         ),
         timeout=TIMEOUT_QUERY,
     )  # type: ignore[untyped-decorator, unused-ignore]
-    async def recommendations(
+    async def recommendation_rows(
         ctx: Context | None = None,
     ) -> list[RecommendationFolderBrief]:
         """
-        Return Music Assistant's curated recommendation folders.
+        Return Music Assistant's curated recommendation rows, without items.
 
-        Each ``RecommendationFolderBrief`` has a ``name`` and a list of
-        ``item_uris`` that can be passed to ``play_media`` or to
-        ``get_track_by_uri`` to inspect further.
+        Each row has a ``name`` plus the ``provider`` / ``item_id`` pair;
+        pass both to ``recommendation_items`` to fetch the row's items.
         """
         if ctx is not None:
             await ctx.info("Fetching MA curated recommendations…")
-        folders = await mass.music.recommendations()
-        result: list[RecommendationFolderBrief] = []
-        for folder in folders:
-            folder_items = getattr(folder, "items", None) or []
+        recommendations = cast("Any", mass.music.recommendations)
+        folders = await recommendations.get_recommendations()
+        return [
+            RecommendationFolderBrief(
+                name=str(getattr(folder, "name", "")),
+                provider=str(getattr(folder, "provider", "")),
+                item_id=str(getattr(folder, "item_id", "")),
+            )
+            for folder in folders
+        ]
+
+    @sub.tool(
+        tags={Tag.QUERY_METADATA},
+        annotations=_readonly("Recommendation items"),
+        timeout=TIMEOUT_QUERY,
+    )  # type: ignore[untyped-decorator, unused-ignore]
+    async def recommendation_items(provider: str, item_id: str) -> list[RecommendationItemBrief]:
+        """
+        Return the items of a single recommendation row.
+
+        :param provider: Row provider returned by ``recommendations``.
+        :param item_id: Row identifier returned by ``recommendations``.
+        """
+        recommendations = cast("Any", mass.music.recommendations)
+        items = await recommendations.get_recommendation_items(provider, item_id)
+        result: list[RecommendationItemBrief] = []
+        for item in items:
+            media_type = getattr(item, "media_type", None)
             result.append(
-                RecommendationFolderBrief(
-                    name=str(getattr(folder, "name", "")),
-                    item_uris=[str(getattr(it, "uri", "")) for it in folder_items],
+                RecommendationItemBrief(
+                    uri=str(getattr(item, "uri", "")),
+                    name=str(getattr(item, "name", "")),
+                    media_type=(
+                        str(getattr(media_type, "value", media_type)) if media_type else None
+                    ),
                 )
             )
         return result

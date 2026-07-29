@@ -152,3 +152,25 @@ async def test_health_summary_skips_log_read_when_logs_disabled(
         result = await client.call_tool("debug_health_summary", {})
     assert result.data.log_errors_last_5min is None
     assert "DEBUG_LOGS" in result.data.disabled_capabilities
+
+
+async def test_health_summary_includes_dynamic_catalog_diagnostics(mock_mass: MagicMock) -> None:
+    """Registry drift diagnostics are available from the normal triage entry point."""
+    diagnostics = {
+        "available": False,
+        "registry_type": "list",
+        "last_error": "mass.command_handlers is not a mapping",
+    }
+    mcp = FastMCP(name="test")
+    mcp.mount(
+        build_debug_server(
+            mock_mass,
+            require_confirmation=False,
+            logs_enabled=False,
+            dynamic_diagnostics_provider=lambda: diagnostics,
+        ),
+        namespace="debug",
+    )
+    async with Client(mcp) as client:
+        result = await client.call_tool("debug_health_summary", {})
+    assert result.data.dynamic_catalog == diagnostics

@@ -1100,6 +1100,7 @@ _DEBUG_CLASSES = [
             "events_per_min_by_type",
             "log_errors_last_5min",
             "disabled_capabilities",
+            "dynamic_catalog",
         },
     ),
 ]

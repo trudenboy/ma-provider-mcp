@@ -131,15 +131,13 @@ async def test_permission_only_change_hot_swaps(
 
 
 @pytest.mark.asyncio
-async def test_meta_discovery_toggle_hot_swaps(
+async def test_dynamic_api_risk_gate_hot_swaps(
     mock_mass: MagicMock, mock_config: MagicMock
 ) -> None:
     """
-    Toggling meta_tool_discovery must NOT restart the runtime.
+    Toggling a dynamic API risk gate must not restart the runtime.
 
-    The transform reads the flag through a closure over ``_config``, so
-    assigning the new config is the whole hot-swap; a restart would drop
-    live client sessions for a listing-only change.
+    The adapter reads flags through a closure over ``_config`` on each request.
     """
     from provider.server import MCPServerRuntime  # noqa: PLC0415
 
@@ -148,7 +146,7 @@ async def test_meta_discovery_toggle_hot_swaps(
     runtime.stop = AsyncMock()
     runtime.start = AsyncMock()
 
-    await runtime.apply_permission_change(mock_config, changed_keys={"meta_tool_discovery"})
+    await runtime.apply_permission_change(mock_config, changed_keys={"dynamic_api_control"})
 
     runtime.stop.assert_not_awaited()
     runtime.start.assert_not_awaited()
