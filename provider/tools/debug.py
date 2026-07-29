@@ -15,6 +15,7 @@ import asyncio
 import importlib.metadata
 import logging
 import time
+from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any
 
 from fastmcp import Context, FastMCP
@@ -260,6 +261,7 @@ def build_debug_server(
     logs_enabled: bool = True,
     reload_lock: asyncio.Lock | None = None,
     lean_schema: bool = False,
+    dynamic_diagnostics_provider: Callable[[], Mapping[str, Any]] | None = None,
 ) -> FastMCP:
     """
     Build the ``debug`` sub-server.
@@ -278,6 +280,8 @@ def build_debug_server(
         (e.g. test instances) never serialise against one another.
     :param lean_schema: When True, tools omit their ``outputSchema`` to shrink
         the namespace's context footprint for hosts without tool-search.
+    :param dynamic_diagnostics_provider: Optional live dynamic-catalog health
+        snapshot used to diagnose MA registry drift without disabling debug.
     """
     sub = FastMCP(name="debug")
     target = lean_schema_view(sub) if lean_schema else sub
@@ -291,7 +295,13 @@ def build_debug_server(
         require_confirmation=require_confirmation,
         reload_lock=reload_lock if reload_lock is not None else asyncio.Lock(),
     )
-    _register_health_tool(target, mass, buffer=event_buffer, logs_enabled=logs_enabled)
+    _register_health_tool(
+        target,
+        mass,
+        buffer=event_buffer,
+        logs_enabled=logs_enabled,
+        dynamic_diagnostics_provider=dynamic_diagnostics_provider,
+    )
     return sub
 
 
@@ -592,7 +602,12 @@ def _register_providers_tools(sub: FastMCP, mass: MusicAssistant) -> None:
 
 
 def _register_health_tool(
-    sub: FastMCP, mass: MusicAssistant, *, buffer: EventBuffer | None, logs_enabled: bool
+    sub: FastMCP,
+    mass: MusicAssistant,
+    *,
+    buffer: EventBuffer | None,
+    logs_enabled: bool,
+    dynamic_diagnostics_provider: Callable[[], Mapping[str, Any]] | None,
 ) -> None:
     @sub.tool(
         tags={Tag.DEBUG_PROVIDERS},
@@ -671,6 +686,11 @@ def _register_health_tool(
             except Exception:
                 disabled_capabilities.append("DEBUG_LOGS")
 
+        dynamic_catalog = (
+            dict(dynamic_diagnostics_provider())
+            if dynamic_diagnostics_provider is not None
+            else None
+        )
         return HealthSummary(
             providers_loaded=loaded,
             providers_disabled=disabled,
@@ -682,6 +702,7 @@ def _register_health_tool(
             events_per_min_by_type=events_per_min,
             log_errors_last_5min=log_errors,
             disabled_capabilities=disabled_capabilities,
+            dynamic_catalog=dynamic_catalog,
         )
 
 

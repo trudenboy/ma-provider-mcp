@@ -374,6 +374,7 @@ class HealthSummary:
     events_per_min_by_type: dict[str, float] | None
     log_errors_last_5min: int | None
     disabled_capabilities: list[str]
+    dynamic_catalog: dict[str, Any] | None = None
 
 
 # ---- Config namespace response dataclasses (spec 0006) ----

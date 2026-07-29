@@ -16,7 +16,15 @@ from typing import TYPE_CHECKING, Any, Union, get_args, get_origin
 from fastmcp.exceptions import ToolError
 from pydantic import TypeAdapter
 
-from .command_profiles import CURATED_RECIPE_SOURCES, aliases_by_command, legacy_migrations
+from .command_profiles import (
+    COMMAND_PROFILES,
+    CURATED_RECIPE_SCOPES,
+    CURATED_RECIPE_SOURCES,
+    CommandProfile,
+    aliases_by_command,
+    legacy_migrations,
+)
+from .middleware import tags_visible
 from .tools._common import confirm_or_raise
 
 if TYPE_CHECKING:
@@ -62,6 +70,9 @@ class DynamicEntry:
     allow_impersonation: bool
     handler: Any
     search_aliases: tuple[str, ...] = ()
+    output_schema: dict[str, Any] | None = None
+    annotations: dict[str, bool] = dataclasses.field(default_factory=dict)
+    profile: CommandProfile | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,6 +94,19 @@ class RecipeBinding:
     """A provider-local recipe backed by one or more former curated tools."""
 
     tools: Mapping[str, Tool]
+    scopes: Mapping[str, Any]
+
+
+@dataclass(slots=True)
+class DynamicCatalogDiagnostics:
+    """Last live-registry inspection state exposed through debug health."""
+
+    available: bool = False
+    registry_type: str = "missing"
+    handlers_seen: int = 0
+    handlers_visible: int = 0
+    incompatible_handlers: tuple[str, ...] = ()
+    last_error: str | None = None
 
 
 class DynamicAPIAdapter:
@@ -97,6 +121,7 @@ class DynamicAPIAdapter:
         confirmation_provider: Callable[[], bool],
         token_provider: Callable[[], AccessToken | None],
         scope_checker: Callable[[Any, Any], bool] | None = None,
+        allowed_tags_provider: Callable[[], set[str]] | None = None,
     ) -> None:
         """Initialise the adapter with request-aware policy providers."""
         self.mass = mass
@@ -105,8 +130,14 @@ class DynamicAPIAdapter:
         self._confirmation_provider = confirmation_provider
         self._token_provider = token_provider
         self._scope_checker = scope_checker or self._default_scope_checker
+        self._allowed_tags_provider = allowed_tags_provider or (lambda: set())
         self._curated_tools: dict[str, Tool] = {}
         self._entry_cache: dict[str, tuple[int, DynamicEntry]] = {}
+        self._diagnostics = DynamicCatalogDiagnostics()
+
+    def diagnostics(self) -> dict[str, Any]:
+        """Return a JSON-safe snapshot of dynamic-catalog compatibility."""
+        return dataclasses.asdict(self._diagnostics)
 
     def ingest_curated(self, tools: Sequence[Tool]) -> None:
         """Capture internal curated executors before the public surface collapses."""
@@ -123,21 +154,32 @@ class DynamicAPIAdapter:
         if not self._auth_required_provider() or auth is None:
             return []
         user = auth[1] if auth is not None else None
+        policy = self._policy_provider()
         handlers = getattr(self.mass, "command_handlers", {})
         if not isinstance(handlers, Mapping):
-            return []
+            recipes = self._recipe_entries(policy, user)
+            self._diagnostics = DynamicCatalogDiagnostics(
+                registry_type=type(handlers).__name__,
+                handlers_visible=len(recipes),
+                last_error="mass.command_handlers is not a mapping",
+            )
+            return sorted(recipes, key=lambda entry: entry.name)
 
-        policy = self._policy_provider()
         entries: list[DynamicEntry] = []
         live_commands: set[str] = set()
+        incompatible: list[str] = []
         for command, handler in sorted(handlers.items()):
             if not self._handler_is_discoverable(command, handler):
+                incompatible.append(str(command))
                 continue
             live_commands.add(command)
             scope = getattr(handler, "required_scope", None)
             if user is not None and scope is not None and not self._scope_checker(user, scope):
                 continue
+            profile = COMMAND_PROFILES.get(command)
             risk = self._classify_risk(command, scope)
+            if profile is not None and profile.risk_override is not None:
+                risk = DynamicRisk(profile.risk_override)
             if policy.allows(risk):
                 cached = self._entry_cache.get(command)
                 if cached is None or cached[0] != id(handler):
@@ -149,7 +191,17 @@ class DynamicAPIAdapter:
             for command, cached in self._entry_cache.items()
             if command in live_commands
         }
-        entries.extend(self._recipe_entries(policy))
+        entries.extend(self._recipe_entries(policy, user))
+        self._diagnostics = DynamicCatalogDiagnostics(
+            available=True,
+            registry_type=type(handlers).__name__,
+            handlers_seen=len(handlers),
+            handlers_visible=len(entries),
+            incompatible_handlers=tuple(sorted(incompatible)),
+            last_error=(
+                f"{len(incompatible)} incompatible handler(s) skipped" if incompatible else None
+            ),
+        )
         return sorted(entries, key=lambda entry: entry.name)
 
     async def get_visible_entry(self, name: str) -> DynamicEntry | None:
@@ -179,7 +231,7 @@ class DynamicAPIAdapter:
         await self._confirm(entry, ctx, impersonating=impersonating)
 
         if isinstance(entry.handler, RecipeBinding):
-            result = await self._execute_recipe(entry.handler, arguments)
+            result = await self._execute_recipe(entry.handler, arguments, auth)
             return self._bounded_envelope(
                 name,
                 result,
@@ -189,6 +241,11 @@ class DynamicAPIAdapter:
             )
 
         call_arguments = dict(arguments)
+        if entry.profile is not None:
+            try:
+                call_arguments = entry.profile.convert_arguments(call_arguments)
+            except ValueError as exc:
+                raise ToolError(str(exc)) from exc
         impersonated = call_arguments.pop("user", None) if entry.allow_impersonation else None
         try:
             from music_assistant.helpers.api import parse_arguments  # noqa: PLC0415
@@ -217,6 +274,7 @@ class DynamicAPIAdapter:
             response_mode=response_mode,
             fields=fields,
             max_items=max_items,
+            profile=entry.profile,
         )
 
     async def _authentication(self) -> tuple[AccessToken, Any] | None:
@@ -266,43 +324,66 @@ class DynamicAPIAdapter:
     def _compile_entry(cls, command: str, handler: Any, risk: DynamicRisk) -> DynamicEntry:
         """Compile a live MA handler into a catalog entry."""
         scope = getattr(handler, "required_scope", None)
+        profile = COMMAND_PROFILES.get(command)
+        annotations = dict(profile.annotations) if profile is not None else cls._annotations(risk)
         return DynamicEntry(
             name=f"ma_api:{command}",
             command=command,
             description=cls._description(handler.target, command),
-            input_schema=cls._input_schema(handler),
+            input_schema=cls._input_schema(handler, profile),
             risk=risk,
             required_scope=str(getattr(scope, "value", scope)) if scope is not None else None,
             allow_impersonation=bool(getattr(handler, "allow_impersonation", False)),
             handler=handler,
-            search_aliases=_ALIASES_BY_COMMAND.get(command, ()),
+            search_aliases=(
+                profile.search_aliases
+                if profile is not None
+                else _ALIASES_BY_COMMAND.get(command, ())
+            ),
+            output_schema=cls._output_schema(handler),
+            annotations=annotations,
+            profile=profile,
         )
 
-    def _recipe_entries(self, policy: DynamicPolicy) -> list[DynamicEntry]:
+    def _recipe_entries(self, policy: DynamicPolicy, user: Any) -> list[DynamicEntry]:
         """Compile available curated executors into the sixteen recipe entries."""
         entries: list[DynamicEntry] = []
+        allowed_tags = self._allowed_tags_provider()
         for name, sources in CURATED_RECIPE_SOURCES.items():
-            tools = {
-                source: self._curated_tools[source]
-                for source in sources
-                if source in self._curated_tools
-            }
-            if len(tools) != len(sources):
+            tools: dict[str, Tool] = {}
+            scopes: dict[str, Any] = {}
+            for source in sources:
+                tool = self._curated_tools.get(source)
+                if tool is None:
+                    continue
+                tags = {str(tag) for tag in (getattr(tool, "tags", None) or set())}
+                if not tags_visible(tags, allowed_tags):
+                    continue
+                scope = self._resolve_scope(CURATED_RECIPE_SCOPES[source])
+                if user is not None and not self._scope_checker(user, scope):
+                    continue
+                tools[source] = tool
+                scopes[source] = scope
+            if not tools:
                 continue
             risk = self._recipe_risk(name)
             if not policy.allows(risk):
                 continue
+            required_scopes = sorted(
+                {str(getattr(scope, "value", scope)) for scope in scopes.values()}
+            )
             entries.append(
                 DynamicEntry(
                     name=name,
                     command=name.split(":", 1)[1],
                     description=self._recipe_description(name, tools),
-                    input_schema=self._recipe_schema(tools),
+                    input_schema=self._recipe_schema(tools, scopes),
                     risk=risk,
-                    required_scope=None,
+                    required_scope=required_scopes[0] if len(required_scopes) == 1 else None,
                     allow_impersonation=False,
-                    handler=RecipeBinding(tools),
+                    handler=RecipeBinding(tools, scopes),
                     search_aliases=tuple(sorted(tools)),
+                    annotations=self._annotations(risk),
                 )
             )
         return entries
@@ -325,60 +406,103 @@ class DynamicAPIAdapter:
         return f"Provider recipe {name.split(':', 1)[1]}. Operations: {operations}."
 
     @staticmethod
-    def _recipe_schema(tools: Mapping[str, Tool]) -> dict[str, Any]:
-        """Merge source schemas and add an operation discriminator when needed."""
-        properties: dict[str, Any] = {}
-        required_by_tool: list[set[str]] = []
-        for tool in tools.values():
-            tool_schema = tool.parameters or {}
-            properties.update(tool_schema.get("properties", {}))
-            required_by_tool.append(set(tool_schema.get("required", [])))
-        schema: dict[str, Any] = {
-            "type": "object",
-            "properties": properties,
-            "additionalProperties": False,
-        }
+    def _recipe_schema(tools: Mapping[str, Tool], scopes: Mapping[str, Any]) -> dict[str, Any]:
+        """Preserve per-operation required arguments with discriminator branches."""
         if len(tools) == 1:
-            required = required_by_tool[0]
-        else:
-            operations = [source.split("_", 1)[1] for source in tools]
-            schema["properties"] = {
-                "operation": {"type": "string", "enum": operations},
-                **properties,
-            }
-            required = {"operation"}
-        if required:
-            schema["required"] = sorted(required)
-        return schema
+            source, tool = next(iter(tools.items()))
+            schema = dict(tool.parameters or {})
+            schema["x-required-scope"] = str(getattr(scopes[source], "value", scopes[source]))
+            schema["x-required-tags"] = sorted(
+                str(tag) for tag in (getattr(tool, "tags", None) or set())
+            )
+            return schema
+        branches: list[dict[str, Any]] = []
+        for source, tool in tools.items():
+            operation = source.split("_", 1)[1]
+            tool_schema = tool.parameters or {}
+            properties = dict(tool_schema.get("properties", {}))
+            properties["operation"] = {"type": "string", "const": operation}
+            required = sorted({"operation", *tool_schema.get("required", [])})
+            branches.append(
+                {
+                    "type": "object",
+                    "properties": properties,
+                    "required": required,
+                    "additionalProperties": False,
+                    "x-required-scope": str(getattr(scopes[source], "value", scopes[source])),
+                    "x-required-tags": sorted(
+                        str(tag) for tag in (getattr(tool, "tags", None) or set())
+                    ),
+                }
+            )
+        return {
+            "type": "object",
+            "oneOf": branches,
+            "discriminator": {"propertyName": "operation"},
+        }
 
     @staticmethod
-    async def _execute_recipe(binding: RecipeBinding, arguments: dict[str, Any]) -> Any:
-        """Select and invoke the retained curated executor for a recipe."""
+    def _resolve_scope(value: str) -> Any:
+        """Use MA's current Scope enum when available, retaining dev compatibility."""
+        try:
+            from music_assistant_models.auth import Scope  # noqa: PLC0415
+
+            return Scope(value)
+        except ImportError, ValueError:
+            return value
+
+    @staticmethod
+    def _annotations(risk: DynamicRisk) -> dict[str, bool]:
+        """Return conservative MCP behavior hints for a risk class."""
+        return {
+            "readOnlyHint": risk is DynamicRisk.READ,
+            "destructiveHint": risk in {DynamicRisk.WRITE, DynamicRisk.SYSTEM},
+            "idempotentHint": risk is DynamicRisk.READ,
+            "openWorldHint": False,
+        }
+
+    async def _execute_recipe(
+        self,
+        binding: RecipeBinding,
+        arguments: dict[str, Any],
+        auth: tuple[AccessToken, Any] | None = None,
+    ) -> Any:
+        """Select and invoke a retained executor under MA's auth context."""
         call_arguments = dict(arguments)
         if len(binding.tools) == 1:
-            tool = next(iter(binding.tools.values()))
+            source, tool = next(iter(binding.tools.items()))
         else:
             operation = call_arguments.pop("operation", None)
             by_operation = {
-                source.split("_", 1)[1]: candidate for source, candidate in binding.tools.items()
+                source.split("_", 1)[1]: (source, candidate)
+                for source, candidate in binding.tools.items()
             }
             selected = by_operation.get(str(operation))
             if selected is None:
                 valid = ", ".join(sorted(by_operation))
                 raise ToolError(f"Invalid recipe operation {operation!r}; choose: {valid}")
-            tool = selected
+            source, tool = selected
+        if auth is None:
+            raise ToolError("Authentication is required")
+        if not self._scope_checker(auth[1], binding.scopes[source]):
+            raise ToolError(f"Recipe operation {tool.name!r} is not permitted")
+        context_tokens = self._set_auth_context(auth)
         try:
             result = await tool.run(call_arguments)
         except ToolError:
             raise
         except Exception as exc:
             raise ToolError(f"Recipe operation {tool.name!r} failed: {exc}") from exc
-        if result.is_error:
-            raise ToolError(f"Recipe operation {tool.name!r} failed")
-        structured = result.structured_content
-        if isinstance(structured, dict) and set(structured) == {"result"}:
-            return structured["result"]
-        return structured if structured is not None else result.content
+        else:
+            if result.is_error:
+                raise ToolError(f"Recipe operation {tool.name!r} failed")
+            structured = result.structured_content
+            if isinstance(structured, dict) and set(structured) == {"result"}:
+                return structured["result"]
+            return structured if structured is not None else result.content
+        finally:
+            for variable, token in reversed(context_tokens):
+                variable.reset(token)
 
     @staticmethod
     def _description(target: Callable[..., Any], command: str) -> str:
@@ -388,7 +512,7 @@ class DynamicAPIAdapter:
         return paragraph or f"Music Assistant API command {command}."
 
     @classmethod
-    def _input_schema(cls, handler: Any) -> dict[str, Any]:
+    def _input_schema(cls, handler: Any, profile: CommandProfile | None = None) -> dict[str, Any]:
         """Generate a strict JSON schema from the MA handler signature."""
         properties: dict[str, Any] = {}
         required: list[str] = []
@@ -413,9 +537,36 @@ class DynamicAPIAdapter:
             "properties": properties,
             "additionalProperties": False,
         }
+        alias_requirements: list[dict[str, Any]] = []
+        if profile is not None:
+            for alias, canonical in profile.argument_aliases.items():
+                canonical_schema = properties.get(canonical)
+                if canonical_schema is None:
+                    continue
+                properties[alias] = {
+                    **canonical_schema,
+                    "description": f"Compatibility alias for {canonical!r}.",
+                }
+                if canonical in required:
+                    required.remove(canonical)
+                    alias_requirements.append(
+                        {"anyOf": [{"required": [canonical]}, {"required": [alias]}]}
+                    )
         if required:
             schema["required"] = required
+        if alias_requirements:
+            schema["allOf"] = alias_requirements
         return schema
+
+    @classmethod
+    def _output_schema(cls, handler: Any) -> dict[str, Any] | None:
+        """Generate output metadata from the current handler return annotation."""
+        annotation = handler.type_hints.get(
+            "return", getattr(handler.signature, "return_annotation", inspect.Signature.empty)
+        )
+        if annotation in {inspect.Signature.empty, None, Any} or isinstance(annotation, str):
+            return None
+        return cls._type_schema(annotation)
 
     @staticmethod
     def _is_static_type_hint(annotation: Any) -> bool:
@@ -537,6 +688,7 @@ class DynamicAPIAdapter:
         response_mode: str,
         fields: list[str] | None,
         max_items: int | None,
+        profile: CommandProfile | None = None,
     ) -> dict[str, Any]:
         """Return a deterministic, JSON-safe response inside the mode budget."""
         compact = response_mode == "compact"
@@ -547,11 +699,10 @@ class DynamicAPIAdapter:
         string_cap = _COMPACT_STRING if compact else _FULL_STRING
         raw = cls._json_value_deep(result)
         total_count = len(raw) if isinstance(raw, list) else None
+        if compact and profile is not None:
+            raw = profile.project_compact(raw)
         data = cls._project_fields(raw, fields)
-        truncated = False
-        if isinstance(data, list) and len(data) > item_cap:
-            data = data[:item_cap]
-            truncated = True
+        data, truncated = cls._limit_nested_items(data, item_cap)
         data, value_truncated = cls._truncate_value(data, string_cap, depth=6 if compact else 12)
         truncated |= value_truncated
         envelope: dict[str, Any] = {
@@ -574,6 +725,25 @@ class DynamicAPIAdapter:
             cls._fit_bytes(envelope, byte_cap)
             cls._set_measured_bytes(envelope)
         return envelope
+
+    @classmethod
+    def _limit_nested_items(cls, value: Any, item_cap: int) -> tuple[Any, bool]:
+        """Apply the mode item cap to every nested list, not only the root."""
+        if isinstance(value, list):
+            kept = value[:item_cap]
+            list_nested = [cls._limit_nested_items(item, item_cap) for item in kept]
+            return [item for item, _changed in list_nested], len(value) > item_cap or any(
+                changed for _item, changed in list_nested
+            )
+        if isinstance(value, dict):
+            dict_nested = {
+                key: cls._limit_nested_items(item, item_cap) for key, item in value.items()
+            }
+            return (
+                {key: item for key, (item, _changed) in dict_nested.items()},
+                any(changed for _item, changed in dict_nested.values()),
+            )
+        return value, False
 
     @classmethod
     def _json_value_deep(cls, value: Any) -> Any:

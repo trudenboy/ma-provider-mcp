@@ -216,6 +216,9 @@ def register_meta_discovery(
     :param lookup_component_tags: Async ``(kind, key) -> tags | None`` resolver
         (see :func:`provider.server.build_tag_lookup`).
     """
+    # Recipe visibility is enforced by the adapter from the same live tag
+    # closure. The lookup remains part of the compatibility signature because
+    # direct curated calls are still guarded by TagFilterMiddleware internally.
     del allowed_tags_provider, lookup_component_tags, enabled
     transform = MetaDiscoveryTransform(dynamic_adapter)
 
@@ -243,7 +246,7 @@ def register_meta_discovery(
         entry = await transform.adapter.get_visible_entry(tool_name)
         if entry is None:
             raise NotFoundError(f"Tool {tool_name!r} not found")
-        return {
+        result: dict[str, Any] = {
             "name": entry.name,
             "kind": entry.name.split(":", 1)[0],
             "command": entry.command,
@@ -252,6 +255,10 @@ def register_meta_discovery(
             "risk": entry.risk.value,
             "requiredScope": entry.required_scope,
             "allowImpersonation": entry.allow_impersonation,
+            "annotations": entry.annotations,
         }
+        if entry.output_schema is not None:
+            result["outputSchema"] = entry.output_schema
+        return result
 
     mcp.add_transform(transform)

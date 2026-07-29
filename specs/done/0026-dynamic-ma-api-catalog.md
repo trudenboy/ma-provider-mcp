@@ -2,7 +2,7 @@
 id: "0026"
 title: "Dynamic Music Assistant API catalog and curated tool migration"
 size: L
-status: inprogress
+status: done
 priority: P1
 effort_minutes: 480
 feature_id:

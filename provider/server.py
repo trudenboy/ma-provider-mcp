@@ -78,6 +78,7 @@ class MCPServerRuntime:
         self._allowed_tags: set[str] = set()
         self._event_buffer: Any = None  # provider.debug.event_buffer.EventBuffer | None
         self._reload_lock: asyncio.Lock = asyncio.Lock()
+        self._dynamic_adapter: Any = None
 
     @property
     def public_url(self) -> str:
@@ -248,6 +249,11 @@ class MCPServerRuntime:
                 logs_enabled=Tag.DEBUG_LOGS in enabled_tags(self._config),
                 reload_lock=self._reload_lock,
                 lean_schema=lean_admin_schema,
+                dynamic_diagnostics_provider=lambda: (
+                    self._dynamic_adapter.diagnostics()
+                    if self._dynamic_adapter is not None
+                    else {"available": False, "last_error": "catalog not initialized"}
+                ),
             ),
             namespace="debug",
         )
@@ -353,7 +359,9 @@ class MCPServerRuntime:
             auth_required_provider=lambda: config_bool(CONF_REQUIRE_AUTH, default=True),
             confirmation_provider=lambda: config_bool(CONF_REQUIRE_CONFIRMATION, default=True),
             token_provider=get_access_token,
+            allowed_tags_provider=lambda: self._allowed_tags,
         )
+        self._dynamic_adapter = adapter
         register_meta_discovery(
             mcp,
             allowed_tags_provider=lambda: self._allowed_tags,

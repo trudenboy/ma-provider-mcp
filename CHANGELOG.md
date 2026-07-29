@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Sixteen `mcp_api:*` recipes retain composite provider-specific behavior;
   declarative profiles and recipes cover all 86 curated operations, including
   the recommendation-row API from provider PR #199.
+- Command profiles now provide executable compatibility aliases, compact
+  projectors, risk overrides and MCP annotations while schemas remain derived
+  from the live MA handler signatures.
 
 ### Changed
 - The MCP tool surface is permanently reduced to `search_tools`,
@@ -36,6 +39,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Provider sources and tests remain compatible with the current inlined
   `music-assistant/server` layout and its strict type checks.
+- Recipe operations preserve their individual required arguments, permission
+  tags and MA scopes, and execute inside MA's request authentication context.
+- Compact response limits now cover nested collections; registry contract drift
+  is isolated to the dynamic MA catalog and reported by the debug health summary.
 
 ## [0.17.0] — 2026-07-16
 
