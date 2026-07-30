@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -23,6 +24,37 @@ from provider.commands.debug import (
 )
 from provider.debug.event_buffer import EventBuffer
 from provider.debug.log_reader import SafeLogTail
+
+
+class _RaisingToDict:
+    def to_dict(self) -> dict[str, object]:
+        raise RuntimeError("broken to_dict")
+
+
+class _RaisingModelDump:
+    def model_dump(self, *, mode: str) -> dict[str, object]:
+        raise RuntimeError("broken model_dump")
+
+
+@dataclasses.dataclass
+class _RaisingDataclass:
+    value: str = "unreachable"
+
+    def __getattribute__(self, name: str) -> object:
+        if name == "value":
+            raise RuntimeError("broken dataclass field")
+        return super().__getattribute__(name)
+
+
+class _RaisingProperty:
+    @property
+    def to_dict(self) -> object:
+        raise RuntimeError("broken property")
+
+
+class _RaisingStr:
+    def __str__(self) -> str:
+        raise RuntimeError("broken string conversion")
 
 
 def _write_log(path: Path) -> None:
@@ -92,6 +124,75 @@ async def test_event_handlers_preserve_limits_and_stats(
     assert stats.current_size == 50
     assert stats.dropped == 5
     assert stats.by_type == {"player_updated": 55}
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        pytest.param(_RaisingToDict(), id="to-dict"),
+        pytest.param(_RaisingModelDump(), id="model-dump"),
+        pytest.param(_RaisingDataclass(), id="dataclass-field"),
+        pytest.param(_RaisingProperty(), id="property"),
+        pytest.param({_RaisingStr(): "value"}, id="mapping-key-str"),
+    ],
+)
+async def test_event_callback_isolates_malformed_payloads_and_stays_usable(
+    mock_mass: MagicMock,
+    fake_event_emitter: Any,
+    payload: object,
+) -> None:
+    """One malformed payload cannot escape the subscriber or poison later events."""
+    buffer = EventBuffer(mock_mass, capacity=50)
+    buffer.start()
+
+    fake_event_emitter.emit(
+        SimpleNamespace(event="broken", object_id="bad", data=payload)
+    )
+    fake_event_emitter.emit(
+        SimpleNamespace(event="healthy", object_id="good", data={"ok": True})
+    )
+
+    snapshot = await recent_events(buffer, limit=10)
+    stats = await event_buffer_stats(buffer)
+    assert [event.data for event in snapshot.events] == [
+        "<unserializable event data>",
+        {"ok": True},
+    ]
+    assert stats.total_seen == 2
+    assert stats.by_type == {"broken": 1, "healthy": 1}
+
+
+async def test_event_callback_isolates_broken_attributes_and_string_conversion(
+    mock_mass: MagicMock,
+    fake_event_emitter: Any,
+) -> None:
+    """Event metadata getters and string conversion cannot escape the subscriber."""
+
+    class BrokenEvent:
+        event_type = "fallback"
+        object_id = _RaisingStr()
+
+        @property
+        def event(self) -> str:
+            raise RuntimeError("broken event property")
+
+        @property
+        def data(self) -> object:
+            raise RuntimeError("broken data property")
+
+    buffer = EventBuffer(mock_mass, capacity=50)
+    buffer.start()
+
+    fake_event_emitter.emit(BrokenEvent())
+
+    snapshot = await recent_events(buffer, limit=10)
+    stats = await event_buffer_stats(buffer)
+    assert len(snapshot.events) == 1
+    assert snapshot.events[0].event_type == "fallback"
+    assert snapshot.events[0].object_id == "<unavailable>"
+    assert snapshot.events[0].data == "<unserializable event data>"
+    assert stats.total_seen == 1
+    assert stats.by_type == {"fallback": 1}
 
 
 async def test_event_handlers_return_bounded_empty_results_without_buffer() -> None:
