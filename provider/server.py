@@ -8,8 +8,6 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from .constants import (
-    CONF_DEBUG_EVENT_BUFFER_CAPACITY,
-    CONF_DEBUG_EVENTS,
     CONF_DYNAMIC_API_CONTROL,
     CONF_DYNAMIC_API_READ,
     CONF_DYNAMIC_API_SYSTEM,
@@ -56,6 +54,8 @@ class MCPServerRuntime:
         mass: MusicAssistant,
         config: ProviderConfig,
         logger: logging.Logger,
+        *,
+        event_buffer_provider: Callable[[], Any] | None = None,
     ) -> None:
         """
         Hold the shared dependencies; nothing is started here.
@@ -76,7 +76,7 @@ class MCPServerRuntime:
         # Mutable so apply_permission_change can hot-swap the allowed-tag set
         # without re-instantiating the TagFilterMiddleware closure.
         self._allowed_tags: set[str] = set()
-        self._event_buffer: Any = None  # provider.debug.event_buffer.EventBuffer | None
+        self._event_buffer_provider = event_buffer_provider
         self._reload_lock: asyncio.Lock = asyncio.Lock()
         self._dynamic_adapter: Any = None
 
@@ -104,11 +104,6 @@ class MCPServerRuntime:
 
     async def stop(self) -> None:
         """Unregister the HTTP route and drop references."""
-        if self._event_buffer is not None:
-            try:
-                self._event_buffer.stop()
-            finally:
-                self._event_buffer = None
         if self._unmount is not None:
             try:
                 await self._unmount()
@@ -239,13 +234,15 @@ class MCPServerRuntime:
 
         from .tools import build_debug_server  # noqa: PLC0415
 
-        self._maybe_start_event_buffer()
-
         mcp.mount(
             build_debug_server(
                 self._mass,
                 require_confirmation=require_confirmation,
-                event_buffer=self._event_buffer,
+                event_buffer=(
+                    self._event_buffer_provider()
+                    if self._event_buffer_provider is not None
+                    else None
+                ),
                 logs_enabled=Tag.DEBUG_LOGS in enabled_tags(self._config),
                 reload_lock=self._reload_lock,
                 lean_schema=lean_admin_schema,
@@ -325,16 +322,11 @@ class MCPServerRuntime:
             len(enabled_tags(self._config)),
         )
 
-    def _maybe_start_event_buffer(self) -> None:
-        """Start the debug event buffer when the ``debug_events`` flag is on."""
-        from .debug.event_buffer import EventBuffer  # noqa: PLC0415
-
-        if not bool(self._config.get_value(CONF_DEBUG_EVENTS)):
-            return
-        cap_value = self._config.get_value(CONF_DEBUG_EVENT_BUFFER_CAPACITY)
-        capacity = int(cap_value) if isinstance(cap_value, int | float | str) else 500
-        self._event_buffer = EventBuffer(self._mass, capacity=capacity)
-        self._event_buffer.start()
+    def dynamic_diagnostics(self) -> dict[str, Any]:
+        """Return a public snapshot of dynamic-command health without exposing its adapter."""
+        if self._dynamic_adapter is None:
+            return {"available": False, "last_error": "catalog not initialized"}
+        return dict(self._dynamic_adapter.diagnostics())
 
     def _register_meta_discovery(self, mcp: Any) -> None:
         """Install the permanent dynamic command discovery layer."""

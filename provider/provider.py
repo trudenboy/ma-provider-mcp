@@ -10,6 +10,7 @@ middleware (for permission-only changes) or restarts the runtime.
 from __future__ import annotations
 
 import logging
+from contextlib import suppress
 from typing import TYPE_CHECKING
 
 from music_assistant.models.plugin import PluginProvider
@@ -19,6 +20,7 @@ from .constants import HOT_SWAPPABLE_KEYS
 if TYPE_CHECKING:
     from music_assistant_models.config_entries import ConfigEntry, ProviderConfig
 
+    from .commands import ProviderCommandSet
     from .server import MCPServerRuntime
 
 
@@ -29,6 +31,7 @@ class MCPServerProvider(PluginProvider):
     """Music Assistant plugin provider wrapping an MCP server runtime."""
 
     _runtime: MCPServerRuntime | None = None
+    _commands: ProviderCommandSet | None = None
 
     async def get_config_entries(self) -> tuple[ConfigEntry, ...]:
         """Return Config entries to configure this provider."""
@@ -73,11 +76,40 @@ class MCPServerProvider(PluginProvider):
         return result
 
     async def handle_async_init(self) -> None:
-        """Build and start the FastMCP runtime."""
+        """Register MA commands, then build and start the FastMCP runtime."""
+        from .commands import ProviderCommandSet  # noqa: PLC0415
         from .server import MCPServerRuntime  # noqa: PLC0415
 
-        self._runtime = MCPServerRuntime(self.mass, self.config, self.logger)
-        await self._runtime.start()
+        self._commands = ProviderCommandSet(
+            self.mass,
+            config_provider=lambda: self.config,
+            diagnostics_provider=lambda: (
+                self._runtime.dynamic_diagnostics()
+                if self._runtime is not None
+                else {"available": False, "last_error": "MCP runtime not started"}
+            ),
+        )
+        try:
+            self._commands.start()
+            self._runtime = MCPServerRuntime(self.mass, self.config, self.logger)
+            self._runtime._event_buffer_provider = lambda: (
+                self._commands.event_buffer if self._commands is not None else None
+            )
+            await self._runtime.start()
+        except BaseException:
+            try:
+                if self._runtime is not None:
+                    with suppress(BaseException):
+                        await self._runtime.stop()
+            finally:
+                try:
+                    if self._commands is not None:
+                        with suppress(BaseException):
+                            self._commands.stop()
+                finally:
+                    self._runtime = None
+                    self._commands = None
+            raise
 
     async def loaded_in_mass(self) -> None:
         """Log the public URL once everything is wired up."""
@@ -85,23 +117,34 @@ class MCPServerProvider(PluginProvider):
             self.logger.info("MCP server mounted at %s", self._runtime.public_url)
 
     async def unload(self, is_removed: bool = False) -> None:
-        """Stop the runtime and unmount the HTTP route."""
-        if self._runtime is not None:
-            await self._runtime.stop()
+        """Stop the MCP endpoint before withdrawing its MA commands."""
+        try:
+            if self._runtime is not None:
+                await self._runtime.stop()
+        finally:
             self._runtime = None
+            try:
+                if self._commands is not None:
+                    self._commands.stop()
+            finally:
+                self._commands = None
 
     async def update_config(self, config: ProviderConfig, changed_keys: set[str]) -> None:
         """Apply config changes — hot-swap when possible, restart otherwise."""
+        self.config = config
+        if self._commands is not None:
+            self._commands.update_config(config)
         if self._runtime is None:
             return
         normalized_keys = {k.removeprefix("values/") for k in changed_keys}
         if normalized_keys.issubset(HOT_SWAPPABLE_KEYS):
-            self.config = config
             await self._runtime.apply_permission_change(config, normalized_keys)
         else:
             await self._runtime.stop()
-            self.config = config
             from .server import MCPServerRuntime  # noqa: PLC0415
 
             self._runtime = MCPServerRuntime(self.mass, config, self.logger)
+            self._runtime._event_buffer_provider = lambda: (
+                self._commands.event_buffer if self._commands is not None else None
+            )
             await self._runtime.start()
