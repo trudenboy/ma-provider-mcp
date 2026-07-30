@@ -154,6 +154,13 @@ class MetaDiscoveryService:
                 break
         index = await self._index_for(snapshot)
         visible = {entry.name: entry for entry in view.entries}
+        legacy = LEGACY_MIGRATIONS.get(query)
+        if legacy is not None:
+            canonical = f"ma_api:{legacy.command}" if legacy.command is not None else None
+            if canonical is not None and canonical in visible:
+                return [{"name": canonical, "description": visible[canonical].description}]
+            hint = canonical or legacy.message
+            return [{"name": query, "description": f"Retired tool; use {hint}."}]
         names = _rank(index, _tokens(query), allowed_names=set(visible))
         return [
             {"name": name, "description": visible[name].description}
@@ -282,7 +289,11 @@ def register_meta_discovery(
         :param max_items: Optional smaller item limit.
         """
         if replacement := LEGACY_MIGRATIONS.get(name):
-            hint = replacement.command or replacement.message
+            hint = (
+                f"ma_api:{replacement.command}"
+                if replacement.command is not None
+                else replacement.message
+            )
             raise ToolError(f"Tool {name!r} was retired; use {hint!r}")
         if not name.startswith("ma_api:"):
             raise ToolError(f"Tool {name!r} is not a canonical ma_api command")

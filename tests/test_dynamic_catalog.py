@@ -153,9 +153,19 @@ async def test_call_tool_rejects_retired_name_with_concrete_migration() -> None:
     """Legacy names remain actionable hints but never redirect to executable recipes."""
     mcp, _adapter = _server()
     async with Client(mcp) as client:
-        result = await client.call_tool("call_tool", {"name": "players_list_players"})
-    assert result.is_error is True
-    assert "players/all" in str(result.content)
+        with pytest.raises(ToolError, match="ma_api:players/all"):
+            await client.call_tool("call_tool", {"name": "players_list_players"})
+
+
+async def test_search_returns_retired_alias_as_non_executable_migration_hint() -> None:
+    """Even aggregate retirements are discoverable but cannot redirect execution."""
+    mcp, _adapter = _server()
+    async with Client(mcp) as client:
+        search = await client.call_tool("search_tools", {"query": "config_list_targets"})
+        with pytest.raises(ToolError, match="Use search_tools"):
+            await client.call_tool("call_tool", {"name": "config_list_targets"})
+    assert search.data[0]["name"] == "config_list_targets"
+    assert "Use search_tools" in search.data[0]["description"]
 
 
 def _meta_service(adapter: DynamicAPIAdapter) -> Any:

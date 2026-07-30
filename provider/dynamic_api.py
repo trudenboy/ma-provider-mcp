@@ -6,8 +6,9 @@ import asyncio
 import dataclasses
 import inspect
 import json
-from collections.abc import AsyncGenerator, Callable, Mapping
+from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
 from fastmcp.exceptions import ToolError
@@ -23,6 +24,7 @@ from .command_policy import (
 from .command_profiles import (
     COMMAND_PROFILES,
     CommandProfile,
+    LegacyMigration,
     aliases_by_command,
     LEGACY_COMMAND_MAPPINGS,
 )
@@ -776,8 +778,6 @@ class DynamicAPIAdapter:
         return bool(has_scope(user, scope))
 
 
-LEGACY_MIGRATIONS = {
+LEGACY_MIGRATIONS: Mapping[str, LegacyMigration] = MappingProxyType({
     **LEGACY_COMMAND_MAPPINGS,
-    # Historical pre-profile alias retained only for an actionable error.
-    "playback_play": LEGACY_COMMAND_MAPPINGS["playback_play"],
-}
+})

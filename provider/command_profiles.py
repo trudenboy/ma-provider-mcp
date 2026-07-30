@@ -78,7 +78,6 @@ def retired(message: str) -> LegacyMigration:
 
 LEGACY_COMMAND_MAPPINGS: dict[str, LegacyMigration] = {
     **{legacy: migration(command) for legacy, command in CURATED_PROFILE_MAPPINGS.items()},
-    "metadata_get_lyrics": retired("Use metadata/get_track_lyrics"),
     "players_list_players": migration("players/all"),
     "players_get_player": migration("players/get"),
     "queue_get_active_queue": migration("player_queues/get_active_queue"),
@@ -94,6 +93,7 @@ LEGACY_COMMAND_MAPPINGS: dict[str, LegacyMigration] = {
     "debug_inspect_queue": migration("player_queues/get"),
     "debug_inspect_provider": migration("providers"),
     "debug_list_providers": migration("providers"),
+    "debug_inspect_provider_config": migration("config/providers/get"),
     "debug_tail_log": migration("fastmcp/debug/tail_log"),
     "debug_log_stats": migration("fastmcp/debug/log_stats"),
     "debug_recent_events": migration("fastmcp/debug/recent_events"),
@@ -115,6 +115,7 @@ LEGACY_COMMAND_MAPPINGS: dict[str, LegacyMigration] = {
     "config_save_dsp": migration("config/players/dsp/save"),
     "config_list_targets": retired("Use search_tools('config providers core players')"),
     "config_get_entries": retired("Use the target-specific config/*/get_entries command"),
+    "playback_play": migration("players/cmd/play"),
     "mcp_api:players/summary": migration("players/all"),
     "mcp_api:queue/snapshot": migration("player_queues/get_active_queue"),
     "mcp_api:queue/add": migration("player_queues/play_media"),
