@@ -60,12 +60,22 @@ _RECIPE_SOURCE_BASELINE = {
 }
 _RETIRED_BASELINE = {"config_list_targets", "config_get_entries"}
 _RECIPE_NAME_BASELINE = {
-    "mcp_api:players/summary", "mcp_api:queue/snapshot", "mcp_api:queue/add",
-    "mcp_api:queue/remove", "mcp_api:queue/move", "mcp_api:playlist/add_many",
-    "mcp_api:config/targets", "mcp_api:config/entries", "mcp_api:config/save",
-    "mcp_api:config/save_dsp", "mcp_api:debug/inspect", "mcp_api:debug/logs",
-    "mcp_api:debug/events", "mcp_api:debug/health", "mcp_api:debug/routes",
-    "mcp_api:debug/packages",
+    "mcp_api:players/summary": ("players/all", None),
+    "mcp_api:queue/snapshot": ("player_queues/get_active_queue", None),
+    "mcp_api:queue/add": ("player_queues/play_media", None),
+    "mcp_api:queue/remove": (None, "Use fastmcp/queue/remove_items_safe or player_queues/clear"),
+    "mcp_api:queue/move": (None, "Use player_queues/move_item, move_item_end, or transfer"),
+    "mcp_api:playlist/add_many": ("music/playlists/add_playlist_tracks", None),
+    "mcp_api:config/targets": (None, "Use search_tools('config targets')"),
+    "mcp_api:config/entries": (None, "Use the target-specific config/*/get_entries command"),
+    "mcp_api:config/save": (None, "Use the target-specific config/*/save command"),
+    "mcp_api:config/save_dsp": ("config/players/dsp/save", None),
+    "mcp_api:debug/inspect": (None, "Use native players, queues, providers, config, or diagnostics commands"),
+    "mcp_api:debug/logs": (None, "Use fastmcp/debug/tail_log or fastmcp/debug/log_stats"),
+    "mcp_api:debug/events": (None, "Use fastmcp/debug/recent_events or fastmcp/debug/event_buffer_stats"),
+    "mcp_api:debug/health": ("fastmcp/debug/health", None),
+    "mcp_api:debug/routes": ("fastmcp/debug/routes", None),
+    "mcp_api:debug/packages": ("fastmcp/debug/packages", None),
 }
 
 
@@ -96,9 +106,13 @@ def test_frozen_baseline_maps_every_former_source_exactly_once() -> None:
     expected = _PROFILE_BASELINE | _RECIPE_SOURCE_BASELINE
     assert CURATED_PROFILE_MAPPINGS == _PROFILE_BASELINE
     assert set(LEGACY_COMMAND_MAPPINGS) == (
-        set(expected) | _RETIRED_BASELINE | _RECIPE_NAME_BASELINE | {"playback_play"}
+        set(expected) | _RETIRED_BASELINE | set(_RECIPE_NAME_BASELINE) | {"playback_play"}
     )
     assert {legacy: LEGACY_COMMAND_MAPPINGS[legacy].command for legacy in expected} == expected
+    assert {
+        name: (LEGACY_COMMAND_MAPPINGS[name].command, LEGACY_COMMAND_MAPPINGS[name].message)
+        for name in _RECIPE_NAME_BASELINE
+    } == _RECIPE_NAME_BASELINE
     assert all(
         migration.command is None or not migration.command.startswith("mcp_api:")
         for migration in LEGACY_COMMAND_MAPPINGS.values()
