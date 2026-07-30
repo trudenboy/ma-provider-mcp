@@ -322,6 +322,46 @@ async def test_registry_replacement_changes_fingerprint_without_restart() -> Non
     assert second.entries[0].handler is replacement_handler
 
 
+async def test_registry_validity_changes_fingerprint_and_base_diagnostics() -> None:
+    """Empty valid and invalid registries never share cached availability state."""
+
+    async def search(search_query: str) -> list[str]:
+        return [search_query]
+
+    adapter = _real_adapter(_handler("music/search", search))
+    adapter.mass.command_handlers = {}
+    valid = await adapter.base_snapshot()
+    assert await adapter.visible_entries() == []
+    assert adapter.diagnostics() == {
+        "available": True,
+        "registry_type": "dict",
+        "handlers_seen": 0,
+        "handlers_visible": 0,
+        "incompatible_handlers": (),
+        "last_error": None,
+    }
+
+    adapter.mass.command_handlers = []
+    invalid = await adapter.base_snapshot()
+    assert invalid.fingerprint != valid.fingerprint
+    assert await adapter.visible_entries() == []
+    assert adapter.diagnostics() == {
+        "available": False,
+        "registry_type": "list",
+        "handlers_seen": 0,
+        "handlers_visible": 0,
+        "incompatible_handlers": (),
+        "last_error": "mass.command_handlers is not a mapping",
+    }
+
+    adapter.mass.command_handlers = {}
+    restored = await adapter.base_snapshot()
+    assert restored.fingerprint == valid.fingerprint
+    assert restored is not valid
+    assert await adapter.visible_entries() == []
+    assert adapter.diagnostics()["available"] is True
+
+
 async def test_cached_snapshot_keeps_visibility_request_specific() -> None:
     """A shared descriptor never leaks one user's scope visibility to another."""
 
@@ -332,9 +372,7 @@ async def test_cached_snapshot_keeps_visibility_request_specific() -> None:
     allowed = SimpleNamespace(user_id="allowed", enabled=True, scopes={"library.read"})
     denied = SimpleNamespace(user_id="denied", enabled=True, scopes=set())
     users = {user.user_id: user for user in (allowed, denied)}
-    current_token: contextvars.ContextVar[AccessToken] = contextvars.ContextVar(
-        "current_token"
-    )
+    current_token: contextvars.ContextVar[AccessToken] = contextvars.ContextVar("current_token")
     mass = MagicMock(command_handlers={handler.command: handler})
     mass.webserver.auth.get_user = AsyncMock(side_effect=users.__getitem__)
     adapter = DynamicAPIAdapter(
@@ -354,14 +392,16 @@ async def test_cached_snapshot_keeps_visibility_request_specific() -> None:
         finally:
             current_token.reset(token)
 
-    allowed_view, denied_view = await asyncio.gather(
-        catalog_for("allowed"), catalog_for("denied")
-    )
+    allowed_view, denied_view = await asyncio.gather(catalog_for("allowed"), catalog_for("denied"))
     snapshot = await adapter.base_snapshot()
     assert allowed_view.fingerprint == denied_view.fingerprint == snapshot.fingerprint
     assert allowed_view.entries == snapshot.entries
     assert allowed_view.entries[0] is snapshot.entries[0]
     assert denied_view.entries == ()
+    base_diagnostics = adapter.diagnostics()
+    assert base_diagnostics["handlers_visible"] == 1
+    await catalog_for("denied")
+    assert adapter.diagnostics() == base_diagnostics
 
 
 async def test_failed_snapshot_build_does_not_poison_future_reads(
@@ -1087,6 +1127,54 @@ async def test_native_live_authorization_revocation_prevents_elicitation(
         )
     confirmation.assert_not_awaited()
     assert called is False
+
+
+@pytest.mark.parametrize("revoked", ["handler", "policy", "tag", "scope"])
+async def test_native_authorization_revoked_during_confirmation_prevents_execution(
+    revoked: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Authorization changes while eliciting are rechecked before invocation."""
+    called: list[str] = []
+    state = {"policy": True, "tag": True, "scope": True}
+
+    async def write() -> None:
+        called.append("stale")
+
+    async def replacement() -> None:
+        called.append("replacement")
+
+    handler = _handler("music/write", write, "library.write")
+    adapter = _real_adapter(
+        handler,
+        policy=DynamicPolicy(write=True),
+        allowed_tags={str(Tag.EDIT_LIBRARY)},
+    )
+    adapter._policy_provider = lambda: DynamicPolicy(write=state["policy"])
+    adapter._allowed_tags_provider = lambda: {str(Tag.EDIT_LIBRARY)} if state["tag"] else set()
+    adapter._scope_checker = lambda _user, _scope: state["scope"]
+
+    async def revoke_during_confirmation(*_args: Any, **_kwargs: Any) -> None:
+        if revoked == "handler":
+            adapter.mass.command_handlers[handler.command] = _handler(
+                handler.command, replacement, "library.write"
+            )
+        else:
+            state[revoked] = False
+
+    confirmation = AsyncMock(side_effect=revoke_during_confirmation)
+    monkeypatch.setattr("provider.dynamic_api.confirm_or_raise", confirmation)
+
+    with pytest.raises(ToolError, match="not permitted"):
+        await adapter.call(
+            "ma_api:music/write",
+            {},
+            response_mode="compact",
+            fields=None,
+            max_items=None,
+            ctx=MagicMock(),
+        )
+    confirmation.assert_awaited_once()
+    assert called == []
 
 
 @pytest.mark.parametrize("revoked", ["policy", "tag", "scope"])

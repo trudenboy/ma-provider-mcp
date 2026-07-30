@@ -58,7 +58,7 @@ _FULL_STRING = 8_192
 _CALL_TIMEOUT_SECONDS = 60
 CATALOG_REVISION = 1
 
-type CatalogFingerprint = tuple[int, tuple[tuple[str, int], ...]]
+type CatalogFingerprint = tuple[int, str, tuple[tuple[str, int], ...]]
 
 
 def _command_error(command: str, exc: Exception) -> ToolError:
@@ -130,6 +130,7 @@ class _SnapshotDiagnostics:
     available: bool
     registry_type: str
     handlers_seen: int
+    handlers_visible: int
     incompatible_handlers: tuple[str, ...]
     last_error: str | None
 
@@ -186,6 +187,7 @@ class DynamicAPIAdapter:
                 snapshot, diagnostics = self._compile_snapshot(fingerprint)
                 self._snapshot = snapshot
                 self._snapshot_diagnostics = diagnostics
+                self._publish_snapshot_diagnostics()
             return self._snapshot
 
     async def visible_catalog(self) -> CatalogView:
@@ -193,7 +195,6 @@ class DynamicAPIAdapter:
         snapshot = await self.base_snapshot()
         auth = await self._authentication()
         if not self._auth_required_provider() or auth is None:
-            self._update_diagnostics(handlers_visible=0)
             return CatalogView(snapshot.fingerprint, ())
 
         user = auth[1]
@@ -212,7 +213,6 @@ class DynamicAPIAdapter:
         ]
         entries.extend(self._recipe_entries(policy, user))
         visible = tuple(sorted(entries, key=lambda entry: entry.name))
-        self._update_diagnostics(handlers_visible=len(visible))
         return CatalogView(snapshot.fingerprint, visible)
 
     async def visible_entries(self) -> list[DynamicEntry]:
@@ -291,6 +291,7 @@ class DynamicAPIAdapter:
             self._allowed_tags_provider(),
         )
         await self._confirm(entry, ctx, impersonating=impersonating)
+        entry = self._reauthorize_entry(entry, auth)
 
         try:
             async with asyncio.timeout(_CALL_TIMEOUT_SECONDS):
@@ -313,10 +314,17 @@ class DynamicAPIAdapter:
     def _registry_fingerprint(self) -> CatalogFingerprint:
         """Fingerprint the actual live command-handler registry."""
         handlers = getattr(self.mass, "command_handlers", {})
+        registry_type = type(handlers)
+        registry_kind = (
+            f"{'mapping' if isinstance(handlers, Mapping) else 'invalid'}:"
+            f"{registry_type.__module__}.{registry_type.__qualname__}"
+        )
         if not isinstance(handlers, Mapping):
-            return CATALOG_REVISION, ()
-        return CATALOG_REVISION, tuple(
-            sorted((command, id(handler)) for command, handler in handlers.items())
+            return CATALOG_REVISION, registry_kind, ()
+        return (
+            CATALOG_REVISION,
+            registry_kind,
+            tuple(sorted((command, id(handler)) for command, handler in handlers.items())),
         )
 
     def _compile_snapshot(
@@ -329,6 +337,7 @@ class DynamicAPIAdapter:
                 available=False,
                 registry_type=type(handlers).__name__,
                 handlers_seen=0,
+                handlers_visible=0,
                 incompatible_handlers=(),
                 last_error="mass.command_handlers is not a mapping",
             )
@@ -351,6 +360,7 @@ class DynamicAPIAdapter:
             available=True,
             registry_type=type(handlers).__name__,
             handlers_seen=len(handlers),
+            handlers_visible=len(entries),
             incompatible_handlers=incompatible_handlers,
             last_error=(
                 f"{len(incompatible)} incompatible handler(s) skipped" if incompatible else None
@@ -361,8 +371,8 @@ class DynamicAPIAdapter:
             tuple(sorted(entries, key=lambda entry: entry.name)),
         ), diagnostics
 
-    def _update_diagnostics(self, *, handlers_visible: int) -> None:
-        """Expose cached snapshot diagnostics with request-local visibility."""
+    def _publish_snapshot_diagnostics(self) -> None:
+        """Expose only caller-independent compatibility diagnostics."""
         diagnostics = self._snapshot_diagnostics
         if diagnostics is None:
             return
@@ -370,7 +380,7 @@ class DynamicAPIAdapter:
             available=diagnostics.available,
             registry_type=diagnostics.registry_type,
             handlers_seen=diagnostics.handlers_seen,
-            handlers_visible=handlers_visible,
+            handlers_visible=diagnostics.handlers_visible,
             incompatible_handlers=diagnostics.incompatible_handlers,
             last_error=diagnostics.last_error,
         )
