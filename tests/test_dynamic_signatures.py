@@ -25,6 +25,20 @@ async def library_items(
     return []
 
 
+def _library_items_handler(calls: list[dict[str, Any]]) -> Any:
+    """Build a library-items handler that records bound named arguments."""
+
+    async def handler(
+        favorite: bool | None = None,
+        limit: int = 500,
+        **kwargs: Any,
+    ) -> list[Track]:
+        calls.append({"favorite": favorite, "limit": limit, "kwargs": kwargs})
+        return []
+
+    return handler
+
+
 def _compile(signature: inspect.Signature, type_hints: Mapping[str, Any]) -> Any:
     """Compile a handler signature through the public signature compiler."""
     from provider.dynamic_signatures import compile_signature
@@ -86,24 +100,29 @@ async def test_adapter_does_not_publish_kwargs_as_a_required_property() -> None:
         "music/tracks/library_items",
     ],
 )
-def test_library_item_commands_exclude_kwargs_from_their_schema(command: str) -> None:
-    """All library-item command families expose only named handler arguments."""
-    del command
-    compiled = _compile(inspect.signature(library_items), get_type_hints(library_items))
+async def test_library_item_commands_bind_named_arguments_through_adapter(
+    command: str,
+) -> None:
+    """Each library-item command exposes and invokes its named arguments."""
+    calls: list[dict[str, Any]] = []
+    handler = _library_items_handler(calls)
+    adapter = _adapter(_handler(command, handler))
+    entry = (await adapter.visible_entries())[0]
 
-    assert "kwargs" not in compiled.input_schema["properties"]
-    assert "kwargs" not in compiled.input_schema.get("required", [])
-    assert compiled.input_schema["additionalProperties"] is False
-
-
-def test_named_arguments_execute_without_kwargs_container() -> None:
-    """Named MA arguments bind without an artificial keyword container."""
-    compiled = _compile(inspect.signature(library_items), get_type_hints(library_items))
-
-    assert compiled.parse({"favorite": True, "limit": 10}) == {
-        "favorite": True,
-        "limit": 10,
-    }
+    assert entry.name == f"ma_api:{command}"
+    assert "kwargs" not in entry.input_schema["properties"]
+    assert "kwargs" not in entry.input_schema.get("required", [])
+    assert entry.input_schema["additionalProperties"] is False
+    result = await adapter.call(
+        entry.name,
+        {"favorite": True, "limit": 10},
+        response_mode="compact",
+        fields=None,
+        max_items=None,
+        ctx=MagicMock(),
+    )
+    assert result["data"] == []
+    assert calls == [{"favorite": True, "limit": 10, "kwargs": {}}]
 
 
 def test_var_positional_handler_is_incompatible() -> None:
