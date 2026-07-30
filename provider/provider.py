@@ -145,14 +145,7 @@ class MCPServerProvider(PluginProvider):
         """Create and start a runtime, leaving no failed instance attached."""
         from .server import MCPServerRuntime  # noqa: PLC0415
 
-        runtime = MCPServerRuntime(
-            self.mass,
-            config,
-            self.logger,
-            event_buffer_provider=lambda: (
-                self._commands.event_buffer if self._commands is not None else None
-            ),
-        )
+        runtime = MCPServerRuntime(self.mass, config, self.logger)
         self._runtime = runtime
         try:
             await runtime.start()

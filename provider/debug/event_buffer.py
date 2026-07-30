@@ -18,8 +18,8 @@ from collections import Counter, deque
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
+from ..dynamic_serialization import json_value
 from ..models import EventBufferStats, EventRecord
-from .inspect_serializer import dump
 
 if TYPE_CHECKING:
     from music_assistant.mass import MusicAssistant
@@ -121,8 +121,33 @@ class EventBuffer:
             timestamp=_now().isoformat(),
             event_type=event_type,
             object_id=str(object_id) if object_id is not None else None,
-            data=dump(getattr(event, "data", None), max_depth=4, max_str=1024),
+            data=_bounded_event_data(getattr(event, "data", None)),
         )
         self._queue.append(record)
         self._counts[event_type] += 1
         self._total_seen += 1
+
+
+def _bounded_event_data(value: Any) -> Any:
+    """Convert event payloads to compact JSON values without retaining MA objects."""
+    return _bound_json(json_value(value), depth=0)
+
+
+def _bound_json(value: Any, *, depth: int) -> Any:
+    """Bound event depth, string length, and collection width for the ring buffer."""
+    if depth >= 4:
+        return "<max depth>"
+    if isinstance(value, str):
+        return value if len(value) <= 1024 else f"{value[:1024]}…({len(value) - 1024} more chars)"
+    if isinstance(value, list):
+        rows = [_bound_json(item, depth=depth + 1) for item in value[:100]]
+        if len(value) > 100:
+            rows.append(f"<{len(value) - 100} more items>")
+        return rows
+    if isinstance(value, dict):
+        rows = list(value.items())
+        result = {key: _bound_json(item, depth=depth + 1) for key, item in rows[:100]}
+        if len(rows) > 100:
+            result["<truncated>"] = f"{len(rows) - 100} more fields"
+        return result
+    return value

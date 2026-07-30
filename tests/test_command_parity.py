@@ -10,7 +10,6 @@ from provider.command_profiles import (
     LegacyMigration,
 )
 
-
 _PROFILE_BASELINE = {
     "library_get_track_by_uri": "music/item_by_uri", "library_get_album_by_uri": "music/item_by_uri",
     "library_get_artist_by_uri": "music/item_by_uri", "library_get_artist_albums": "music/artists/artist_albums",
@@ -84,7 +83,8 @@ def test_legacy_mapping_targets_registry_or_explicit_retirement(
     legacy: str, target: LegacyMigration
 ) -> None:
     """Every old public name has a concrete non-executable migration path."""
-    assert legacy and not legacy.startswith("ma_api:")
+    assert legacy
+    assert not legacy.startswith("ma_api:")
     if target.command is not None:
         assert target.command.startswith(
             (

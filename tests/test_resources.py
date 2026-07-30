@@ -24,6 +24,12 @@ from unittest.mock import MagicMock
 import pytest
 from fastmcp import Client, FastMCP
 
+from provider.resource_helpers import (
+    safe_active_queue,
+    to_brief_player,
+    to_brief_queue,
+    to_resource_text,
+)
 from provider.resources.library_resources import register_library_resources
 from provider.resources.player_resources import register_player_resources
 
@@ -35,6 +41,14 @@ _LIBRARY_KINDS = [
     ("playlist", "playlists", "library://playlist/17"),
     ("radio", "radio", "library://radio/17"),
 ]
+
+
+def test_resource_helpers_have_a_tool_independent_public_module() -> None:
+    """Resources retain their converters after the custom tool package is removed."""
+    assert all(
+        callable(helper)
+        for helper in (to_resource_text, safe_active_queue, to_brief_player, to_brief_queue)
+    )
 
 
 @pytest.mark.parametrize(("kind", "controller_attr", "uri"), _LIBRARY_KINDS)

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import logging
 from typing import TYPE_CHECKING, Any
@@ -14,7 +13,6 @@ from .constants import (
     CONF_DYNAMIC_API_WRITE,
     CONF_ENFORCE_AUDIENCE,
     CONF_EXTRA_ALLOWED_ORIGINS,
-    CONF_LEAN_ADMIN_SCHEMA,
     CONF_MOUNT_PATH,
     CONF_REQUIRE_AUTH,
     CONF_REQUIRE_CONFIRMATION,
@@ -39,10 +37,9 @@ class MCPServerRuntime:
 
     The lifecycle is intentionally simple:
 
-    * :meth:`start` builds the FastMCP root, mounts namespaced sub-servers
-      for each tool category, registers resources and prompts, applies the
-      tag-filter middleware, and exposes the streamable-HTTP ASGI app on
-      MA's webserver under :pyattr:`mount_path`.
+    * :meth:`start` builds the FastMCP root, registers resources, prompts, and
+      the three meta-tools, applies tag filtering, and exposes the
+      streamable-HTTP ASGI app on MA's webserver under :pyattr:`mount_path`.
     * :meth:`stop` unregisters the dynamic route.
     * :meth:`apply_permission_change` rebuilds the runtime in place when
       only permission flags / resource toggles changed (no port collision
@@ -54,8 +51,6 @@ class MCPServerRuntime:
         mass: MusicAssistant,
         config: ProviderConfig,
         logger: logging.Logger,
-        *,
-        event_buffer_provider: Callable[[], Any] | None = None,
     ) -> None:
         """
         Hold the shared dependencies; nothing is started here.
@@ -76,8 +71,6 @@ class MCPServerRuntime:
         # Mutable so apply_permission_change can hot-swap the allowed-tag set
         # without re-instantiating the TagFilterMiddleware closure.
         self._allowed_tags: set[str] = set()
-        self._event_buffer_provider = event_buffer_provider
-        self._reload_lock: asyncio.Lock = asyncio.Lock()
         self._dynamic_adapter: Any = None
 
     @property
@@ -169,16 +162,6 @@ class MCPServerRuntime:
         from .http_bridge import mount_into_mass  # noqa: PLC0415
         from .prompts import register_prompts  # noqa: PLC0415
         from .resources import register_resources  # noqa: PLC0415
-        from .tools import (  # noqa: PLC0415
-            build_library_server,
-            build_media_server,
-            build_metadata_server,
-            build_playback_server,
-            build_players_server,
-            build_playlists_server,
-            build_queue_server,
-            build_volume_server,
-        )
 
         require_auth = bool(self._config.get_value(CONF_REQUIRE_AUTH))
         base_url = str(self._mass.webserver.base_url or "").rstrip("/")
@@ -204,70 +187,6 @@ class MCPServerRuntime:
                 "Resources expose library://, player:// and queue:// views."
             ),
             auth=verifier,
-        )
-
-        require_confirmation = bool(self._config.get_value(CONF_REQUIRE_CONFIRMATION) or False)
-        lean_admin_schema = bool(self._config.get_value(CONF_LEAN_ADMIN_SCHEMA) or False)
-        from .tags import Tag  # noqa: PLC0415
-
-        mcp.mount(build_library_server(self._mass), namespace="library")
-        mcp.mount(
-            build_queue_server(
-                self._mass,
-                require_confirmation=require_confirmation,
-                delete_queue_enabled=Tag.DELETE_QUEUE in enabled_tags(self._config),
-            ),
-            namespace="queue",
-        )
-        mcp.mount(build_playback_server(self._mass), namespace="playback")
-        mcp.mount(build_players_server(self._mass), namespace="players")
-        mcp.mount(
-            build_playlists_server(self._mass, require_confirmation=require_confirmation),
-            namespace="playlists",
-        )
-        mcp.mount(build_volume_server(self._mass), namespace="volume")
-        mcp.mount(
-            build_media_server(self._mass, require_confirmation=require_confirmation),
-            namespace="media",
-        )
-        mcp.mount(build_metadata_server(self._mass), namespace="metadata")
-
-        from .tools import build_debug_server  # noqa: PLC0415
-
-        mcp.mount(
-            build_debug_server(
-                self._mass,
-                require_confirmation=require_confirmation,
-                event_buffer=(
-                    self._event_buffer_provider()
-                    if self._event_buffer_provider is not None
-                    else None
-                ),
-                logs_enabled=Tag.DEBUG_LOGS in enabled_tags(self._config),
-                reload_lock=self._reload_lock,
-                lean_schema=lean_admin_schema,
-                dynamic_diagnostics_provider=lambda: (
-                    self._dynamic_adapter.diagnostics()
-                    if self._dynamic_adapter is not None
-                    else {"available": False, "last_error": "catalog not initialized"}
-                ),
-            ),
-            namespace="debug",
-        )
-
-        from .constants import CONF_CONFIG_WRITE_SECRET  # noqa: PLC0415
-        from .tools import build_config_server  # noqa: PLC0415
-
-        mcp.mount(
-            build_config_server(
-                self._mass,
-                require_confirmation=require_confirmation,
-                secret_writes_enabled=lambda: bool(
-                    self._config.get_value(CONF_CONFIG_WRITE_SECRET)
-                ),
-                lean_schema=lean_admin_schema,
-            ),
-            namespace="config",
         )
 
         register_resources(mcp, self._mass, self._config)

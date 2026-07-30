@@ -28,10 +28,10 @@ _HAVE_MA_MODELS = importlib.util.find_spec("music_assistant_models") is not None
     reason="needs fastmcp + music_assistant + music_assistant_models installed",
 )
 @pytest.mark.asyncio
-async def test_runtime_lists_permanent_meta_tools(
+async def test_runtime_has_three_tools_and_preserves_resources_and_prompts(
     mock_mass: MagicMock, mock_config: MagicMock
 ) -> None:
-    """``MCPServerRuntime`` exposes only the permanent discovery surface."""
+    """The runtime retains non-tool surfaces beside exactly three meta-tools."""
     from fastmcp import Client  # noqa: PLC0415
 
     from provider.server import MCPServerRuntime  # noqa: PLC0415
@@ -43,9 +43,18 @@ async def test_runtime_lists_permanent_meta_tools(
     await runtime.start()
     try:
         async with Client(runtime._mcp) as client:
-            tools = await client.list_tools()
-            names = {t.name for t in tools}
-            assert names == {"search_tools", "get_tool_schema", "call_tool"}
+            assert {tool.name for tool in await client.list_tools()} == {
+                "search_tools",
+                "get_tool_schema",
+                "call_tool",
+            }
+            assert {
+                str(item.uriTemplate) for item in await client.list_resource_templates()
+            } >= {
+                "player://{player_id}",
+                "queue://{queue_id}",
+            }
+            assert await client.list_prompts()
     finally:
         await runtime.stop()
 

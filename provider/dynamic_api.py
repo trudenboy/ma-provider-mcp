@@ -12,6 +12,8 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
 from fastmcp.exceptions import ToolError
+from mcp.shared.exceptions import McpError
+from mcp.types import INVALID_REQUEST, METHOD_NOT_FOUND
 
 from .command_policy import (
     CommandDecision,
@@ -23,10 +25,10 @@ from .command_policy import (
 )
 from .command_profiles import (
     COMMAND_PROFILES,
+    LEGACY_COMMAND_MAPPINGS,
     CommandProfile,
     LegacyMigration,
     aliases_by_command,
-    LEGACY_COMMAND_MAPPINGS,
 )
 from .dynamic_serialization import json_value
 from .dynamic_signatures import (
@@ -35,12 +37,10 @@ from .dynamic_signatures import (
     compile_signature,
 )
 from .middleware import tags_visible
-from .tools._common import confirm_or_raise
 
 if TYPE_CHECKING:
     from fastmcp import Context
     from fastmcp.server.auth import AccessToken
-    from fastmcp.tools import Tool
 
 _ALIASES_BY_COMMAND = aliases_by_command()
 
@@ -61,6 +61,22 @@ def _command_error(command: str, exc: Exception) -> ToolError:
     """Return an actionable execution error for a canonical command."""
     detail = str(exc).strip() or type(exc).__name__
     return ToolError(f"Command {command!r} failed: {detail}")
+
+
+async def confirm_or_raise(ctx: Context | None, prompt: str, *, enabled: bool) -> None:
+    """Ask the MCP client to confirm an operation when elicitation is available."""
+    if not enabled or ctx is None:
+        return
+    try:
+        result = await ctx.elicit(prompt, response_type=bool)  # type: ignore[arg-type, unused-ignore]
+    except NotImplementedError:
+        return
+    except McpError as exc:
+        if exc.error.code in (INVALID_REQUEST, METHOD_NOT_FOUND):
+            return
+        raise
+    if getattr(result, "action", None) != "accept" or not getattr(result, "data", None):
+        raise ToolError("Operation cancelled by user")
 
 
 @dataclass(frozen=True, slots=True)

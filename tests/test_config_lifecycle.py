@@ -217,8 +217,7 @@ async def test_failed_runtime_replacement_clears_runtime_and_retries(
     instances: list[Runtime] = []
 
     class Runtime:
-        def __init__(self, *_args: Any, **kwargs: Any) -> None:
-            self.event_buffer_provider = kwargs["event_buffer_provider"]
+        def __init__(self, *_args: Any, **_kwargs: Any) -> None:
             self.stopped = 0
             instances.append(self)
 
@@ -252,7 +251,7 @@ async def test_failed_runtime_replacement_clears_runtime_and_retries(
     await provider.update_config(_config(), {"mount_path"})
 
     assert provider._runtime is instances[-1]
-    assert provider._runtime.event_buffer_provider() is provider._commands.event_buffer
+    assert provider._commands.event_buffer is not None
     await provider.unload()
 
 
