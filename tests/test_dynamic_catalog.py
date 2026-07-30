@@ -19,6 +19,7 @@ from fastmcp.exceptions import ToolError
 from fastmcp.server.auth import AccessToken
 from fastmcp.tools import Tool
 
+from provider.command_policy import Confirmation
 from provider.command_profiles import (
     COMMAND_PROFILES,
     CURATED_PROFILE_MAPPINGS,
@@ -33,6 +34,7 @@ from provider.dynamic_api import (
 )
 from provider.meta_discovery import register_meta_discovery
 from provider.server import build_tag_lookup
+from provider.tags import Tag
 
 _META_NAMES = {"search_tools", "call_tool", "get_tool_schema"}
 
@@ -140,9 +142,7 @@ async def test_dynamic_schema_is_returned_on_demand() -> None:
     """A dynamic command exposes its real input schema only when requested."""
     mcp, _adapter = _server()
     async with Client(mcp) as client:
-        result = await client.call_tool(
-            "get_tool_schema", {"tool_name": "ma_api:players/cmd/play"}
-        )
+        result = await client.call_tool("get_tool_schema", {"tool_name": "ma_api:players/cmd/play"})
     assert result.data["name"] == "ma_api:players/cmd/play"
     assert result.data["kind"] == "ma_api"
     assert result.data["inputSchema"]["required"] == ["player_id"]
@@ -171,9 +171,7 @@ async def test_old_curated_name_is_not_callable() -> None:
     mcp, _adapter = _server()
     async with Client(mcp) as client:
         with pytest.raises(ToolError, match="ma_api:players/cmd/play"):
-            await client.call_tool(
-                "call_tool", {"name": "playback_play", "arguments": {}}
-            )
+            await client.call_tool("call_tool", {"name": "playback_play", "arguments": {}})
         with pytest.raises(ToolError):
             await client.call_tool("playback_play", {"player_id": "kitchen"})
 
@@ -235,7 +233,9 @@ def _real_adapter(
         confirmation_provider=lambda: True,
         token_provider=lambda: token,
         scope_checker=scope_checker or (lambda _user, _scope: True),
-        allowed_tags_provider=lambda: allowed_tags or set(),
+        allowed_tags_provider=lambda: (
+            allowed_tags if allowed_tags is not None else {str(tag) for tag in Tag}
+        ),
     )
 
 
@@ -276,9 +276,7 @@ async def test_adapter_observes_registry_changes_without_restart() -> None:
         return value
 
     adapter = _real_adapter(_handler("music/first", first))
-    assert [entry.name for entry in await adapter.visible_entries()] == [
-        "ma_api:music/first"
-    ]
+    assert [entry.name for entry in await adapter.visible_entries()] == ["ma_api:music/first"]
     adapter.mass.command_handlers = {"music/second": _handler("music/second", second)}
     entries = await adapter.visible_entries()
     assert [entry.name for entry in entries] == ["ma_api:music/second"]
@@ -362,8 +360,7 @@ async def test_recipe_keeps_curated_executor_behind_canonical_name() -> None:
     entries = await adapter.visible_entries()
     recipe = next(entry for entry in entries if entry.name == "mcp_api:players/summary")
     operations = {
-        branch["properties"]["operation"]["const"]
-        for branch in recipe.input_schema["oneOf"]
+        branch["properties"]["operation"]["const"] for branch in recipe.input_schema["oneOf"]
     }
     assert operations == {"list_players", "get_player"}
     get_branch = next(
@@ -406,15 +403,11 @@ def test_curated_migration_matrix_covers_every_registered_tool() -> None:
                 decorated = True
                 if call is not None:
                     for keyword in call.keywords:
-                        if keyword.arg == "name" and isinstance(
-                            keyword.value, ast.Constant
-                        ):
+                        if keyword.arg == "name" and isinstance(keyword.value, ast.Constant):
                             public_name = str(keyword.value.value)
             if decorated:
                 registered.add(f"{path.stem}_{public_name}")
-    recipe_sources = {
-        source for sources in CURATED_RECIPE_SOURCES.values() for source in sources
-    }
+    recipe_sources = {source for sources in CURATED_RECIPE_SOURCES.values() for source in sources}
     mapped = set(CURATED_PROFILE_MAPPINGS) | recipe_sources
     assert registered == mapped
     assert set(CURATED_PROFILE_MAPPINGS).isdisjoint(recipe_sources)
@@ -439,11 +432,7 @@ async def test_profile_converts_arguments_and_projects_only_compact_mode() -> No
         search_query: str, media_types: list[str] | None = None
     ) -> dict[str, list[dict[str, Any]]]:
         seen.append((search_query, media_types))
-        return {
-            "tracks": [
-                {"uri": "track://1", "name": "One", "provider_mappings": [1, 2, 3]}
-            ]
-        }
+        return {"tracks": [{"uri": "track://1", "name": "One", "provider_mappings": [1, 2, 3]}]}
 
     adapter = _real_adapter(_handler("music/search", search))
     compact = await adapter.call(
@@ -491,18 +480,14 @@ async def test_registry_incompatibility_is_reported_without_breaking_catalog() -
     valid = _handler("music/values", values)
     adapter = _real_adapter(valid)
     adapter.mass.command_handlers["broken"] = SimpleNamespace(target=None)
-    assert [entry.name for entry in await adapter.visible_entries()] == [
-        "ma_api:music/values"
-    ]
+    assert [entry.name for entry in await adapter.visible_entries()] == ["ma_api:music/values"]
     diagnostics = adapter.diagnostics()
     assert diagnostics["available"] is True
     assert diagnostics["incompatible_handlers"] == ("broken",)
     assert diagnostics["last_error"] == "1 incompatible handler(s) skipped"
     adapter.mass.command_handlers = []
     assert await adapter.visible_entries() == []
-    assert (
-        adapter.diagnostics()["last_error"] == "mass.command_handlers is not a mapping"
-    )
+    assert adapter.diagnostics()["last_error"] == "mass.command_handlers is not a mapping"
 
 
 async def test_recipe_requires_both_enabled_tag_and_ma_scope() -> None:
@@ -523,20 +508,17 @@ async def test_recipe_requires_both_enabled_tag_and_ma_scope() -> None:
     )
     denied_tag.ingest_curated([tool])
     assert not any(
-        entry.name == "mcp_api:players/summary"
-        for entry in await denied_tag.visible_entries()
+        entry.name == "mcp_api:players/summary" for entry in await denied_tag.visible_entries()
     )
 
     denied_scope = _real_adapter(
         _handler("music/values", values),
-        scope_checker=lambda _user, scope: str(getattr(scope, "value", scope))
-        != "players.read",
+        scope_checker=lambda _user, scope: str(getattr(scope, "value", scope)) != "players.read",
         allowed_tags={"query:players"},
     )
     denied_scope.ingest_curated([tool])
     assert not any(
-        entry.name == "mcp_api:players/summary"
-        for entry in await denied_scope.visible_entries()
+        entry.name == "mcp_api:players/summary" for entry in await denied_scope.visible_entries()
     )
 
 
@@ -546,13 +528,9 @@ async def test_execution_sets_and_restores_ma_auth_context(
     """Native and recipe execution share MA's request-local identity context."""
     current_user: contextvars.ContextVar[Any] = contextvars.ContextVar("current_user")
     current_token: contextvars.ContextVar[Any] = contextvars.ContextVar("current_token")
-    auth_middleware = SimpleNamespace(
-        current_user=current_user, current_token=current_token
-    )
+    auth_middleware = SimpleNamespace(current_user=current_user, current_token=current_token)
     helpers = SimpleNamespace(auth_middleware=auth_middleware)
-    monkeypatch.setitem(
-        sys.modules, "music_assistant.controllers.webserver.helpers", helpers
-    )
+    monkeypatch.setitem(sys.modules, "music_assistant.controllers.webserver.helpers", helpers)
 
     async def whoami() -> str:
         return str(current_user.get().user_id)
@@ -578,9 +556,7 @@ async def test_schema_covers_enum_union_collections_and_impersonation() -> None:
         ONE = "one"
         TWO = "two"
 
-    async def typed(
-        mode: Mode, values: list[int], optional: str | None = None
-    ) -> dict[str, int]:
+    async def typed(mode: Mode, values: list[int], optional: str | None = None) -> dict[str, int]:
         return {str(mode): len(values) + bool(optional)}
 
     handler = _handler("music/typed", typed)
@@ -647,6 +623,93 @@ async def test_disabled_user_and_transport_commands_are_hidden() -> None:
     assert await transport.visible_entries() == []
 
 
+async def test_native_command_requires_its_live_permission_tag() -> None:
+    """Native handlers cannot bypass the provider's existing permission toggles."""
+
+    async def operation() -> None:
+        return None
+
+    handler = _handler("music/search", operation, "library.read")
+    assert await _real_adapter(handler, allowed_tags=set()).visible_entries() == []
+    visible = await _real_adapter(handler, allowed_tags={str(Tag.QUERY_LIBRARY)}).visible_entries()
+    assert [entry.name for entry in visible] == ["ma_api:music/search"]
+
+
+@pytest.mark.parametrize(
+    ("command", "parameter", "user_filter"),
+    [
+        ("players/get", "player_id", "player_filter"),
+        ("config/providers/get", "instance_id", "provider_filter"),
+    ],
+)
+async def test_invocation_rejects_targets_outside_user_filters(
+    command: str, parameter: str, user_filter: str
+) -> None:
+    """Direct dynamic invocation preserves MA player and provider filters."""
+    called = False
+
+    async def operation(**kwargs: Any) -> dict[str, Any]:
+        nonlocal called
+        called = True
+        return kwargs
+
+    operation.__signature__ = inspect.Signature(  # type: ignore[attr-defined]
+        [inspect.Parameter(parameter, inspect.Parameter.POSITIONAL_OR_KEYWORD)]
+    )
+    handler = _handler(command, operation, "players.read")
+    handler.type_hints = {parameter: str, "return": dict[str, Any]}
+    filters = {"player_filter": [], "provider_filter": []}
+    filters[user_filter] = [f"allowed-{user_filter.removesuffix('_filter')}"]
+    user = SimpleNamespace(
+        user_id="u1",
+        username="limited",
+        enabled=True,
+        role="user",
+        **filters,
+    )
+    adapter = _real_adapter(
+        handler,
+        policy=DynamicPolicy(read=True, system=True),
+        user=user,
+    )
+    with pytest.raises(ToolError, match="not permitted"):
+        await adapter.call(
+            f"ma_api:{command}",
+            {parameter: "blocked-target"},
+            response_mode="compact",
+            fields=None,
+            max_items=None,
+            ctx=MagicMock(),
+        )
+    assert called is False
+
+
+async def test_admin_scope_is_not_restricted_by_user_filters() -> None:
+    """Admin calls retain MA's Scope.ALL exemption from target filters."""
+
+    async def get_player(player_id: str) -> str:
+        return player_id
+
+    admin = SimpleNamespace(
+        user_id="u1",
+        username="admin",
+        enabled=True,
+        role="admin",
+        player_filter=["other-player"],
+        provider_filter=["other-provider"],
+    )
+    adapter = _real_adapter(_handler("players/get", get_player, "players.read"), user=admin)
+    result = await adapter.call(
+        "ma_api:players/get",
+        {"player_id": "kitchen"},
+        response_mode="compact",
+        fields=None,
+        max_items=None,
+        ctx=MagicMock(),
+    )
+    assert result["data"] == "kitchen"
+
+
 async def test_sync_coroutine_and_generator_handlers_close_cleanly() -> None:
     """The dispatcher supports all MA execution shapes and closes generators."""
     closed = False
@@ -702,9 +765,7 @@ async def test_confirmation_policy_is_mandatory_for_system_and_impersonation(
     adapter = _real_adapter(_handler("music/read", lambda: None))
     handler = object()
     ctx = MagicMock()
-    read = DynamicEntry(
-        "ma_api:read", "read", "read", {}, DynamicRisk.READ, None, False, handler
-    )
+    read = DynamicEntry("ma_api:read", "read", "read", {}, DynamicRisk.READ, None, False, handler)
     write = DynamicEntry(
         "ma_api:write", "write", "write", {}, DynamicRisk.WRITE, None, False, handler
     )
@@ -729,3 +790,85 @@ async def test_confirmation_policy_is_mandatory_for_system_and_impersonation(
         True,
         True,
     ]
+
+
+async def test_queue_delete_always_confirms_before_execution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Disabling configured write prompts cannot bypass destructive queue elicitation."""
+    confirmation = AsyncMock()
+    monkeypatch.setattr("provider.dynamic_api.confirm_or_raise", confirmation)
+    called = False
+
+    async def clear(queue_id: str) -> None:
+        nonlocal called
+        del queue_id
+        called = True
+
+    adapter = _real_adapter(
+        _handler("player_queues/clear", clear, "queues.control"),
+        policy=DynamicPolicy(write=True),
+        allowed_tags={str(Tag.DELETE_QUEUE)},
+    )
+    adapter._confirmation_provider = lambda: False
+    entry = (await adapter.visible_entries())[0]
+    assert entry.risk is DynamicRisk.WRITE
+    assert entry.decision.confirmation is Confirmation.ALWAYS
+    await adapter.call(
+        "ma_api:player_queues/clear",
+        {"queue_id": "kitchen"},
+        response_mode="compact",
+        fields=None,
+        max_items=None,
+        ctx=MagicMock(),
+    )
+    assert confirmation.await_args.kwargs["enabled"] is True
+    assert called is True
+
+
+async def test_impersonation_is_authorized_before_confirmation_and_execution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A caller without impersonation scope cannot elicit or run as another user."""
+    confirmation = AsyncMock()
+    monkeypatch.setattr("provider.dynamic_api.confirm_or_raise", confirmation)
+    called = False
+
+    async def operation() -> None:
+        nonlocal called
+        called = True
+
+    caller = SimpleNamespace(
+        user_id="u1",
+        username="caller",
+        enabled=True,
+        role="guest",
+        player_filter=[],
+        provider_filter=[],
+    )
+    target = SimpleNamespace(
+        user_id="u2",
+        username="target",
+        enabled=True,
+        role="guest",
+        player_filter=[],
+        provider_filter=[],
+    )
+    handler = _handler("music/read", operation, "library.read")
+    handler.allow_impersonation = True
+    adapter = _real_adapter(handler, user=caller)
+    adapter.mass.webserver.auth.get_user = AsyncMock(
+        side_effect=lambda identifier: caller if identifier == "u1" else target
+    )
+    adapter.mass.webserver.auth.get_user_by_username = AsyncMock(return_value=None)
+    with pytest.raises(ToolError, match="impersonate"):
+        await adapter.call(
+            "ma_api:music/read",
+            {"user": "u2"},
+            response_mode="compact",
+            fields=None,
+            max_items=None,
+            ctx=MagicMock(),
+        )
+    confirmation.assert_not_awaited()
+    assert called is False

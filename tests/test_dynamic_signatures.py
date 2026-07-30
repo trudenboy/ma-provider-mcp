@@ -10,9 +10,11 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastmcp.server.auth import AccessToken
-from music_assistant_models.media_items import Track
+from music_assistant_models.media_items import Track  # noqa: TC002
 
 from provider.dynamic_api import DynamicAPIAdapter, DynamicPolicy
+from provider.dynamic_signatures import UnsupportedSignatureError, compile_signature
+from provider.tags import Tag
 
 
 async def library_items(
@@ -41,8 +43,6 @@ def _library_items_handler(calls: list[dict[str, Any]]) -> Any:
 
 def _compile(signature: inspect.Signature, type_hints: Mapping[str, Any]) -> Any:
     """Compile a handler signature through the public signature compiler."""
-    from provider.dynamic_signatures import compile_signature
-
     return compile_signature(signature, type_hints)
 
 
@@ -72,15 +72,14 @@ def _adapter(handler: Any) -> DynamicAPIAdapter:
         confirmation_provider=lambda: True,
         token_provider=lambda: AccessToken(token="secret", client_id="u1", scopes=[]),
         scope_checker=lambda _user, _scope: True,
+        allowed_tags_provider=lambda: {str(Tag.QUERY_LIBRARY)},
     )
 
 
 async def test_adapter_does_not_publish_kwargs_as_a_required_property() -> None:
     """The live adapter schema excludes MA's internal keyword catch-all."""
     entry = (
-        await _adapter(
-            _handler("music/tracks/library_items", library_items)
-        ).visible_entries()
+        await _adapter(_handler("music/tracks/library_items", library_items)).visible_entries()
     )[0]
 
     assert "kwargs" not in entry.input_schema["properties"]
@@ -127,7 +126,6 @@ async def test_library_item_commands_bind_named_arguments_through_adapter(
 
 def test_var_positional_handler_is_incompatible() -> None:
     """Handlers with positional variadic values are rejected at discovery time."""
-    from provider.dynamic_signatures import UnsupportedSignatureError
 
     def invalid(first: str, *values: str) -> None:
         pass

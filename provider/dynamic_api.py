@@ -8,11 +8,18 @@ import inspect
 import json
 from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
 from dataclasses import dataclass
-from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
 from fastmcp.exceptions import ToolError
 
+from .command_policy import (
+    CommandDecision,
+    Confirmation,
+    DynamicPolicy,
+    DynamicRisk,
+    preflight_command,
+    resolve_command_policy,
+)
 from .command_profiles import (
     COMMAND_PROFILES,
     CURATED_RECIPE_SCOPES,
@@ -38,9 +45,6 @@ if TYPE_CHECKING:
 _ALIASES_BY_COMMAND = aliases_by_command()
 
 _DENIED_TRANSPORT_COMMANDS = frozenset({"dashboard/register", "dashboard/unregister"})
-_SYSTEM_PREFIXES = frozenset(
-    {"auth", "config", "diagnostics", "logging", "tasks", "audio_analysis", "dashboard"}
-)
 _COMPACT_ITEMS = 25
 _FULL_ITEMS = 200
 _COMPACT_BYTES = 12_288
@@ -48,16 +52,6 @@ _FULL_BYTES = 65_536
 _COMPACT_STRING = 2_048
 _FULL_STRING = 8_192
 _CALL_TIMEOUT_SECONDS = 60
-_SAFE_UNSCOPED_COMMANDS = frozenset({"info", "translations/locales"})
-
-
-class DynamicRisk(StrEnum):
-    """Provider-side risk classes for dynamically discovered commands."""
-
-    READ = "read"
-    CONTROL = "control"
-    WRITE = "write"
-    SYSTEM = "system"
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,20 +71,7 @@ class DynamicEntry:
     annotations: dict[str, bool] = dataclasses.field(default_factory=dict)
     profile: CommandProfile | None = None
     compiled_signature: CompiledSignature | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class DynamicPolicy:
-    """Independent exposure switches for the four dynamic risk classes."""
-
-    read: bool = True
-    control: bool = False
-    write: bool = False
-    system: bool = False
-
-    def allows(self, risk: DynamicRisk) -> bool:
-        """Return whether a risk class is enabled."""
-        return bool(getattr(self, risk.value))
+    decision: CommandDecision | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,29 +153,24 @@ class DynamicAPIAdapter:
         entries: list[DynamicEntry] = []
         live_commands: set[str] = set()
         incompatible: list[str] = []
+        allowed_tags = self._allowed_tags_provider()
         for command, handler in sorted(handlers.items()):
             if not self._handler_is_discoverable(command, handler):
                 incompatible.append(str(command))
                 continue
             live_commands.add(command)
             scope = getattr(handler, "required_scope", None)
-            if (
-                user is not None
-                and scope is not None
-                and not self._scope_checker(user, scope)
-            ):
+            if user is not None and scope is not None and not self._scope_checker(user, scope):
                 continue
             profile = COMMAND_PROFILES.get(command)
-            risk = self._classify_risk(command, scope)
-            if profile is not None and profile.risk_override is not None:
-                risk = DynamicRisk(profile.risk_override)
-            if policy.allows(risk):
+            decision = resolve_command_policy(command, scope, profile)
+            if policy.allows(decision.risk) and tags_visible(decision.required_tags, allowed_tags):
                 cached = self._entry_cache.get(command)
                 try:
-                    if cached is None or cached[0] != id(handler):
+                    if cached is None or cached[0] != id(handler) or cached[1].decision != decision:
                         cached = (
                             id(handler),
-                            self._compile_entry(command, handler, risk),
+                            self._compile_entry(command, handler, decision),
                         )
                         self._entry_cache[command] = cached
                 except UnsupportedSignatureError:
@@ -214,9 +190,7 @@ class DynamicAPIAdapter:
             handlers_visible=len(entries),
             incompatible_handlers=tuple(sorted(incompatible)),
             last_error=(
-                f"{len(incompatible)} incompatible handler(s) skipped"
-                if incompatible
-                else None
+                f"{len(incompatible)} incompatible handler(s) skipped" if incompatible else None
             ),
         )
         return sorted(entries, key=lambda entry: entry.name)
@@ -247,10 +221,9 @@ class DynamicAPIAdapter:
         auth = await self._authentication()
         if auth is None and self._auth_required_provider():
             raise ToolError("Authentication is required")
-        impersonating = bool(entry.allow_impersonation and arguments.get("user"))
-        await self._confirm(entry, ctx, impersonating=impersonating)
 
         if isinstance(entry.handler, RecipeBinding):
+            await self._confirm(entry, ctx)
             result = await self._execute_recipe(entry.handler, arguments, auth)
             return self._bounded_envelope(
                 name,
@@ -266,9 +239,8 @@ class DynamicAPIAdapter:
                 call_arguments = entry.profile.convert_arguments(call_arguments)
             except ValueError as exc:
                 raise ToolError(str(exc)) from exc
-        impersonated = (
-            call_arguments.pop("user", None) if entry.allow_impersonation else None
-        )
+        impersonated = call_arguments.pop("user", None) if entry.allow_impersonation else None
+        impersonating = bool(impersonated)
         try:
             if entry.compiled_signature is None:
                 raise ValueError(f"Tool {entry.name!r} has no compiled signature")
@@ -276,9 +248,30 @@ class DynamicAPIAdapter:
         except (KeyError, TypeError, ValueError) as exc:
             raise ToolError(str(exc)) from exc
 
+        entry = self._reauthorize_entry(entry, auth)
+        impersonated_user = (
+            await self._resolve_impersonated_user(auth, str(impersonated))
+            if impersonating
+            else None
+        )
+        if impersonated_user is not None:
+            self._enforce_target_filters(impersonated_user, parsed)
+        elif auth is not None:
+            self._enforce_target_filters(auth[1], parsed)
+        decision = entry.decision
+        if decision is None:
+            decision = resolve_command_policy(entry.command, entry.required_scope, entry.profile)
+        await preflight_command(
+            self.mass,
+            decision,
+            parsed,
+            self._allowed_tags_provider(),
+        )
+        await self._confirm(entry, ctx, impersonating=impersonating)
+
         try:
             async with asyncio.timeout(_CALL_TIMEOUT_SECONDS):
-                result = await self._execute(entry, parsed, auth, impersonated)
+                result = await self._execute(entry, parsed, auth, impersonated_user)
         except TimeoutError as exc:
             raise ToolError(f"Command {entry.command!r} timed out") from exc
         except ToolError:
@@ -318,46 +311,15 @@ class DynamicAPIAdapter:
             and isinstance(getattr(handler, "type_hints", None), Mapping)
         )
 
-    @staticmethod
-    def _classify_risk(command: str, scope: Any) -> DynamicRisk:
-        """Map MA scopes and command families to a conservative risk class."""
-        prefix = command.split("/", 1)[0]
-        scope_value = str(getattr(scope, "value", scope) or "").casefold()
-        if command in _SAFE_UNSCOPED_COMMANDS:
-            return DynamicRisk.READ
-        if prefix in _SYSTEM_PREFIXES or scope is None:
-            return DynamicRisk.SYSTEM
-        if scope_value in {
-            "library.read",
-            "players.read",
-            "queues.read",
-            "providers.read",
-        }:
-            return DynamicRisk.READ
-        if scope_value.endswith(".control"):
-            return DynamicRisk.CONTROL
-        if scope_value.endswith((".write", ".manage")):
-            return DynamicRisk.WRITE
-        if scope_value.endswith(".read"):
-            return DynamicRisk.READ
-        return DynamicRisk.SYSTEM
-
     @classmethod
-    def _compile_entry(
-        cls, command: str, handler: Any, risk: DynamicRisk
-    ) -> DynamicEntry:
+    def _compile_entry(cls, command: str, handler: Any, decision: CommandDecision) -> DynamicEntry:
         """Compile a live MA handler into a catalog entry."""
         scope = getattr(handler, "required_scope", None)
         profile = COMMAND_PROFILES.get(command)
-        annotations = (
-            dict(profile.annotations) if profile is not None else cls._annotations(risk)
-        )
         compiled_signature = compile_signature(
             handler.signature,
             handler.type_hints,
-            allow_extra_kwargs=profile.allow_extra_kwargs
-            if profile is not None
-            else False,
+            allow_extra_kwargs=profile.allow_extra_kwargs if profile is not None else False,
         )
         return DynamicEntry(
             name=f"ma_api:{command}",
@@ -366,14 +328,10 @@ class DynamicAPIAdapter:
             input_schema=cls._entry_input_schema(
                 compiled_signature.input_schema,
                 profile,
-                allow_impersonation=bool(
-                    getattr(handler, "allow_impersonation", False)
-                ),
+                allow_impersonation=bool(getattr(handler, "allow_impersonation", False)),
             ),
-            risk=risk,
-            required_scope=str(getattr(scope, "value", scope))
-            if scope is not None
-            else None,
+            risk=decision.risk,
+            required_scope=str(getattr(scope, "value", scope)) if scope is not None else None,
             allow_impersonation=bool(getattr(handler, "allow_impersonation", False)),
             handler=handler,
             search_aliases=(
@@ -382,9 +340,10 @@ class DynamicAPIAdapter:
                 else _ALIASES_BY_COMMAND.get(command, ())
             ),
             output_schema=compiled_signature.output_schema(),
-            annotations=annotations,
+            annotations=dict(decision.annotations),
             profile=profile,
             compiled_signature=compiled_signature,
+            decision=decision,
         )
 
     def _recipe_entries(self, policy: DynamicPolicy, user: Any) -> list[DynamicEntry]:
@@ -421,9 +380,7 @@ class DynamicAPIAdapter:
                     description=self._recipe_description(name, tools),
                     input_schema=self._recipe_schema(tools, scopes),
                     risk=risk,
-                    required_scope=required_scopes[0]
-                    if len(required_scopes) == 1
-                    else None,
+                    required_scope=required_scopes[0] if len(required_scopes) == 1 else None,
                     allow_impersonation=False,
                     handler=RecipeBinding(tools, scopes),
                     search_aliases=tuple(sorted(tools)),
@@ -450,16 +407,12 @@ class DynamicAPIAdapter:
         return f"Provider recipe {name.split(':', 1)[1]}. Operations: {operations}."
 
     @staticmethod
-    def _recipe_schema(
-        tools: Mapping[str, Tool], scopes: Mapping[str, Any]
-    ) -> dict[str, Any]:
+    def _recipe_schema(tools: Mapping[str, Tool], scopes: Mapping[str, Any]) -> dict[str, Any]:
         """Preserve per-operation required arguments with discriminator branches."""
         if len(tools) == 1:
             source, tool = next(iter(tools.items()))
             schema = dict(tool.parameters or {})
-            schema["x-required-scope"] = str(
-                getattr(scopes[source], "value", scopes[source])
-            )
+            schema["x-required-scope"] = str(getattr(scopes[source], "value", scopes[source]))
             schema["x-required-tags"] = sorted(
                 str(tag) for tag in (getattr(tool, "tags", None) or set())
             )
@@ -477,9 +430,7 @@ class DynamicAPIAdapter:
                     "properties": properties,
                     "required": required,
                     "additionalProperties": False,
-                    "x-required-scope": str(
-                        getattr(scopes[source], "value", scopes[source])
-                    ),
+                    "x-required-scope": str(getattr(scopes[source], "value", scopes[source])),
                     "x-required-tags": sorted(
                         str(tag) for tag in (getattr(tool, "tags", None) or set())
                     ),
@@ -530,12 +481,13 @@ class DynamicAPIAdapter:
             selected = by_operation.get(str(operation))
             if selected is None:
                 valid = ", ".join(sorted(by_operation))
-                raise ToolError(
-                    f"Invalid recipe operation {operation!r}; choose: {valid}"
-                )
+                raise ToolError(f"Invalid recipe operation {operation!r}; choose: {valid}")
             source, tool = selected
         if auth is None:
             raise ToolError("Authentication is required")
+        tags = {str(tag) for tag in (getattr(tool, "tags", None) or set())}
+        if not tags_visible(tags, self._allowed_tags_provider()):
+            raise ToolError(f"Recipe operation {tool.name!r} is not permitted")
         if not self._scope_checker(auth[1], binding.scopes[source]):
             raise ToolError(f"Recipe operation {tool.name!r} is not permitted")
         context_tokens = self._set_auth_context(auth)
@@ -606,36 +558,40 @@ class DynamicAPIAdapter:
     async def _confirm(
         self, entry: DynamicEntry, ctx: Context, *, impersonating: bool = False
     ) -> None:
-        """Require confirmation for system calls and configured writes."""
+        """Apply the resolved confirmation mode and impersonation guard."""
+        confirmation = (
+            entry.decision.confirmation
+            if entry.decision is not None
+            else Confirmation.ALWAYS
+            if entry.risk is DynamicRisk.SYSTEM
+            else Confirmation.CONFIGURED
+            if entry.risk is DynamicRisk.WRITE
+            else Confirmation.NEVER
+        )
         enabled = (
             impersonating
-            or entry.risk is DynamicRisk.SYSTEM
-            or (entry.risk is DynamicRisk.WRITE and self._confirmation_provider())
+            or confirmation is Confirmation.ALWAYS
+            or (confirmation is Confirmation.CONFIGURED and self._confirmation_provider())
         )
-        await confirm_or_raise(
-            ctx, f"Run {entry.name} ({entry.risk.value})?", enabled=enabled
-        )
+        await confirm_or_raise(ctx, f"Run {entry.name} ({entry.risk.value})?", enabled=enabled)
 
     async def _execute(
         self,
         entry: DynamicEntry,
         parsed: dict[str, Any],
         auth: tuple[AccessToken, Any] | None,
-        impersonated: str | None,
+        impersonated_user: Any | None,
     ) -> Any:
         """Execute under MA's own request context and collect generators."""
         context_tokens = self._set_auth_context(auth)
         try:
-            if impersonated:
+            if impersonated_user is not None:
                 from music_assistant.controllers.webserver.helpers import (  # noqa: PLC0415
                     auth_middleware,
                 )
 
-                target_user = await auth_middleware.resolve_impersonated_user(
-                    self.mass, impersonated
-                )
                 variable = auth_middleware.impersonated_user
-                context_tokens.append((variable, variable.set(target_user)))
+                context_tokens.append((variable, variable.set(impersonated_user)))
             result = entry.handler.target(**parsed)
             if inspect.isawaitable(result):
                 result = await result
@@ -645,6 +601,88 @@ class DynamicAPIAdapter:
         finally:
             for variable, token in reversed(context_tokens):
                 variable.reset(token)
+
+    def _reauthorize_entry(
+        self,
+        entry: DynamicEntry,
+        auth: tuple[AccessToken, Any] | None,
+    ) -> DynamicEntry:
+        """Repeat live handler, scope, policy and tag checks before execution."""
+        handlers = getattr(self.mass, "command_handlers", {})
+        handler = handlers.get(entry.command) if isinstance(handlers, Mapping) else None
+        if handler is None or handler is not entry.handler:
+            raise ToolError(f"Tool {entry.name!r} not found or not permitted")
+        if not self._handler_is_discoverable(entry.command, handler):
+            raise ToolError(f"Tool {entry.name!r} not found or not permitted")
+        if auth is None:
+            raise ToolError("Authentication is required")
+        scope = getattr(handler, "required_scope", None)
+        if scope is not None and not self._scope_checker(auth[1], scope):
+            raise ToolError(f"Tool {entry.name!r} not found or not permitted")
+        profile = COMMAND_PROFILES.get(entry.command)
+        decision = resolve_command_policy(entry.command, scope, profile)
+        if not self._policy_provider().allows(decision.risk) or not tags_visible(
+            decision.required_tags, self._allowed_tags_provider()
+        ):
+            raise ToolError(f"Tool {entry.name!r} not found or not permitted")
+        return dataclasses.replace(
+            entry,
+            risk=decision.risk,
+            annotations=dict(decision.annotations),
+            decision=decision,
+        )
+
+    async def _resolve_impersonated_user(
+        self,
+        auth: tuple[AccessToken, Any] | None,
+        requested_user: str,
+    ) -> Any:
+        """Resolve and authorize an impersonated identity before elicitation."""
+        context_tokens = self._set_auth_context(auth)
+        try:
+            from music_assistant.controllers.webserver.helpers import (  # noqa: PLC0415
+                auth_middleware,
+            )
+
+            return await auth_middleware.resolve_impersonated_user(self.mass, requested_user)
+        except Exception as exc:
+            raise ToolError(f"Unable to impersonate requested user: {exc}") from exc
+        finally:
+            for variable, token in reversed(context_tokens):
+                variable.reset(token)
+
+    @staticmethod
+    def _enforce_target_filters(user: Any, arguments: Mapping[str, Any]) -> None:
+        """Reject direct target identifiers outside the current user's filters."""
+        if str(getattr(user, "role", "")).casefold() == "admin":
+            return
+        targets = (
+            (
+                getattr(user, "player_filter", None),
+                ("player_id", "queue_id", "target_player", "source_player"),
+                ("player_ids", "queue_ids"),
+            ),
+            (
+                getattr(user, "provider_filter", None),
+                ("instance_id", "provider_instance_id", "provider_filter"),
+                ("providers", "provider_instance_ids"),
+            ),
+        )
+        for allowed, scalar_keys, sequence_keys in targets:
+            if not isinstance(allowed, list | tuple | set | frozenset) or not allowed:
+                continue
+            allowed_values = {str(value) for value in allowed}
+            requested = {
+                str(arguments[key]) for key in scalar_keys if arguments.get(key) is not None
+            }
+            for key in sequence_keys:
+                value = arguments.get(key)
+                if isinstance(value, str):
+                    requested.add(value)
+                elif isinstance(value, Sequence):
+                    requested.update(str(item) for item in value)
+            if not requested.issubset(allowed_values):
+                raise ToolError("Command target is not permitted for the current user")
 
     @staticmethod
     def _set_auth_context(
@@ -707,17 +745,13 @@ class DynamicAPIAdapter:
             raw = profile.project_compact(raw)
         data = cls._project_fields(raw, fields)
         data, truncated = cls._limit_nested_items(data, item_cap)
-        data, value_truncated = cls._truncate_value(
-            data, string_cap, depth=6 if compact else 12
-        )
+        data, value_truncated = cls._truncate_value(data, string_cap, depth=6 if compact else 12)
         truncated |= value_truncated
         envelope: dict[str, Any] = {
             "command": name,
             "data": data,
             "truncated": truncated,
-            "returned_count": len(data)
-            if isinstance(data, list)
-            else (0 if data is None else 1),
+            "returned_count": len(data) if isinstance(data, list) else (0 if data is None else 1),
             "bytes": 0,
             "applied": {
                 "mode": response_mode,
@@ -740,13 +774,12 @@ class DynamicAPIAdapter:
         if isinstance(value, list):
             kept = value[:item_cap]
             list_nested = [cls._limit_nested_items(item, item_cap) for item in kept]
-            return [item for item, _changed in list_nested], len(
-                value
-            ) > item_cap or any(changed for _item, changed in list_nested)
+            return [item for item, _changed in list_nested], len(value) > item_cap or any(
+                changed for _item, changed in list_nested
+            )
         if isinstance(value, dict):
             dict_nested = {
-                key: cls._limit_nested_items(item, item_cap)
-                for key, item in value.items()
+                key: cls._limit_nested_items(item, item_cap) for key, item in value.items()
             }
             return (
                 {key: item for key, (item, _changed) in dict_nested.items()},
@@ -772,18 +805,14 @@ class DynamicAPIAdapter:
         return value
 
     @classmethod
-    def _truncate_value(
-        cls, value: Any, string_cap: int, *, depth: int
-    ) -> tuple[Any, bool]:
+    def _truncate_value(cls, value: Any, string_cap: int, *, depth: int) -> tuple[Any, bool]:
         """Bound nested depth and leaf strings while preserving JSON shape."""
         if depth <= 0 and isinstance(value, dict | list):
             return "[truncated]", True
         if isinstance(value, str) and len(value) > string_cap:
             return value[:string_cap] + "…", True
         if isinstance(value, list):
-            list_items = [
-                cls._truncate_value(item, string_cap, depth=depth - 1) for item in value
-            ]
+            list_items = [cls._truncate_value(item, string_cap, depth=depth - 1) for item in value]
             return [item for item, _changed in list_items], any(
                 changed for _item, changed in list_items
             )
@@ -815,9 +844,7 @@ class DynamicAPIAdapter:
     @staticmethod
     def _encoded_size(value: Any) -> int:
         """Measure the compact UTF-8 JSON representation."""
-        return len(
-            json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode()
-        )
+        return len(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode())
 
     @classmethod
     def _set_measured_bytes(cls, envelope: dict[str, Any]) -> None:

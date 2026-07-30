@@ -9,30 +9,29 @@ SECURE_STRING entry is *allowed* given the caller's enabled tags.
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING
 
 from fastmcp.exceptions import ToolError
 from music_assistant_models.enums import ConfigEntryType
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
-
     from music_assistant_models.config_entries import ConfigEntry
 
 
-def is_secret_key(entries: Mapping[str, ConfigEntry], key: str) -> bool:
+def is_secret_key(entries: Mapping[str, ConfigEntry] | Iterable[ConfigEntry], key: str) -> bool:
     """
     Return True iff ``key`` maps to a SECURE_STRING ConfigEntry.
 
     :param entries: ConfigEntry definitions keyed by config key.
     :param key: The config key to test.
     """
-    entry = entries.get(key)
+    entry = _entries_by_key(entries).get(key)
     return entry is not None and entry.type == ConfigEntryType.SECURE_STRING
 
 
 def gate_secret_writes(
-    entries: Mapping[str, ConfigEntry],
+    entries: Mapping[str, ConfigEntry] | Iterable[ConfigEntry],
     values: Mapping[str, object],
     *,
     secret_tag_enabled: bool,
@@ -49,6 +48,16 @@ def gate_secret_writes(
     """
     if secret_tag_enabled:
         return
+    indexed = _entries_by_key(entries)
     for key in values:
-        if is_secret_key(entries, key):
+        if is_secret_key(indexed, key):
             raise ToolError(f"SECURE_STRING write requires config:write:secret tag (key={key!r})")
+
+
+def _entries_by_key(
+    entries: Mapping[str, ConfigEntry] | Iterable[ConfigEntry],
+) -> Mapping[str, ConfigEntry]:
+    """Return config entries indexed by key."""
+    if isinstance(entries, Mapping):
+        return entries
+    return {entry.key: entry for entry in entries}

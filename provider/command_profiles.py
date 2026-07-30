@@ -250,12 +250,13 @@ def _profile_annotations(command: str) -> Mapping[str, bool]:
 
 def _profile_risk(command: str) -> str:
     """Keep known curated commands stable if upstream scope metadata drifts."""
-    annotations = _profile_annotations(command)
-    if annotations["readOnlyHint"]:
-        return "read"
-    if annotations["destructiveHint"]:
+    if any(part in command for part in ("remove", "delete", "clear")):
         return "write"
-    return "control"
+    if command.startswith(("players/cmd/", "player_queues/")):
+        return "control"
+    if any(part in command for part in ("/add_", "/create_", "/mark_")):
+        return "write"
+    return "read"
 
 
 def _build_profiles() -> dict[str, CommandProfile]:
@@ -317,8 +318,7 @@ COMMAND_PROFILES: dict[str, CommandProfile] = _build_profiles()
 def legacy_migrations() -> dict[str, str]:
     """Return concise replacements for every former curated public name."""
     migrations = {
-        legacy: f"ma_api:{command}"
-        for legacy, command in CURATED_PROFILE_MAPPINGS.items()
+        legacy: f"ma_api:{command}" for legacy, command in CURATED_PROFILE_MAPPINGS.items()
     }
     for recipe, sources in CURATED_RECIPE_SOURCES.items():
         migrations.update(dict.fromkeys(sources, recipe))
