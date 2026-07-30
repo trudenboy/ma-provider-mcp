@@ -22,6 +22,13 @@
 - Preserve compatibility with both the installed MA `register_api_command(..., authenticated, required_role, alias)` signature and newer builds that additionally accept `required_scope`.
 - Do not alter Music Assistant queue auto-fill behavior.
 - Use test-first changes and a focused commit after every task.
+- Treat `/Users/renso/Projects/ma-server` as the authoritative fresh Music
+  Assistant `dev` source tree for this implementation. Run provider tests in a
+  complete Linux Music Assistant virtual environment with that tree mounted as
+  source; do not substitute a reduced host-only dependency installation.
+- Tests that need a running `MusicAssistant` object reuse the canonical `mass`
+  fixture from the MA source tree's `tests/conftest.py`. Mocks remain acceptable
+  only for pure isolated behavior that does not depend on MA controller state.
 
 ---
 
@@ -576,7 +583,6 @@ async def test_registers_exactly_three_real_tools() -> None:
         assert {tool.name for tool in await client.list_tools()} == {
             "search_tools", "get_tool_schema", "call_tool"
         }
-    assert not mcp._tool_manager._transforms
 
 
 async def test_parallel_search_builds_one_index() -> None:
@@ -1063,15 +1069,18 @@ async def test_runtime_has_three_tools_and_preserves_resources_and_prompts(runti
         assert await client.list_prompts()
 ```
 
-Update resource tests to import from `provider.resource_helpers`. Add an AST test
-that rejects `FastMCP(`, `.mount(`, and `@*.tool` under `provider/commands/` and
-rejects any `provider.tools` import in production code.
+Update resource tests to import from `provider.resource_helpers`. Verify through
+the public runtime surface that provider commands register as MA handlers without
+creating or mounting a FastMCP subserver. Keep source-tree searches for retired
+imports and decorators as a non-test migration audit in Task 11 rather than an AST
+test coupled to implementation structure.
 
 - [ ] **Step 2: Run server/resource tests before removing subservers**
 
 Run: `uv run pytest tests/test_resources.py tests/test_prompts.py tests/test_e2e_smoke.py -v`
 
-Expected: PASS for behavior, while the new AST assertion FAILS on mounted tool servers.
+Expected before the implementation: FAIL because the public runtime still lists
+the mounted domain tools; PASS once only the three meta-tools remain.
 
 - [ ] **Step 3: Move only resource-shared helpers and simplify `server.py`**
 
