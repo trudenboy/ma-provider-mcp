@@ -199,7 +199,7 @@ class MCPServerRuntime:
             name="music-assistant",
             instructions=(
                 "Music Assistant MCP server with on-demand discovery. Use search_tools, "
-                "then get_tool_schema for one canonical ma_api:* or mcp_api:* command, "
+                "then get_tool_schema for one canonical ma_api:* command, "
                 "then execute it through call_tool. Responses default to compact mode. "
                 "Resources expose library://, player:// and queue:// views."
             ),

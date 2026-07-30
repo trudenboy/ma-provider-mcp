@@ -6,7 +6,7 @@ import asyncio
 import dataclasses
 import inspect
 import json
-from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
+from collections.abc import AsyncGenerator, Callable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -22,11 +22,9 @@ from .command_policy import (
 )
 from .command_profiles import (
     COMMAND_PROFILES,
-    CURATED_RECIPE_SCOPES,
-    CURATED_RECIPE_SOURCES,
     CommandProfile,
     aliases_by_command,
-    legacy_migrations,
+    LEGACY_COMMAND_MAPPINGS,
 )
 from .dynamic_serialization import json_value
 from .dynamic_signatures import (
@@ -45,10 +43,6 @@ if TYPE_CHECKING:
 _ALIASES_BY_COMMAND = aliases_by_command()
 
 _DENIED_TRANSPORT_COMMANDS = frozenset({"dashboard/register", "dashboard/unregister"})
-_RECIPE_POLICY_COMMANDS = {
-    "queue_clear_queue": "player_queues/clear",
-    "queue_remove_item": "player_queues/delete_item",
-}
 _COMPACT_ITEMS = 25
 _FULL_ITEMS = 200
 _COMPACT_BYTES = 12_288
@@ -69,7 +63,7 @@ def _command_error(command: str, exc: Exception) -> ToolError:
 
 @dataclass(frozen=True, slots=True)
 class DynamicEntry:
-    """One visible dynamic command or provider-local recipe."""
+    """One visible dynamic MA command."""
 
     name: str
     command: str
@@ -101,14 +95,6 @@ class CatalogView:
 
     fingerprint: CatalogFingerprint
     entries: tuple[DynamicEntry, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class RecipeBinding:
-    """A provider-local recipe backed by one or more former curated tools."""
-
-    tools: Mapping[str, Tool]
-    scopes: Mapping[str, Any]
 
 
 @dataclass(slots=True)
@@ -157,7 +143,6 @@ class DynamicAPIAdapter:
         self._token_provider = token_provider
         self._scope_checker = scope_checker or self._default_scope_checker
         self._allowed_tags_provider = allowed_tags_provider or (lambda: set())
-        self._curated_tools: dict[str, Tool] = {}
         self._snapshot: CatalogSnapshot | None = None
         self._snapshot_diagnostics: _SnapshotDiagnostics | None = None
         self._snapshot_lock = asyncio.Lock()
@@ -166,15 +151,6 @@ class DynamicAPIAdapter:
     def diagnostics(self) -> dict[str, Any]:
         """Return a JSON-safe snapshot of dynamic-catalog compatibility."""
         return dataclasses.asdict(self._diagnostics)
-
-    def ingest_curated(self, tools: Sequence[Tool]) -> None:
-        """Capture internal curated executors before the public surface collapses."""
-        self._curated_tools = {
-            tool.name: tool
-            for tool in tools
-            if not tool.name.startswith(("ma_api:", "mcp_api:"))
-            and tool.name not in {"search_tools", "get_tool_schema", "call_tool"}
-        }
 
     async def base_snapshot(self) -> CatalogSnapshot:
         """Return the compiled snapshot for the current live command registry."""
@@ -211,7 +187,6 @@ class DynamicAPIAdapter:
             and entry.decision is not None
             and tags_visible(entry.decision.required_tags, allowed_tags)
         ]
-        entries.extend(self._recipe_entries(policy, user))
         visible = tuple(sorted(entries, key=lambda entry: entry.name))
         return CatalogView(snapshot.fingerprint, visible)
 
@@ -245,16 +220,6 @@ class DynamicAPIAdapter:
         auth = await self._authentication()
         if auth is None and self._auth_required_provider():
             raise ToolError("Authentication is required")
-
-        if isinstance(entry.handler, RecipeBinding):
-            result = await self._call_recipe(entry, arguments, auth, ctx)
-            return self._bounded_envelope(
-                name,
-                result,
-                response_mode=response_mode,
-                fields=fields,
-                max_items=max_items,
-            )
 
         call_arguments = dict(arguments)
         if entry.profile is not None:
@@ -443,200 +408,6 @@ class DynamicAPIAdapter:
             compiled_signature=compiled_signature,
             decision=decision,
         )
-
-    def _recipe_entries(self, policy: DynamicPolicy, user: Any) -> list[DynamicEntry]:
-        """Compile available curated executors into the sixteen recipe entries."""
-        entries: list[DynamicEntry] = []
-        allowed_tags = self._allowed_tags_provider()
-        for name, sources in CURATED_RECIPE_SOURCES.items():
-            tools: dict[str, Tool] = {}
-            scopes: dict[str, Any] = {}
-            for source in sources:
-                tool = self._curated_tools.get(source)
-                if tool is None:
-                    continue
-                tags = {str(tag) for tag in (getattr(tool, "tags", None) or set())}
-                if not tags_visible(tags, allowed_tags):
-                    continue
-                scope = self._resolve_scope(CURATED_RECIPE_SCOPES[source])
-                if user is not None and not self._scope_checker(user, scope):
-                    continue
-                tools[source] = tool
-                scopes[source] = scope
-            if not tools:
-                continue
-            risk = self._recipe_risk(name)
-            if not policy.allows(risk):
-                continue
-            required_scopes = sorted(
-                {str(getattr(scope, "value", scope)) for scope in scopes.values()}
-            )
-            entries.append(
-                DynamicEntry(
-                    name=name,
-                    command=name.split(":", 1)[1],
-                    description=self._recipe_description(name, tools),
-                    input_schema=self._recipe_schema(tools, scopes),
-                    risk=risk,
-                    required_scope=required_scopes[0] if len(required_scopes) == 1 else None,
-                    allow_impersonation=False,
-                    handler=RecipeBinding(tools, scopes),
-                    search_aliases=tuple(sorted(tools)),
-                    annotations=self._annotations(risk),
-                )
-            )
-        return entries
-
-    @staticmethod
-    def _recipe_risk(name: str) -> DynamicRisk:
-        """Classify provider-local recipes conservatively."""
-        if name.startswith(("mcp_api:config/", "mcp_api:debug/")):
-            return DynamicRisk.SYSTEM
-        if name in {"mcp_api:players/summary", "mcp_api:queue/snapshot"}:
-            return DynamicRisk.READ
-        if name in {"mcp_api:queue/add", "mcp_api:queue/move"}:
-            return DynamicRisk.CONTROL
-        return DynamicRisk.WRITE
-
-    @staticmethod
-    def _recipe_description(name: str, tools: Mapping[str, Tool]) -> str:
-        """Build a concise recipe description from its retained operations."""
-        operations = ", ".join(source.split("_", 1)[1] for source in tools)
-        return f"Provider recipe {name.split(':', 1)[1]}. Operations: {operations}."
-
-    @staticmethod
-    def _recipe_schema(tools: Mapping[str, Tool], scopes: Mapping[str, Any]) -> dict[str, Any]:
-        """Preserve per-operation required arguments with discriminator branches."""
-        if len(tools) == 1:
-            source, tool = next(iter(tools.items()))
-            schema = dict(tool.parameters or {})
-            schema["x-required-scope"] = str(getattr(scopes[source], "value", scopes[source]))
-            schema["x-required-tags"] = sorted(
-                str(tag) for tag in (getattr(tool, "tags", None) or set())
-            )
-            return schema
-        branches: list[dict[str, Any]] = []
-        for source, tool in tools.items():
-            operation = source.split("_", 1)[1]
-            tool_schema = tool.parameters or {}
-            properties = dict(tool_schema.get("properties", {}))
-            properties["operation"] = {"type": "string", "const": operation}
-            required = sorted({"operation", *tool_schema.get("required", [])})
-            branches.append(
-                {
-                    "type": "object",
-                    "properties": properties,
-                    "required": required,
-                    "additionalProperties": False,
-                    "x-required-scope": str(getattr(scopes[source], "value", scopes[source])),
-                    "x-required-tags": sorted(
-                        str(tag) for tag in (getattr(tool, "tags", None) or set())
-                    ),
-                }
-            )
-        return {
-            "type": "object",
-            "oneOf": branches,
-            "discriminator": {"propertyName": "operation"},
-        }
-
-    @staticmethod
-    def _resolve_scope(value: str) -> Any:
-        """Use MA's current Scope enum when available, retaining dev compatibility."""
-        try:
-            from music_assistant_models.auth import Scope  # noqa: PLC0415
-
-            return Scope(value)
-        except ImportError, ValueError:
-            return value
-
-    @staticmethod
-    def _annotations(risk: DynamicRisk) -> dict[str, bool]:
-        """Return conservative MCP behavior hints for a risk class."""
-        return {
-            "readOnlyHint": risk is DynamicRisk.READ,
-            "destructiveHint": risk in {DynamicRisk.WRITE, DynamicRisk.SYSTEM},
-            "idempotentHint": risk is DynamicRisk.READ,
-            "openWorldHint": False,
-        }
-
-    async def _execute_recipe(
-        self,
-        binding: RecipeBinding,
-        arguments: dict[str, Any],
-        auth: tuple[AccessToken, Any] | None = None,
-    ) -> Any:
-        """Select and invoke a retained executor under MA's auth context."""
-        _source, tool, call_arguments = self._authorize_recipe_operation(binding, arguments, auth)
-        context_tokens = self._set_auth_context(auth)
-        try:
-            result = await tool.run(call_arguments)
-        except ToolError:
-            raise
-        except Exception as exc:
-            raise ToolError(f"Recipe operation {tool.name!r} failed: {exc}") from exc
-        else:
-            if result.is_error:
-                raise ToolError(f"Recipe operation {tool.name!r} failed")
-            structured = result.structured_content
-            if isinstance(structured, dict) and set(structured) == {"result"}:
-                return structured["result"]
-            return structured if structured is not None else result.content
-        finally:
-            for variable, token in reversed(context_tokens):
-                variable.reset(token)
-
-    async def _call_recipe(
-        self,
-        entry: DynamicEntry,
-        arguments: dict[str, Any],
-        auth: tuple[AccessToken, Any] | None,
-        ctx: Context,
-    ) -> Any:
-        """Reauthorize, confirm and execute one retained recipe operation."""
-        if not self._policy_provider().allows(entry.risk):
-            raise ToolError(f"Tool {entry.name!r} not found or not permitted")
-        source, _tool, _call_arguments = self._authorize_recipe_operation(
-            entry.handler, arguments, auth
-        )
-        policy_command = _RECIPE_POLICY_COMMANDS.get(source)
-        confirmation = (
-            resolve_command_policy(policy_command, entry.required_scope, None).confirmation
-            if policy_command is not None
-            else None
-        )
-        await self._confirm(entry, ctx, confirmation=confirmation)
-        return await self._execute_recipe(entry.handler, arguments, auth)
-
-    def _authorize_recipe_operation(
-        self,
-        binding: RecipeBinding,
-        arguments: Mapping[str, Any],
-        auth: tuple[AccessToken, Any] | None,
-    ) -> tuple[str, Tool, dict[str, Any]]:
-        """Select a recipe operation and enforce its current tag and scope."""
-        call_arguments = dict(arguments)
-        if len(binding.tools) == 1:
-            source, tool = next(iter(binding.tools.items()))
-        else:
-            operation = call_arguments.pop("operation", None)
-            by_operation = {
-                source.split("_", 1)[1]: (source, candidate)
-                for source, candidate in binding.tools.items()
-            }
-            selected = by_operation.get(str(operation))
-            if selected is None:
-                valid = ", ".join(sorted(by_operation))
-                raise ToolError(f"Invalid recipe operation {operation!r}; choose: {valid}")
-            source, tool = selected
-        if auth is None:
-            raise ToolError("Authentication is required")
-        tags = {str(tag) for tag in (getattr(tool, "tags", None) or set())}
-        if not tags_visible(tags, self._allowed_tags_provider()):
-            raise ToolError(f"Recipe operation {tool.name!r} is not permitted")
-        if not self._scope_checker(auth[1], binding.scopes[source]):
-            raise ToolError(f"Recipe operation {tool.name!r} is not permitted")
-        return source, tool, call_arguments
 
     @staticmethod
     def _description(target: Callable[..., Any], command: str) -> str:
@@ -1005,8 +776,8 @@ class DynamicAPIAdapter:
         return bool(has_scope(user, scope))
 
 
-LEGACY_MIGRATIONS: dict[str, str] = {
-    **legacy_migrations(),
+LEGACY_MIGRATIONS = {
+    **LEGACY_COMMAND_MAPPINGS,
     # Historical pre-profile alias retained only for an actionable error.
-    "playback_play": "ma_api:players/cmd/play",
+    "playback_play": LEGACY_COMMAND_MAPPINGS["playback_play"],
 }

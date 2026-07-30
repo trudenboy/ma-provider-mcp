@@ -282,7 +282,8 @@ def register_meta_discovery(
         :param max_items: Optional smaller item limit.
         """
         if replacement := LEGACY_MIGRATIONS.get(name):
-            raise ToolError(f"Tool {name!r} was retired; use {replacement!r}")
+            hint = replacement.command or replacement.message
+            raise ToolError(f"Tool {name!r} was retired; use {hint!r}")
         if not name.startswith("ma_api:"):
             raise ToolError(f"Tool {name!r} is not a canonical ma_api command")
         if ctx is None:  # pragma: no cover - FastMCP always injects Context
@@ -296,7 +297,6 @@ def register_meta_discovery(
             ctx=ctx,
         )
 
-    # Curated subservers remain available internally for provider recipes but
-    # are never exposed to model clients alongside the permanent meta surface.
+    # Only the permanent discovery surface is exposed to model clients.
     mcp.disable(components={"tool"})
     mcp.enable(names=_META_NAMES, components={"tool"})

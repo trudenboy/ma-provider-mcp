@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import ast
 import asyncio
 import contextvars
 import inspect
 import sys
 from dataclasses import dataclass
 from enum import StrEnum
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -18,7 +16,6 @@ import pytest
 from fastmcp import Client, FastMCP
 from fastmcp.exceptions import ToolError
 from fastmcp.server.auth import AccessToken
-from fastmcp.tools import Tool
 from music_assistant_models.config_entries import ConfigEntry
 from music_assistant_models.enums import ConfigEntryType
 
@@ -27,7 +24,6 @@ from provider.command_policy import Confirmation
 from provider.command_profiles import (
     COMMAND_PROFILES,
     CURATED_PROFILE_MAPPINGS,
-    CURATED_RECIPE_SOURCES,
     CommandProfile,
 )
 from provider.dynamic_api import (
@@ -41,7 +37,6 @@ from provider.dynamic_api import (
 from provider.meta_discovery import register_meta_discovery
 from provider.server import build_tag_lookup
 from provider.tags import Tag
-from provider.tools.queue import build_queue_server
 
 _META_NAMES = {"search_tools", "call_tool", "get_tool_schema"}
 
@@ -152,6 +147,15 @@ async def test_search_uses_alias_but_returns_canonical_ma_name() -> None:
             "description": "Start playback on a player.",
         }
     ]
+
+
+async def test_call_tool_rejects_retired_name_with_concrete_migration() -> None:
+    """Legacy names remain actionable hints but never redirect to executable recipes."""
+    mcp, _adapter = _server()
+    async with Client(mcp) as client:
+        result = await client.call_tool("call_tool", {"name": "players_list_players"})
+    assert result.is_error is True
+    assert "players/all" in str(result.content)
 
 
 def _meta_service(adapter: DynamicAPIAdapter) -> Any:
@@ -697,90 +701,24 @@ async def test_adapter_hides_catalog_when_mcp_auth_is_disabled() -> None:
     assert await adapter.visible_entries() == []
 
 
-async def test_recipe_keeps_curated_executor_behind_canonical_name() -> None:
-    """A consolidated recipe preserves the existing curated implementation."""
-
-    async def list_players(include_unavailable: bool = False) -> list[dict[str, Any]]:
-        return [{"player_id": "p1", "unavailable": include_unavailable}]
-
-    async def get_player(player_id: str) -> dict[str, str]:
-        return {"player_id": player_id}
-
-    async def values() -> list[str]:
-        return []
-
-    adapter = _real_adapter(_handler("music/values", values))
-    adapter.ingest_curated(
-        [
-            Tool.from_function(fn=list_players, name="players_list_players"),
-            Tool.from_function(fn=get_player, name="players_get_player"),
-        ]
-    )
-    entries = await adapter.visible_entries()
-    recipe = next(entry for entry in entries if entry.name == "mcp_api:players/summary")
-    operations = {
-        branch["properties"]["operation"]["const"] for branch in recipe.input_schema["oneOf"]
-    }
-    assert operations == {"list_players", "get_player"}
-    get_branch = next(
-        branch
-        for branch in recipe.input_schema["oneOf"]
-        if branch["properties"]["operation"]["const"] == "get_player"
-    )
-    assert get_branch["required"] == ["operation", "player_id"]
-    result = await adapter.call(
-        recipe.name,
-        {"operation": "get_player", "player_id": "p1"},
-        response_mode="compact",
-        fields=None,
-        max_items=None,
-        ctx=MagicMock(),
-    )
-    assert result["data"] == {"player_id": "p1"}
-
-
-def test_curated_migration_matrix_covers_every_registered_tool() -> None:
-    """Every curated tool is represented by exactly one profile or recipe."""
-    registered: set[str] = set()
-    tools_dir = Path(__file__).parents[1] / "provider" / "tools"
-    if not tools_dir.is_dir():
-        return
-    for path in tools_dir.glob("*.py"):
-        if path.name.startswith("_"):
-            continue
-        tree = ast.parse(path.read_text())
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
-                continue
-            public_name = node.name
-            decorated = False
-            for decorator in node.decorator_list:
-                call = decorator if isinstance(decorator, ast.Call) else None
-                target = call.func if call is not None else decorator
-                if not isinstance(target, ast.Attribute) or target.attr != "tool":
-                    continue
-                decorated = True
-                if call is not None:
-                    for keyword in call.keywords:
-                        if keyword.arg == "name" and isinstance(keyword.value, ast.Constant):
-                            public_name = str(keyword.value.value)
-            if decorated:
-                registered.add(f"{path.stem}_{public_name}")
-    recipe_sources = {source for sources in CURATED_RECIPE_SOURCES.values() for source in sources}
-    mapped = set(CURATED_PROFILE_MAPPINGS) | recipe_sources
-    assert registered == mapped
-    assert set(CURATED_PROFILE_MAPPINGS).isdisjoint(recipe_sources)
-
-
 def test_every_migrated_command_has_an_executable_profile() -> None:
     """The migration matrix is backed by profiles, not aliases alone."""
-    assert set(COMMAND_PROFILES) == set(CURATED_PROFILE_MAPPINGS.values())
+    assert set(CURATED_PROFILE_MAPPINGS.values()).issubset(COMMAND_PROFILES)
     for legacy, command in CURATED_PROFILE_MAPPINGS.items():
         profile = COMMAND_PROFILES[command]
         assert isinstance(profile, CommandProfile)
         assert legacy in profile.search_aliases
         assert profile.annotations
         assert profile.risk_override in {"read", "control", "write", "system"}
+    assert COMMAND_PROFILES["providers"].compact_fields == (
+        "instance_id",
+        "domain",
+        "type",
+        "name",
+        "available",
+        "enabled",
+        "last_error",
+    )
 
 
 async def test_profile_converts_arguments_and_projects_only_compact_mode() -> None:
@@ -849,42 +787,10 @@ async def test_registry_incompatibility_is_reported_without_breaking_catalog() -
     assert adapter.diagnostics()["last_error"] == "mass.command_handlers is not a mapping"
 
 
-async def test_recipe_requires_both_enabled_tag_and_ma_scope() -> None:
-    """Recipes cannot bypass provider permissions or MA domain scopes."""
-
-    async def list_players() -> list[str]:
-        return []
-
-    async def values() -> list[str]:
-        return []
-
-    tool = Tool.from_function(fn=list_players, name="players_list_players")
-    tool = tool.model_copy(update={"tags": {"query:players"}})
-    denied_tag = _real_adapter(
-        _handler("music/values", values),
-        scope_checker=lambda _user, _scope: True,
-        allowed_tags=set(),
-    )
-    denied_tag.ingest_curated([tool])
-    assert not any(
-        entry.name == "mcp_api:players/summary" for entry in await denied_tag.visible_entries()
-    )
-
-    denied_scope = _real_adapter(
-        _handler("music/values", values),
-        scope_checker=lambda _user, scope: str(getattr(scope, "value", scope)) != "players.read",
-        allowed_tags={"query:players"},
-    )
-    denied_scope.ingest_curated([tool])
-    assert not any(
-        entry.name == "mcp_api:players/summary" for entry in await denied_scope.visible_entries()
-    )
-
-
 async def test_execution_sets_and_restores_ma_auth_context(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Native and recipe execution share MA's request-local identity context."""
+    """Native execution sets and restores MA's request-local identity context."""
     current_user: contextvars.ContextVar[Any] = contextvars.ContextVar("current_user")
     current_token: contextvars.ContextVar[Any] = contextvars.ContextVar("current_token")
     auth_middleware = SimpleNamespace(current_user=current_user, current_token=current_token)
@@ -1185,43 +1091,6 @@ async def test_queue_delete_always_confirms_before_execution(
     assert called is True
 
 
-async def test_retained_queue_clear_recipe_always_confirms(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The legacy clear recipe cannot weaken native queue confirmation policy."""
-    confirmation = AsyncMock()
-    monkeypatch.setattr("provider.dynamic_api.confirm_or_raise", confirmation)
-
-    async def values() -> list[str]:
-        return []
-
-    adapter = _real_adapter(
-        _handler("music/values", values),
-        policy=DynamicPolicy(write=True),
-        allowed_tags={str(Tag.DELETE_QUEUE)},
-    )
-    adapter._confirmation_provider = lambda: False
-    adapter.mass.player_queues.clear = MagicMock()
-    queue_root = FastMCP(name="queue-root")
-    queue_root.mount(
-        build_queue_server(adapter.mass, require_confirmation=False),
-        namespace="queue",
-    )
-    adapter.ingest_curated(await queue_root.list_tools())
-
-    await adapter.call(
-        "mcp_api:queue/remove",
-        {"operation": "clear_queue", "queue_id": "kitchen"},
-        response_mode="compact",
-        fields=None,
-        max_items=None,
-        ctx=MagicMock(),
-    )
-
-    assert confirmation.await_args.kwargs["enabled"] is True
-    adapter.mass.player_queues.clear.assert_called_once_with("kitchen")
-
-
 async def test_playlist_provider_alias_is_filtered_before_confirmation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1365,67 +1234,6 @@ async def test_native_authorization_revoked_during_confirmation_prevents_executi
         )
     confirmation.assert_awaited_once()
     assert called == []
-
-
-@pytest.mark.parametrize("revoked", ["policy", "tag", "scope"])
-async def test_recipe_live_authorization_revocation_prevents_elicitation(
-    revoked: str, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Recipe live policy, tag and scope revocation all fail before elicitation."""
-    confirmation = AsyncMock()
-    monkeypatch.setattr("provider.dynamic_api.confirm_or_raise", confirmation)
-    called = False
-    policy_checks = 0
-    tag_checks = 0
-    scope_checks = 0
-
-    async def clear_queue(queue_id: str) -> None:
-        nonlocal called
-        del queue_id
-        called = True
-
-    async def values() -> list[str]:
-        return []
-
-    tool = Tool.from_function(fn=clear_queue, name="queue_clear_queue")
-    tool = tool.model_copy(update={"tags": {str(Tag.DELETE_QUEUE)}})
-    adapter = _real_adapter(
-        _handler("music/values", values),
-        policy=DynamicPolicy(write=True),
-        allowed_tags={str(Tag.DELETE_QUEUE)},
-    )
-    adapter.mass.command_handlers = {}
-    adapter.ingest_curated([tool])
-
-    def policy_provider() -> DynamicPolicy:
-        nonlocal policy_checks
-        policy_checks += 1
-        return DynamicPolicy(write=revoked != "policy" or policy_checks == 1)
-
-    def tags_provider() -> set[str]:
-        nonlocal tag_checks
-        tag_checks += 1
-        return {str(Tag.DELETE_QUEUE)} if revoked != "tag" or tag_checks <= 2 else set()
-
-    def scope_checker(_user: Any, _scope: Any) -> bool:
-        nonlocal scope_checks
-        scope_checks += 1
-        return revoked != "scope" or scope_checks == 1
-
-    adapter._policy_provider = policy_provider
-    adapter._allowed_tags_provider = tags_provider
-    adapter._scope_checker = scope_checker
-    with pytest.raises(ToolError, match="not permitted"):
-        await adapter.call(
-            "mcp_api:queue/remove",
-            {"queue_id": "kitchen"},
-            response_mode="compact",
-            fields=None,
-            max_items=None,
-            ctx=MagicMock(),
-        )
-    confirmation.assert_not_awaited()
-    assert called is False
 
 
 async def test_native_config_secret_denial_precedes_confirmation_and_target(
