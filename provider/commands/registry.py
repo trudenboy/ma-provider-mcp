@@ -4,12 +4,23 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from music_assistant_models.auth import Scope
 
 from provider.debug.event_buffer import EventBuffer
+from provider.models import (
+    EventBufferStats,
+    EventSnapshot,
+    HealthSummary,
+    LogStatsResult,
+    LogTailResult,
+    PackageVersions,
+    RemoveFromQueueResult,
+    RouteList,
+)
 from provider.tags import Tag, enabled_tags
 
 from . import debug, queue
@@ -71,25 +82,37 @@ class ProviderCommandSet:
         try:
             for definition in definitions:
                 registered.append(_register(self._mass, definition))
+            if self._buffer is not None and Tag.DEBUG_EVENTS in enabled_tags(self._config):
+                self._buffer.start()
         except Exception:
             for unregister in reversed(registered):
-                unregister()
+                with suppress(Exception):
+                    unregister()
             raise
         self._unregister = registered
-        if self._buffer is not None and Tag.DEBUG_EVENTS in enabled_tags(self._config):
-            self._buffer.start()
 
     def stop(self) -> None:
         """Unregister in reverse order and detach the event subscriber once."""
         if not self._unregister:
             return
         callbacks, self._unregister = self._unregister, []
+        first_error: Exception | None = None
         try:
             for unregister in reversed(callbacks):
-                unregister()
+                try:
+                    unregister()
+                except Exception as exc:
+                    if first_error is None:
+                        first_error = exc
         finally:
             if self._buffer is not None:
-                self._buffer.stop()
+                try:
+                    self._buffer.stop()
+                except Exception as exc:
+                    if first_error is None:
+                        first_error = exc
+        if first_error is not None:
+            raise first_error
 
     def _guard(self, scope: str, tag: Tag) -> None:
         authorize_extension(
@@ -99,27 +122,58 @@ class ProviderCommandSet:
         )
 
     def _definitions(self) -> tuple[ProviderCommand, ...]:
-        async def remove_items_safe(queue_id: str, item_ids: list[str]) -> Any:
+        async def remove_items_safe(queue_id: str, item_ids: list[str]) -> RemoveFromQueueResult:
             self._guard("queues.control", Tag.DELETE_QUEUE)
             return await queue.remove_items_safe(self._mass, queue_id, item_ids)
 
-        async def tail_log(**kwargs: Any) -> Any:
+        async def tail_log(
+            lines: int = 200,
+            level: str | None = None,
+            component_regex: str | None = None,
+            search: str | None = None,
+            since_seconds: int | None = None,
+            before: str | None = None,
+            name: str = "musicassistant.log",
+        ) -> LogTailResult:
             self._guard("system.read", Tag.DEBUG_LOGS)
-            return await debug.tail_log(self._mass, **kwargs)
+            return await debug.tail_log(
+                self._mass,
+                lines=lines,
+                level=level,
+                component_regex=component_regex,
+                search=search,
+                since_seconds=since_seconds,
+                before=before,
+                name=name,
+            )
 
-        async def log_stats(**kwargs: Any) -> Any:
+        async def log_stats(
+            since_seconds: int | None = None,
+            name: str = "musicassistant.log",
+        ) -> LogStatsResult:
             self._guard("system.read", Tag.DEBUG_LOGS)
-            return await debug.log_stats(self._mass, **kwargs)
+            return await debug.log_stats(self._mass, since_seconds=since_seconds, name=name)
 
-        async def recent_events(**kwargs: Any) -> Any:
+        async def recent_events(
+            limit: int = 100,
+            event_types: list[str] | None = None,
+            id_filter: str | None = None,
+            since_seconds: int | None = None,
+        ) -> EventSnapshot:
             self._guard("system.read", Tag.DEBUG_EVENTS)
-            return await debug.recent_events(self._buffer, **kwargs)
+            return await debug.recent_events(
+                self._buffer,
+                limit=limit,
+                event_types=event_types,
+                id_filter=id_filter,
+                since_seconds=since_seconds,
+            )
 
-        async def event_buffer_stats() -> Any:
+        async def event_buffer_stats() -> EventBufferStats:
             self._guard("system.read", Tag.DEBUG_EVENTS)
             return await debug.event_buffer_stats(self._buffer)
 
-        async def health() -> Any:
+        async def health() -> HealthSummary:
             self._guard("system.read", Tag.DEBUG_PROVIDERS)
             return await debug.health(
                 self._mass,
@@ -127,11 +181,11 @@ class ProviderCommandSet:
                 logs_enabled=Tag.DEBUG_LOGS in enabled_tags(self._config),
             )
 
-        async def routes() -> Any:
+        async def routes() -> RouteList:
             self._guard("system.read", Tag.DEBUG_PROVIDERS)
             return await debug.routes(self._mass)
 
-        async def packages() -> Any:
+        async def packages() -> PackageVersions:
             self._guard("system.read", Tag.DEBUG_PROVIDERS)
             return await debug.packages()
 

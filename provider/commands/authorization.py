@@ -17,15 +17,18 @@ try:
     from music_assistant.controllers.webserver.helpers.auth_middleware import (
         get_current_user,
     )
-    from music_assistant.controllers.webserver.helpers.auth_middleware import (
-        has_scope as _ma_has_scope,
-    )
 except ImportError:
 
     def get_current_user() -> User | None:
         """Minimal-development fallback; real MA supplies the context-local user."""
         return None
 
+
+try:
+    from music_assistant.controllers.webserver.helpers.auth_middleware import (
+        has_scope as _ma_has_scope,
+    )
+except ImportError:
     _ma_has_scope: Any = None
 
 

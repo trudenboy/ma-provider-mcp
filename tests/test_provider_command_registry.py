@@ -3,19 +3,33 @@
 
 from __future__ import annotations
 
+import importlib
+import inspect
 from collections.abc import Callable
-from typing import Any
-from unittest.mock import MagicMock
+from typing import Any, get_type_hints
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from music_assistant_models.auth import Scope, User, UserRole
 from music_assistant_models.errors import AuthenticationRequired, InsufficientPermissions
 
-from provider.commands import ProviderCommandSet, authorization
+from music_assistant.helpers.api import APICommandHandler, parse_arguments
+from provider.commands import ProviderCommandSet, authorization, registry
 from provider.commands.authorization import authorize_extension, scope_allowed
+from provider.dynamic_signatures import compile_signature
+from provider.models import (
+    EventBufferStats,
+    EventSnapshot,
+    HealthSummary,
+    LogStatsResult,
+    LogTailResult,
+    PackageVersions,
+    RemoveFromQueueResult,
+    RouteList,
+)
 from provider.tags import Tag
 
-COMMANDS = {
+COMMAND_ORDER = (
     "fastmcp/queue/remove_items_safe",
     "fastmcp/debug/tail_log",
     "fastmcp/debug/log_stats",
@@ -24,7 +38,8 @@ COMMANDS = {
     "fastmcp/debug/health",
     "fastmcp/debug/routes",
     "fastmcp/debug/packages",
-}
+)
+COMMANDS = set(COMMAND_ORDER)
 
 
 class CommandRegistry:
@@ -70,6 +85,27 @@ class LegacyCommandRegistry(CommandRegistry):
         authenticated: bool = True,
     ) -> Callable[[], None]:
         return super().register_api_command(command, handler, authenticated)
+
+
+class EventfulCommandRegistry(CommandRegistry):
+    """Registry stub with a controllable MA event subscription."""
+
+    def __init__(self, *, subscribe_error: Exception | None = None) -> None:
+        super().__init__()
+        self.subscribe_error = subscribe_error
+        self.subscribed = 0
+        self.unsubscribed = 0
+
+    def subscribe(self, _callback: Callable[..., Any]) -> Callable[[], None]:
+        """Return an unsubscribe callback unless the event bus rejects startup."""
+        self.subscribed += 1
+        if self.subscribe_error is not None:
+            raise self.subscribe_error
+
+        def unsubscribe() -> None:
+            self.unsubscribed += 1
+
+        return unsubscribe
 
 
 def _config(*enabled: Tag) -> MagicMock:
@@ -146,6 +182,102 @@ def test_start_registers_exact_command_set_with_native_scopes() -> None:
     assert all(isinstance(options["required_scope"], Scope) for options in mass.options.values())
 
 
+async def test_registered_handlers_keep_native_parseable_signatures_and_result_types(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MA's command parser and catalog compiler retain all native command contracts."""
+    mass = CommandRegistry()
+    command_set = ProviderCommandSet(mass, _config(*Tag))
+    command_set.start()
+
+    expected_returns = {
+        "fastmcp/queue/remove_items_safe": RemoveFromQueueResult,
+        "fastmcp/debug/tail_log": LogTailResult,
+        "fastmcp/debug/log_stats": LogStatsResult,
+        "fastmcp/debug/recent_events": EventSnapshot,
+        "fastmcp/debug/event_buffer_stats": EventBufferStats,
+        "fastmcp/debug/health": HealthSummary,
+        "fastmcp/debug/routes": RouteList,
+        "fastmcp/debug/packages": PackageVersions,
+    }
+    for command, expected_return in expected_returns.items():
+        handler = mass.handlers[command]
+        ma_handler = APICommandHandler.parse(command, handler)
+        signature = ma_handler.signature
+        hints = ma_handler.type_hints
+        compiled = compile_signature(signature, hints)
+        assert ma_handler.target is handler
+        assert hints["return"] is expected_return
+        assert compiled.output_schema() is not None
+        assert all(
+            param.kind is not inspect.Parameter.VAR_KEYWORD
+            for param in signature.parameters.values()
+        )
+
+    tail = mass.handlers["fastmcp/debug/tail_log"]
+    tail_signature = inspect.signature(tail)
+    tail_hints = get_type_hints(tail)
+    parsed = parse_arguments(
+        tail_signature,
+        tail_hints,
+        {"lines": 3, "level": "error", "name": "musicassistant.log"},
+        strict=True,
+    )
+    assert parsed["lines"] == 3
+    assert parsed["level"] == "error"
+    assert parsed["name"] == "musicassistant.log"
+    assert set(compile_signature(tail_signature, tail_hints).input_schema["properties"]) >= {
+        "lines",
+        "level",
+        "component_regex",
+        "search",
+        "since_seconds",
+        "before",
+        "name",
+    }
+
+    log_stats_handler = APICommandHandler.parse(
+        "fastmcp/debug/log_stats", mass.handlers["fastmcp/debug/log_stats"]
+    )
+    assert (
+        parse_arguments(
+            log_stats_handler.signature,
+            log_stats_handler.type_hints,
+            {"since_seconds": 60, "name": "musicassistant.log.1"},
+            strict=True,
+        )["since_seconds"]
+        == 60
+    )
+    assert set(
+        compile_signature(log_stats_handler.signature, log_stats_handler.type_hints).input_schema[
+            "properties"
+        ]
+    ) == {"since_seconds", "name"}
+
+    recent = mass.handlers["fastmcp/debug/recent_events"]
+    recent_signature = inspect.signature(recent)
+    recent_hints = get_type_hints(recent)
+    parsed_recent = parse_arguments(
+        recent_signature,
+        recent_hints,
+        {"limit": 2, "event_types": ["player_updated"], "id_filter": "kitchen"},
+        strict=True,
+    )
+    assert parsed_recent["limit"] == 2
+    assert parsed_recent["event_types"] == ["player_updated"]
+    assert parsed_recent["id_filter"] == "kitchen"
+
+    monkeypatch.setattr(authorization, "_ma_has_scope", None)
+    monkeypatch.setattr(authorization, "get_current_user", lambda: _user())
+    plain_tail = AsyncMock(
+        return_value=LogTailResult(log_path="x", lines=[], bytes_scanned=0, truncated=False)
+    )
+    monkeypatch.setattr(registry.debug, "tail_log", plain_tail)
+    result = await tail(**parsed)
+    assert result.log_path == "x"
+    plain_tail.assert_awaited_once_with(mass, **parsed)
+
+
 async def test_legacy_registration_stays_protected_inside_handler(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -179,6 +311,22 @@ def test_partial_start_rolls_back_in_reverse_and_can_retry() -> None:
     assert set(mass.handlers) == COMMANDS
 
 
+def test_subscription_failure_rolls_back_commands_and_allows_retry() -> None:
+    """Event capture is part of the same all-or-nothing startup transaction."""
+    mass = EventfulCommandRegistry(subscribe_error=RuntimeError("event bus offline"))
+    command_set = ProviderCommandSet(mass, _config(*Tag))
+
+    with pytest.raises(RuntimeError, match="event bus offline"):
+        command_set.start()
+
+    assert mass.handlers == {}
+    assert mass.removed == list(reversed(COMMAND_ORDER))
+    mass.subscribe_error = None
+    command_set.start()
+    assert set(mass.handlers) == COMMANDS
+    assert mass.subscribed == 2
+
+
 async def test_stop_is_idempotent_and_update_config_is_live(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -202,3 +350,42 @@ async def test_stop_is_idempotent_and_update_config_is_live(
     command_set.stop()
     assert mass.handlers == {}
     assert len(mass.removed) == 8
+
+
+def test_stop_attempts_all_unregistrations_then_raises_first_error() -> None:
+    """A bad unregister callback cannot leave later commands registered forever."""
+    mass = EventfulCommandRegistry()
+    command_set = ProviderCommandSet(mass, _config(*Tag))
+    command_set.start()
+    original = command_set._unregister[-2]
+
+    def broken_unregister() -> None:
+        original()
+        raise RuntimeError("unregister failed")
+
+    command_set._unregister[-2] = broken_unregister
+    with pytest.raises(RuntimeError, match="unregister failed"):
+        command_set.stop()
+
+    assert mass.handlers == {}
+    assert mass.unsubscribed == 1
+    command_set.stop()
+
+
+def test_partial_auth_import_keeps_real_current_user_and_role_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Old MA exports get_current_user even when its has_scope helper is absent."""
+    auth_module = importlib.import_module(
+        "music_assistant.controllers.webserver.helpers.auth_middleware"
+    )
+    real_current_user = auth_module.get_current_user
+    monkeypatch.delattr(auth_module, "has_scope")
+    reloaded = importlib.reload(authorization)
+    try:
+        assert reloaded.get_current_user is real_current_user
+        assert reloaded._ma_has_scope is None
+        assert reloaded.scope_allowed(_user(UserRole.USER), "queues.control") is True
+    finally:
+        monkeypatch.undo()
+        importlib.reload(reloaded)
