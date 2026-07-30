@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import asyncio
 import contextvars
 import inspect
 import sys
@@ -286,6 +287,112 @@ async def test_adapter_observes_registry_changes_without_restart() -> None:
     assert entries[0].input_schema["required"] == ["value"]
 
 
+async def test_concurrent_catalog_reads_compile_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Concurrent cold readers share one compiled registry snapshot."""
+
+    async def search(search_query: str) -> list[str]:
+        return [search_query]
+
+    adapter = _real_adapter(_handler("music/search", search))
+    compile_spy = MagicMock(wraps=adapter._compile_entry)
+    monkeypatch.setattr(adapter, "_compile_entry", compile_spy)
+    snapshots = await asyncio.gather(*(adapter.base_snapshot() for _index in range(20)))
+    assert all(snapshot is snapshots[0] for snapshot in snapshots)
+    assert snapshots[0].entries[0].name == "ma_api:music/search"
+    assert compile_spy.call_count == 1
+
+
+async def test_registry_replacement_changes_fingerprint_without_restart() -> None:
+    """Replacing a live handler invalidates the cached base snapshot."""
+
+    async def search(search_query: str) -> list[str]:
+        return [search_query]
+
+    async def replacement(search_query: str, limit: int = 5) -> list[str]:
+        return [search_query] * limit
+
+    adapter = _real_adapter(_handler("music/search", search))
+    first = await adapter.base_snapshot()
+    replacement_handler = _handler("music/search", replacement)
+    adapter.mass.command_handlers["music/search"] = replacement_handler
+    second = await adapter.base_snapshot()
+    assert second.fingerprint != first.fingerprint
+    assert second.entries[0].handler is replacement_handler
+
+
+async def test_cached_snapshot_keeps_visibility_request_specific() -> None:
+    """A shared descriptor never leaks one user's scope visibility to another."""
+
+    async def search(search_query: str) -> list[str]:
+        return [search_query]
+
+    handler = _handler("music/search", search)
+    allowed = SimpleNamespace(user_id="allowed", enabled=True, scopes={"library.read"})
+    denied = SimpleNamespace(user_id="denied", enabled=True, scopes=set())
+    users = {user.user_id: user for user in (allowed, denied)}
+    current_token: contextvars.ContextVar[AccessToken] = contextvars.ContextVar(
+        "current_token"
+    )
+    mass = MagicMock(command_handlers={handler.command: handler})
+    mass.webserver.auth.get_user = AsyncMock(side_effect=users.__getitem__)
+    adapter = DynamicAPIAdapter(
+        mass,
+        policy_provider=DynamicPolicy,
+        auth_required_provider=lambda: True,
+        confirmation_provider=lambda: True,
+        token_provider=current_token.get,
+        scope_checker=lambda user, scope: scope in user.scopes,
+        allowed_tags_provider=lambda: {str(tag) for tag in Tag},
+    )
+
+    async def catalog_for(user_id: str) -> Any:
+        token = current_token.set(AccessToken(token="secret", client_id=user_id, scopes=[]))
+        try:
+            return await adapter.visible_catalog()
+        finally:
+            current_token.reset(token)
+
+    allowed_view, denied_view = await asyncio.gather(
+        catalog_for("allowed"), catalog_for("denied")
+    )
+    snapshot = await adapter.base_snapshot()
+    assert allowed_view.fingerprint == denied_view.fingerprint == snapshot.fingerprint
+    assert allowed_view.entries == snapshot.entries
+    assert allowed_view.entries[0] is snapshot.entries[0]
+    assert denied_view.entries == ()
+
+
+async def test_failed_snapshot_build_does_not_poison_future_reads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An exceptional cold build releases concurrent readers and remains retryable."""
+
+    async def search(search_query: str) -> list[str]:
+        return [search_query]
+
+    adapter = _real_adapter(_handler("music/search", search))
+    compile_entry = adapter._compile_entry
+    attempts = 0
+
+    def fail_once(command: str, handler: Any, decision: Any) -> DynamicEntry:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("transient compile failure")
+        return compile_entry(command, handler, decision)
+
+    monkeypatch.setattr(adapter, "_compile_entry", fail_once)
+    outcomes = await asyncio.gather(
+        adapter.base_snapshot(), adapter.base_snapshot(), return_exceptions=True
+    )
+    assert isinstance(outcomes[0], RuntimeError)
+    assert outcomes[1].entries[0].name == "ma_api:music/search"
+    assert (await adapter.base_snapshot()) is outcomes[1]
+    assert attempts == 2
+
+
 async def test_adapter_skips_structurally_incompatible_handlers() -> None:
     """One malformed registry entry cannot disable the MCP endpoint."""
     adapter = _real_adapter(SimpleNamespace(command="broken", target=lambda: None))
@@ -320,6 +427,25 @@ async def test_adapter_executes_strictly_and_bounds_result() -> None:
     assert result["truncated"] is True
     assert result["returned_count"] <= 25
     assert result["bytes"] <= 12_288
+
+
+async def test_empty_upstream_exception_names_type_and_command() -> None:
+    """Empty upstream messages still produce an actionable command error."""
+
+    async def search(search_query: str) -> list[str]:
+        del search_query
+        raise IndexError
+
+    adapter = _real_adapter(_handler("music/search", search))
+    with pytest.raises(ToolError, match=r"music/search.*IndexError"):
+        await adapter.call(
+            "ma_api:music/search",
+            {"search_query": "missing"},
+            response_mode="compact",
+            fields=None,
+            max_items=None,
+            ctx=MagicMock(),
+        )
 
 
 async def test_adapter_hides_catalog_when_mcp_auth_is_disabled() -> None:

@@ -56,6 +56,15 @@ _FULL_BYTES = 65_536
 _COMPACT_STRING = 2_048
 _FULL_STRING = 8_192
 _CALL_TIMEOUT_SECONDS = 60
+CATALOG_REVISION = 1
+
+type CatalogFingerprint = tuple[int, tuple[tuple[str, int], ...]]
+
+
+def _command_error(command: str, exc: Exception) -> ToolError:
+    """Return an actionable execution error for a canonical command."""
+    detail = str(exc).strip() or type(exc).__name__
+    return ToolError(f"Command {command!r} failed: {detail}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,6 +88,22 @@ class DynamicEntry:
 
 
 @dataclass(frozen=True, slots=True)
+class CatalogSnapshot:
+    """Compiled descriptors for one live command-registry generation."""
+
+    fingerprint: CatalogFingerprint
+    entries: tuple[DynamicEntry, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class CatalogView:
+    """Request-filtered catalog entries from one base snapshot."""
+
+    fingerprint: CatalogFingerprint
+    entries: tuple[DynamicEntry, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class RecipeBinding:
     """A provider-local recipe backed by one or more former curated tools."""
 
@@ -96,6 +121,17 @@ class DynamicCatalogDiagnostics:
     handlers_visible: int = 0
     incompatible_handlers: tuple[str, ...] = ()
     last_error: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _SnapshotDiagnostics:
+    """Cached compatibility results from one base snapshot build."""
+
+    available: bool
+    registry_type: str
+    handlers_seen: int
+    incompatible_handlers: tuple[str, ...]
+    last_error: str | None
 
 
 class DynamicAPIAdapter:
@@ -121,7 +157,9 @@ class DynamicAPIAdapter:
         self._scope_checker = scope_checker or self._default_scope_checker
         self._allowed_tags_provider = allowed_tags_provider or (lambda: set())
         self._curated_tools: dict[str, Tool] = {}
-        self._entry_cache: dict[str, tuple[int, DynamicEntry]] = {}
+        self._snapshot: CatalogSnapshot | None = None
+        self._snapshot_diagnostics: _SnapshotDiagnostics | None = None
+        self._snapshot_lock = asyncio.Lock()
         self._diagnostics = DynamicCatalogDiagnostics()
 
     def diagnostics(self) -> dict[str, Any]:
@@ -137,67 +175,49 @@ class DynamicAPIAdapter:
             and tool.name not in {"search_tools", "get_tool_schema", "call_tool"}
         }
 
-    async def visible_entries(self) -> list[DynamicEntry]:
-        """Return canonical commands visible to the current authenticated user."""
+    async def base_snapshot(self) -> CatalogSnapshot:
+        """Return the compiled snapshot for the current live command registry."""
+        fingerprint = self._registry_fingerprint()
+        if self._snapshot is not None and self._snapshot.fingerprint == fingerprint:
+            return self._snapshot
+        async with self._snapshot_lock:
+            fingerprint = self._registry_fingerprint()
+            if self._snapshot is None or self._snapshot.fingerprint != fingerprint:
+                snapshot, diagnostics = self._compile_snapshot(fingerprint)
+                self._snapshot = snapshot
+                self._snapshot_diagnostics = diagnostics
+            return self._snapshot
+
+    async def visible_catalog(self) -> CatalogView:
+        """Return a request-filtered view of the current base snapshot."""
+        snapshot = await self.base_snapshot()
         auth = await self._authentication()
         if not self._auth_required_provider() or auth is None:
-            return []
-        user = auth[1] if auth is not None else None
-        policy = self._policy_provider()
-        handlers = getattr(self.mass, "command_handlers", {})
-        if not isinstance(handlers, Mapping):
-            recipes = self._recipe_entries(policy, user)
-            self._diagnostics = DynamicCatalogDiagnostics(
-                registry_type=type(handlers).__name__,
-                handlers_visible=len(recipes),
-                last_error="mass.command_handlers is not a mapping",
-            )
-            return sorted(recipes, key=lambda entry: entry.name)
+            self._update_diagnostics(handlers_visible=0)
+            return CatalogView(snapshot.fingerprint, ())
 
-        entries: list[DynamicEntry] = []
-        live_commands: set[str] = set()
-        incompatible: list[str] = []
+        user = auth[1]
+        policy = self._policy_provider()
         allowed_tags = self._allowed_tags_provider()
-        for command, handler in sorted(handlers.items()):
-            if not self._handler_is_discoverable(command, handler):
-                incompatible.append(str(command))
-                continue
-            live_commands.add(command)
-            scope = getattr(handler, "required_scope", None)
-            if user is not None and scope is not None and not self._scope_checker(user, scope):
-                continue
-            profile = COMMAND_PROFILES.get(command)
-            decision = resolve_command_policy(command, scope, profile)
-            if policy.allows(decision.risk) and tags_visible(decision.required_tags, allowed_tags):
-                cached = self._entry_cache.get(command)
-                try:
-                    if cached is None or cached[0] != id(handler) or cached[1].decision != decision:
-                        cached = (
-                            id(handler),
-                            self._compile_entry(command, handler, decision),
-                        )
-                        self._entry_cache[command] = cached
-                except UnsupportedSignatureError:
-                    incompatible.append(str(command))
-                    continue
-                entries.append(cached[1])
-        self._entry_cache = {
-            command: cached
-            for command, cached in self._entry_cache.items()
-            if command in live_commands
-        }
+        entries = [
+            entry
+            for entry in snapshot.entries
+            if (
+                entry.required_scope is None
+                or self._scope_checker(user, getattr(entry.handler, "required_scope", None))
+            )
+            and policy.allows(entry.risk)
+            and entry.decision is not None
+            and tags_visible(entry.decision.required_tags, allowed_tags)
+        ]
         entries.extend(self._recipe_entries(policy, user))
-        self._diagnostics = DynamicCatalogDiagnostics(
-            available=True,
-            registry_type=type(handlers).__name__,
-            handlers_seen=len(handlers),
-            handlers_visible=len(entries),
-            incompatible_handlers=tuple(sorted(incompatible)),
-            last_error=(
-                f"{len(incompatible)} incompatible handler(s) skipped" if incompatible else None
-            ),
-        )
-        return sorted(entries, key=lambda entry: entry.name)
+        visible = tuple(sorted(entries, key=lambda entry: entry.name))
+        self._update_diagnostics(handlers_visible=len(visible))
+        return CatalogView(snapshot.fingerprint, visible)
+
+    async def visible_entries(self) -> list[DynamicEntry]:
+        """Return canonical commands visible to the current authenticated user."""
+        return list((await self.visible_catalog()).entries)
 
     async def get_visible_entry(self, name: str) -> DynamicEntry | None:
         """Resolve one visible entry by canonical public name."""
@@ -280,7 +300,7 @@ class DynamicAPIAdapter:
         except ToolError:
             raise
         except Exception as exc:
-            raise ToolError(f"Command {entry.command!r} failed: {exc}") from exc
+            raise _command_error(entry.command, exc) from exc
         return self._bounded_envelope(
             name,
             result,
@@ -288,6 +308,71 @@ class DynamicAPIAdapter:
             fields=fields,
             max_items=max_items,
             profile=entry.profile,
+        )
+
+    def _registry_fingerprint(self) -> CatalogFingerprint:
+        """Fingerprint the actual live command-handler registry."""
+        handlers = getattr(self.mass, "command_handlers", {})
+        if not isinstance(handlers, Mapping):
+            return CATALOG_REVISION, ()
+        return CATALOG_REVISION, tuple(
+            sorted((command, id(handler)) for command, handler in handlers.items())
+        )
+
+    def _compile_snapshot(
+        self, fingerprint: CatalogFingerprint
+    ) -> tuple[CatalogSnapshot, _SnapshotDiagnostics]:
+        """Compile the base descriptors and compatibility errors atomically."""
+        handlers = getattr(self.mass, "command_handlers", {})
+        if not isinstance(handlers, Mapping):
+            return CatalogSnapshot(fingerprint, ()), _SnapshotDiagnostics(
+                available=False,
+                registry_type=type(handlers).__name__,
+                handlers_seen=0,
+                incompatible_handlers=(),
+                last_error="mass.command_handlers is not a mapping",
+            )
+
+        entries: list[DynamicEntry] = []
+        incompatible: list[str] = []
+        for command, handler in sorted(handlers.items()):
+            if not self._handler_is_discoverable(command, handler):
+                incompatible.append(str(command))
+                continue
+            scope = getattr(handler, "required_scope", None)
+            profile = COMMAND_PROFILES.get(command)
+            decision = resolve_command_policy(command, scope, profile)
+            try:
+                entries.append(self._compile_entry(command, handler, decision))
+            except UnsupportedSignatureError:
+                incompatible.append(str(command))
+        incompatible_handlers = tuple(sorted(incompatible))
+        diagnostics = _SnapshotDiagnostics(
+            available=True,
+            registry_type=type(handlers).__name__,
+            handlers_seen=len(handlers),
+            incompatible_handlers=incompatible_handlers,
+            last_error=(
+                f"{len(incompatible)} incompatible handler(s) skipped" if incompatible else None
+            ),
+        )
+        return CatalogSnapshot(
+            fingerprint,
+            tuple(sorted(entries, key=lambda entry: entry.name)),
+        ), diagnostics
+
+    def _update_diagnostics(self, *, handlers_visible: int) -> None:
+        """Expose cached snapshot diagnostics with request-local visibility."""
+        diagnostics = self._snapshot_diagnostics
+        if diagnostics is None:
+            return
+        self._diagnostics = DynamicCatalogDiagnostics(
+            available=diagnostics.available,
+            registry_type=diagnostics.registry_type,
+            handlers_seen=diagnostics.handlers_seen,
+            handlers_visible=handlers_visible,
+            incompatible_handlers=diagnostics.incompatible_handlers,
+            last_error=diagnostics.last_error,
         )
 
     async def _authentication(self) -> tuple[AccessToken, Any] | None:
