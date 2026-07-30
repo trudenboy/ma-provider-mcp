@@ -22,6 +22,7 @@ from fastmcp import Context, FastMCP
 from fastmcp.exceptions import ToolError
 from mcp.types import ToolAnnotations
 
+from ..commands import debug as command_debug
 from ..debug.event_buffer import EventBuffer
 from ..debug.inspect_serializer import dump
 from ..debug.log_reader import SafeLogTail
@@ -215,10 +216,8 @@ def _register_logs_tool(sub: FastMCP, mass: MusicAssistant) -> None:
             canonical log and its rotated siblings (``.log.1`` … ``.log.5``) are
             allowed.
         """
-        # Offload the synchronous file scan (up to the 10 MB cap) to a worker
-        # thread so it never stalls MA's single event loop.
-        return await asyncio.to_thread(
-            tail.tail,
+        return await command_debug.tail_log(
+            mass,
             lines=lines,
             level=level,
             component_regex=component_regex,
@@ -250,7 +249,7 @@ def _register_logs_tool(sub: FastMCP, mass: MusicAssistant) -> None:
             canonical log and its rotated siblings (``.log.1`` … ``.log.5``) are
             allowed.
         """
-        return await asyncio.to_thread(tail.stats, since_seconds=since_seconds, name=name)
+        return await command_debug.log_stats(mass, since_seconds=since_seconds, name=name)
 
 
 def build_debug_server(
@@ -441,19 +440,12 @@ def _register_events_tools(
         :param since_seconds: When set, only events within this many seconds of
             "now" are returned.
         """
-        if buffer is None:
-            return EventSnapshot(events=[], buffer_capacity=0, total_seen=0)
-        events = buffer.snapshot(
+        return await command_debug.recent_events(
+            buffer,
             limit=limit,
             event_types=event_types,
             id_filter=id_filter,
             since_seconds=since_seconds,
-        )
-        stats = buffer.stats()
-        return EventSnapshot(
-            events=events,
-            buffer_capacity=stats.capacity,
-            total_seen=stats.total_seen,
         )
 
     @sub.tool(
@@ -468,16 +460,7 @@ def _register_events_tools(
         Use this to distinguish "no events match" from "events were dropped
         before you asked". ``dropped`` is non-zero whenever the buffer overflowed.
         """
-        if buffer is None:
-            return EventBufferStats(
-                capacity=0,
-                current_size=0,
-                total_seen=0,
-                dropped=0,
-                subscribed_since=None,
-                by_type={},
-            )
-        return buffer.stats()
+        return await command_debug.event_buffer_stats(buffer)
 
 
 def _register_providers_tools(sub: FastMCP, mass: MusicAssistant) -> None:
@@ -563,23 +546,7 @@ def _register_providers_tools(sub: FastMCP, mass: MusicAssistant) -> None:
         Reaches into ``webserver._server.app.router`` — single documented
         private-API touch. See spec 0005.
         """
-        routes: list[RouteEntry] = []
-        try:
-            inner_app = mass.webserver._server.app  # type: ignore[attr-defined]
-            for route in inner_app.router.routes():
-                method = str(getattr(route, "method", "*"))
-                resource = getattr(route, "resource", None)
-                path = str(getattr(resource, "canonical", "")) if resource else ""
-                routes.append(
-                    RouteEntry(
-                        method=method,
-                        path=path,
-                        registered_by=_attribute_route(path),
-                    )
-                )
-        except AttributeError as exc:
-            raise ToolError("webserver routes are unavailable in this MA build") from exc
-        return RouteList(routes=routes)
+        return await command_debug.routes(mass)
 
     @sub.tool(
         tags={Tag.DEBUG_PROVIDERS},
@@ -592,13 +559,7 @@ def _register_providers_tools(sub: FastMCP, mass: MusicAssistant) -> None:
 
         Useful for upstream bug reports.
         """
-        out: dict[str, str] = {}
-        for pkg in _TRACKED_PACKAGES:
-            try:
-                out[pkg] = importlib.metadata.version(pkg)
-            except importlib.metadata.PackageNotFoundError:
-                out[pkg] = "<not installed>"
-        return PackageVersions(packages=out)
+        return await command_debug.packages()
 
 
 def _register_health_tool(
@@ -623,86 +584,11 @@ def _register_health_tool(
         recent ERROR log lines. Fields whose capability is disabled show as
         ``None`` with the tag name listed in ``disabled_capabilities``.
         """
-        providers = list(getattr(mass, "providers", []))
-        loaded = sum(1 for p in providers if getattr(p, "available", False))
-        disabled = sum(1 for p in providers if not getattr(p, "enabled", True))
-        error_details: list[ProviderSummary] = []
-        for p in providers:
-            if getattr(p, "last_error", None):
-                ptype = getattr(getattr(p, "type", None), "value", "unknown")
-                error_details.append(
-                    ProviderSummary(
-                        instance_id=getattr(p, "instance_id", ""),
-                        domain=getattr(p, "domain", ""),
-                        type=str(ptype),
-                        name=getattr(p, "name", "") or getattr(p, "domain", ""),
-                        available=bool(getattr(p, "available", False)),
-                        last_error=getattr(p, "last_error", None),
-                    )
-                )
-
-        try:
-            queues = list(mass.player_queues.all())
-        except AttributeError, TypeError:
-            queues = []
-        queues_active = sum(1 for q in queues if getattr(q, "state", None) == "playing")
-        queues_errors = sum(
-            1
-            for q in queues
-            if getattr(q, "state", None) == "error" or not getattr(q, "available", True)
-        )
-
-        disabled_capabilities: list[str] = []
-        events_per_min: dict[str, float] | None = None
-        if buffer is None:
-            disabled_capabilities.append("DEBUG_EVENTS")
-        else:
-            stats = buffer.stats()
-            if stats.subscribed_since is None:
-                disabled_capabilities.append("DEBUG_EVENTS")
-            else:
-                from datetime import datetime  # noqa: PLC0415
-
-                from music_assistant.helpers.datetime import now as ma_now  # noqa: PLC0415
-
-                subscribed_at = datetime.fromisoformat(stats.subscribed_since)
-                elapsed_min = max(
-                    1.0 / 60,
-                    (ma_now() - subscribed_at).total_seconds() / 60.0,
-                )
-                events_per_min = {
-                    et: round(count / elapsed_min, 2) for et, count in stats.by_type.items()
-                }
-
-        log_errors: int | None = None
-        if not logs_enabled:
-            # DEBUG_LOGS is off — do not read the log file (mirrors the events
-            # gate above; reading here would bypass the disabled permission).
-            disabled_capabilities.append("DEBUG_LOGS")
-        else:
-            try:
-                # Offload the synchronous scan off MA's event loop (see tail_log).
-                log_errors = await asyncio.to_thread(SafeLogTail(mass).count_errors_last_5min)
-            except Exception:
-                disabled_capabilities.append("DEBUG_LOGS")
-
-        dynamic_catalog = (
-            dict(dynamic_diagnostics_provider())
-            if dynamic_diagnostics_provider is not None
-            else None
-        )
-        return HealthSummary(
-            providers_loaded=loaded,
-            providers_disabled=disabled,
-            providers_error=len(error_details),
-            providers_error_details=error_details,
-            queues_total=len(queues),
-            queues_with_active_playback=queues_active,
-            queues_with_errors=queues_errors,
-            events_per_min_by_type=events_per_min,
-            log_errors_last_5min=log_errors,
-            disabled_capabilities=disabled_capabilities,
-            dynamic_catalog=dynamic_catalog,
+        return await command_debug.health(
+            mass,
+            buffer=buffer,
+            logs_enabled=logs_enabled,
+            dynamic_diagnostics_provider=dynamic_diagnostics_provider,
         )
 
 
