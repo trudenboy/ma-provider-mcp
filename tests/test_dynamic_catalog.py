@@ -22,6 +22,7 @@ from fastmcp.tools import Tool
 from music_assistant_models.config_entries import ConfigEntry
 from music_assistant_models.enums import ConfigEntryType
 
+from provider import meta_discovery
 from provider.command_policy import Confirmation
 from provider.command_profiles import (
     COMMAND_PROFILES,
@@ -30,6 +31,8 @@ from provider.command_profiles import (
     CommandProfile,
 )
 from provider.dynamic_api import (
+    CatalogSnapshot,
+    CatalogView,
     DynamicAPIAdapter,
     DynamicEntry,
     DynamicPolicy,
@@ -48,6 +51,15 @@ class _FakeAdapter:
     """Small adapter implementing the transform-facing dynamic API contract."""
 
     calls: list[tuple[str, dict[str, Any]]]
+
+    async def base_snapshot(self) -> CatalogSnapshot:
+        """Return the fake command as the immutable base catalog."""
+        return CatalogSnapshot((1, "fake", ()), tuple(await self.visible_entries()))
+
+    async def visible_catalog(self) -> CatalogView:
+        """Return the fake command as visible to every request."""
+        snapshot = await self.base_snapshot()
+        return CatalogView(snapshot.fingerprint, snapshot.entries)
 
     async def visible_entries(self) -> list[DynamicEntry]:
         """Return one discoverable command."""
@@ -140,6 +152,47 @@ async def test_search_uses_alias_but_returns_canonical_ma_name() -> None:
             "description": "Start playback on a player.",
         }
     ]
+
+
+def _meta_service(adapter: DynamicAPIAdapter) -> Any:
+    """Construct the direct discovery service after proving it is exported."""
+    service_type = getattr(meta_discovery, "MetaDiscoveryService", None)
+    assert service_type is not None
+    return service_type(adapter)
+
+
+async def test_parallel_search_builds_one_index() -> None:
+    """Concurrent searches share one immutable base-snapshot index."""
+
+    async def search(album: str) -> list[str]:
+        """Search albums."""
+        return [album]
+
+    adapter = _real_adapter(_handler("music/search", search))
+    service = _meta_service(adapter)
+    await asyncio.gather(*(service.search("album") for _index in range(20)))
+    assert service.index_build_count == 1
+
+
+async def test_registry_change_rebuilds_discovery_index_immediately() -> None:
+    """A new registry fingerprint invalidates the cached search index."""
+
+    async def existing() -> None:
+        """Existing endpoint."""
+        return
+
+    async def new_command() -> None:
+        """Expose a new endpoint."""
+        return
+
+    adapter = _real_adapter(_handler("music/existing", existing))
+    service = _meta_service(adapter)
+    before = await service.search("new command")
+    adapter.mass.command_handlers["music/new_command"] = _handler("music/new_command", new_command)
+    after = await service.search("new command")
+    assert before == []
+    assert after[0]["name"] == "ma_api:music/new_command"
+    assert service.index_build_count == 2
 
 
 async def test_dynamic_schema_is_returned_on_demand() -> None:

@@ -7,6 +7,7 @@ from typing import Any
 
 from fastmcp import Client, FastMCP
 
+from provider import meta_discovery
 from provider.config import build_config_entries
 from provider.constants import (
     CONF_DYNAMIC_API_CONTROL,
@@ -16,14 +17,24 @@ from provider.constants import (
     DEFAULT_MOUNT_PATH,
     HOT_SWAPPABLE_KEYS,
 )
-from provider.dynamic_api import DynamicEntry, DynamicRisk
+from provider.dynamic_api import CatalogSnapshot, CatalogView, DynamicEntry, DynamicRisk
 from provider.meta_discovery import register_meta_discovery
 from provider.server import build_tag_lookup
 
 
 @dataclass
 class _Adapter:
-    """Minimal catalog adapter for transform integration tests."""
+    """Minimal catalog adapter for direct-tool integration tests."""
+
+    _snapshot = CatalogSnapshot((1, "test", ()), ())
+
+    async def base_snapshot(self) -> CatalogSnapshot:
+        """Return the empty immutable base catalog."""
+        return self._snapshot
+
+    async def visible_catalog(self) -> CatalogView:
+        """Return the empty request-filtered catalog."""
+        return CatalogView(self._snapshot.fingerprint, ())
 
     async def visible_entries(self) -> list[DynamicEntry]:
         """Return an empty dynamic catalog."""
@@ -49,8 +60,8 @@ class _Adapter:
         raise AssertionError("unreachable")
 
 
-async def test_listing_is_permanently_collapsed() -> None:
-    """There is no longer a toggle that restores the curated public catalog."""
+async def test_registers_exactly_three_real_tools() -> None:
+    """The direct MCP registration exposes no transform-time virtual tools."""
     mcp: FastMCP = FastMCP(name="test")
 
     @mcp.tool
@@ -66,6 +77,11 @@ async def test_listing_is_permanently_collapsed() -> None:
     async with Client(mcp) as client:
         names = {tool.name for tool in await client.list_tools()}
     assert names == {"search_tools", "call_tool", "get_tool_schema"}
+
+
+def test_meta_discovery_service_is_a_direct_index_owner() -> None:
+    """Search indexing belongs to a service, rather than a FastMCP transform."""
+    assert getattr(meta_discovery, "MetaDiscoveryService", None) is not None
 
 
 def test_dynamic_config_entries_replace_meta_toggle(mock_mass: Any) -> None:

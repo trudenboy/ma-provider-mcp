@@ -2,26 +2,32 @@
 
 from __future__ import annotations
 
+import asyncio
 import math
 import re
 import unicodedata
 from collections import Counter
+from collections.abc import Mapping
+from dataclasses import dataclass
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Protocol
 
 from fastmcp import Context  # noqa: TC002  -- FastMCP resolves injected annotations at runtime.
 from fastmcp.exceptions import NotFoundError, ToolError
-from fastmcp.server.transforms.search import BM25SearchTransform
-from fastmcp.tools import Tool
 from mcp.types import ToolAnnotations
 
-from .dynamic_api import LEGACY_MIGRATIONS, DynamicEntry
+from .dynamic_api import (
+    LEGACY_MIGRATIONS,
+    CatalogFingerprint,
+    CatalogSnapshot,
+    CatalogView,
+    DynamicEntry,
+)
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Callable
 
     from fastmcp import FastMCP
-    from fastmcp.server.transforms import GetToolNext
-    from fastmcp.utilities.versions import VersionSpec
 
     from .middleware import TagsLookup
 
@@ -34,13 +40,13 @@ _TOKEN_RE = re.compile(r"[^\W_]+", re.UNICODE)
 
 
 class DynamicAdapter(Protocol):
-    """Transform-facing contract implemented by the MA dispatcher."""
+    """Direct discovery contract implemented by the MA dispatcher."""
 
-    async def visible_entries(self) -> list[DynamicEntry]:
+    async def base_snapshot(self) -> CatalogSnapshot:
+        """Return the immutable compiled catalog for the live registry."""
+
+    async def visible_catalog(self) -> CatalogView:
         """Return entries visible for the current request."""
-
-    async def get_visible_entry(self, name: str) -> DynamicEntry | None:
-        """Resolve a visible entry by canonical name."""
 
     async def call(
         self,
@@ -55,9 +61,15 @@ class DynamicAdapter(Protocol):
         """Execute an entry and return its bounded envelope."""
 
 
-def _light_results(tools: Sequence[Tool]) -> list[dict[str, str]]:
-    """Serialize search hits as name + description only — schemas stay on demand."""
-    return [{"name": t.name, "description": (t.description or "").strip()} for t in tools]
+@dataclass(frozen=True, slots=True)
+class SearchIndex:
+    """Immutable token statistics for one base catalog fingerprint."""
+
+    fingerprint: CatalogFingerprint
+    documents: Mapping[str, tuple[str, ...]]
+    frequencies: Mapping[str, Counter[str]]
+    document_frequencies: Mapping[str, int]
+    average_length: float
 
 
 def _tokens(value: str) -> list[str]:
@@ -66,135 +78,125 @@ def _tokens(value: str) -> list[str]:
     return _TOKEN_RE.findall(normalized.replace("_", " "))
 
 
-class MetaDiscoveryTransform(BM25SearchTransform):  # type: ignore[misc, unused-ignore]
-    """Expose only meta-tools and search dynamic catalog entries."""
+def _build_search_index(snapshot: CatalogSnapshot) -> SearchIndex:
+    """Compile immutable BM25 documents once for a base catalog snapshot."""
+    documents: dict[str, tuple[str, ...]] = {}
+    frequencies: dict[str, Counter[str]] = {}
+    document_frequencies: Counter[str] = Counter()
+    for entry in snapshot.entries:
+        document = tuple(_tokens(" ".join((entry.name, entry.description, *entry.search_aliases))))
+        documents[entry.name] = document
+        frequency = Counter(document)
+        frequencies[entry.name] = frequency
+        document_frequencies.update(frequency.keys())
+    average_length = sum(map(len, documents.values())) / len(documents) if documents else 1.0
+    return SearchIndex(
+        fingerprint=snapshot.fingerprint,
+        documents=MappingProxyType(documents),
+        frequencies=MappingProxyType(frequencies),
+        document_frequencies=MappingProxyType(dict(document_frequencies)),
+        average_length=average_length or 1.0,
+    )
+
+
+def _rank(index: SearchIndex, query_tokens: list[str], *, allowed_names: set[str]) -> list[str]:
+    """Rank only the current request's visible catalog intersection."""
+    if not query_tokens:
+        return []
+    document_count = len(index.documents)
+    if not document_count:
+        return []
+    normalized_query = " ".join(query_tokens)
+    scored: list[tuple[float, str]] = []
+    for name in allowed_names:
+        document = index.documents.get(name)
+        frequencies = index.frequencies.get(name)
+        if document is None or frequencies is None:
+            continue
+        score = 0.0
+        for token in query_tokens:
+            frequency = frequencies[token]
+            if not frequency:
+                continue
+            document_frequency = index.document_frequencies.get(token, 0)
+            inverse = math.log(
+                1 + (document_count - document_frequency + 0.5) / (document_frequency + 0.5)
+            )
+            denominator = frequency + 1.5 * (1 - 0.75 + 0.75 * len(document) / index.average_length)
+            score += inverse * frequency * 2.5 / denominator
+        normalized_name = " ".join(_tokens(name))
+        if normalized_query == normalized_name:
+            score += 100.0
+        elif normalized_name.startswith(normalized_query):
+            score += 25.0
+        if score > 0:
+            scored.append((score, name))
+    scored.sort(key=lambda item: (-item[0], item[1]))
+    return [name for _score, name in scored]
+
+
+class MetaDiscoveryService:
+    """Search and schema lookup over the adapter's cached catalog snapshots."""
 
     def __init__(self, adapter: DynamicAdapter) -> None:
-        """Initialise the permanent discovery transform."""
-        super().__init__(
-            max_results=SEARCH_MAX_RESULTS,
-            always_visible=[GET_TOOL_SCHEMA_NAME],
-            search_result_serializer=_light_results,
-        )
+        """Initialise a request-safe cache for immutable catalog indexes."""
         self.adapter = adapter
-        self._entries: dict[str, DynamicEntry] = {}
+        self._index: SearchIndex | None = None
+        self._index_lock = asyncio.Lock()
+        self.index_build_count = 0
 
-    async def transform_tools(self, tools: Sequence[Tool]) -> Sequence[Tool]:
-        """Collapse every listing to the permanent three-tool surface."""
-        ingest = getattr(self.adapter, "ingest_curated", None)
-        if ingest is not None:
-            ingest(tools)
-        return await super().transform_tools(tools)
+    async def search(self, query: str) -> list[dict[str, str]]:
+        """Return lightweight matches from the caller's visible catalog only."""
+        view = await self.adapter.visible_catalog()
+        index = await self._index_for(await self.adapter.base_snapshot())
+        visible = {entry.name: entry for entry in view.entries}
+        names = _rank(index, _tokens(query), allowed_names=set(visible))
+        return [
+            {"name": name, "description": visible[name].description}
+            for name in names[:SEARCH_MAX_RESULTS]
+        ]
 
-    async def get_tool(
-        self, name: str, call_next: GetToolNext, *, version: VersionSpec | None = None
-    ) -> Tool | None:
-        """Resolve only the public meta-tools; old curated names are retired."""
-        if name not in _META_NAMES:
-            return None
-        return await super().get_tool(name, call_next, version=version)
-
-    async def _get_visible_tools(self, ctx: Context) -> Sequence[Tool]:
-        """Render current dynamic entries as lightweight virtual tools."""
-        del ctx
-        entries = await self.adapter.visible_entries()
-        self._entries = {entry.name: entry for entry in entries}
-        return [self._entry_tool(entry) for entry in entries]
-
-    async def _search(self, tools: Sequence[Tool], query: str) -> Sequence[Tool]:
-        """Rank entries with a small Unicode-aware BM25 implementation."""
-        if not tools:
-            return []
-        query_tokens = _tokens(query)
-        if not query_tokens:
-            return []
-        documents: list[list[str]] = []
-        for tool in tools:
-            entry = self._entries[tool.name]
-            documents.append(
-                _tokens(" ".join((entry.name, entry.description, *entry.search_aliases)))
-            )
-        avg_len = sum(map(len, documents)) / len(documents) or 1.0
-        doc_freq = Counter(
-            token for token in set(query_tokens) for doc in documents if token in doc
+    async def get_schema(self, tool_name: str) -> dict[str, Any]:
+        """Return one current request-visible entry's complete schema descriptor."""
+        entry = next(
+            (
+                entry
+                for entry in (await self.adapter.visible_catalog()).entries
+                if entry.name == tool_name
+            ),
+            None,
         )
-        scored: list[tuple[float, str, Tool]] = []
-        for tool, document in zip(tools, documents, strict=True):
-            frequencies = Counter(document)
-            score = 0.0
-            for token in query_tokens:
-                frequency = frequencies[token]
-                if not frequency:
-                    continue
-                inverse = math.log(
-                    1 + (len(documents) - doc_freq[token] + 0.5) / (doc_freq[token] + 0.5)
-                )
-                denominator = frequency + 1.5 * (1 - 0.75 + 0.75 * len(document) / avg_len)
-                score += inverse * frequency * 2.5 / denominator
-            normalized_query = " ".join(query_tokens)
-            if normalized_query == " ".join(_tokens(tool.name)):
-                score += 100.0
-            elif " ".join(_tokens(tool.name)).startswith(normalized_query):
-                score += 25.0
-            if score > 0:
-                scored.append((score, tool.name, tool))
-        scored.sort(key=lambda item: (-item[0], item[1]))
-        return [tool for _score, _name, tool in scored[:SEARCH_MAX_RESULTS]]
+        if entry is None:
+            raise NotFoundError(f"Tool {tool_name!r} not found")
+        return _schema_result(entry)
 
-    def _make_call_tool(self) -> Tool:
-        """Create the proxy that routes canonical dynamic names."""
-        transform = self
+    async def _index_for(self, snapshot: CatalogSnapshot) -> SearchIndex:
+        """Return the snapshot's index, building it once across concurrent callers."""
+        if self._index is not None and self._index.fingerprint == snapshot.fingerprint:
+            return self._index
+        async with self._index_lock:
+            if self._index is None or self._index.fingerprint != snapshot.fingerprint:
+                self._index = _build_search_index(snapshot)
+                self.index_build_count += 1
+            return self._index
 
-        async def call_tool(
-            name: str,
-            arguments: dict[str, Any] | None = None,
-            response_mode: str = "compact",
-            fields: list[str] | None = None,
-            max_items: int | None = None,
-            ctx: Context | None = None,
-        ) -> dict[str, Any]:
-            """
-            Execute a command found with search_tools.
 
-            :param name: Canonical ``ma_api:*`` or ``mcp_api:*`` name.
-            :param arguments: Command arguments from get_tool_schema.
-            :param response_mode: ``compact`` (default) or explicit ``full``.
-            :param fields: Optional top-level fields to retain.
-            :param max_items: Optional smaller item limit.
-            """
-            if replacement := LEGACY_MIGRATIONS.get(name):
-                raise ToolError(f"Tool {name!r} was retired; use {replacement!r}")
-            if name in _META_NAMES:
-                raise ToolError(f"Meta-tool {name!r} cannot call itself")
-            if ctx is None:  # pragma: no cover - FastMCP always injects Context
-                raise ToolError("MCP request context is unavailable")
-            entry = await transform.adapter.get_visible_entry(name)
-            if entry is None:
-                raise ToolError(f"Tool {name!r} not found or not permitted")
-            return await transform.adapter.call(
-                name,
-                dict(arguments or {}),
-                response_mode=response_mode,
-                fields=fields,
-                max_items=max_items,
-                ctx=ctx,
-            )
-
-        return Tool.from_function(fn=call_tool, name=CALL_TOOL_NAME)
-
-    @staticmethod
-    def _entry_tool(entry: DynamicEntry) -> Tool:
-        """Create a virtual tool descriptor without registering an executor."""
-
-        async def unavailable() -> None:
-            """Virtual catalog entry; invoke it through call_tool."""
-
-        tool = Tool.from_function(
-            fn=unavailable,
-            name=entry.name,
-            description=entry.description,
-        )
-        return tool.model_copy(update={"parameters": entry.input_schema})
+def _schema_result(entry: DynamicEntry) -> dict[str, Any]:
+    """Serialize the dynamic schema only after an exact visible-name lookup."""
+    result: dict[str, Any] = {
+        "name": entry.name,
+        "kind": entry.name.split(":", 1)[0],
+        "command": entry.command,
+        "description": entry.description,
+        "inputSchema": entry.input_schema,
+        "risk": entry.risk.value,
+        "requiredScope": entry.required_scope,
+        "allowImpersonation": entry.allow_impersonation,
+        "annotations": entry.annotations,
+    }
+    if entry.output_schema is not None:
+        result["outputSchema"] = entry.output_schema
+    return result
 
 
 def register_meta_discovery(
@@ -205,22 +207,32 @@ def register_meta_discovery(
     dynamic_adapter: DynamicAdapter,
     enabled: Callable[[], bool] | None = None,
 ) -> None:
-    """
-    Register schema lookup and install the permanent discovery transform.
-
-    :param mcp: Root FastMCP server (after all sub-servers are mounted).
-    :param dynamic_adapter: Runtime command catalog and dispatcher.
-    :param enabled: Deprecated compatibility parameter; ignored.
-    :param allowed_tags_provider: Zero-arg callable returning the currently
-        allowed permission tags (same closure the tag-filter middleware uses).
-    :param lookup_component_tags: Async ``(kind, key) -> tags | None`` resolver
-        (see :func:`provider.server.build_tag_lookup`).
-    """
-    # Recipe visibility is enforced by the adapter from the same live tag
-    # closure. The lookup remains part of the compatibility signature because
-    # direct curated calls are still guarded by TagFilterMiddleware internally.
+    """Register the permanent direct three-tool discovery surface."""
+    # The adapter applies the same live tag closure as the request middleware.
+    # These parameters remain for compatibility with existing runtime wiring.
     del allowed_tags_provider, lookup_component_tags, enabled
-    transform = MetaDiscoveryTransform(dynamic_adapter)
+    service = MetaDiscoveryService(dynamic_adapter)
+
+    @mcp.tool(
+        name=SEARCH_TOOL_NAME,
+        annotations=ToolAnnotations(
+            title="Search tools",
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+    )  # type: ignore[untyped-decorator, unused-ignore]
+    async def search_tools(query: str) -> list[dict[str, str]]:
+        """
+        Find visible Music Assistant API commands by name, description, or legacy alias.
+
+        Results contain only canonical names and descriptions. Use
+        ``get_tool_schema`` to retrieve arguments before using ``call_tool``.
+
+        :param query: Natural-language command name, description, or legacy alias.
+        """
+        return await service.search(query)
 
     @mcp.tool(
         name=GET_TOOL_SCHEMA_NAME,
@@ -238,27 +250,45 @@ def register_meta_discovery(
 
         Use ``search_tools`` first to find candidate tool names, then fetch
         the schema of the one you intend to invoke via ``call_tool``.
-        Returns ``name``, ``description`` and ``inputSchema``, plus
-        ``outputSchema`` and ``annotations`` when the tool declares them.
 
-        :param tool_name: Exact tool name as returned by ``search_tools``.
+        :param tool_name: Exact canonical ``ma_api:*`` name from ``search_tools``.
         """
-        entry = await transform.adapter.get_visible_entry(tool_name)
-        if entry is None:
-            raise NotFoundError(f"Tool {tool_name!r} not found")
-        result: dict[str, Any] = {
-            "name": entry.name,
-            "kind": entry.name.split(":", 1)[0],
-            "command": entry.command,
-            "description": entry.description,
-            "inputSchema": entry.input_schema,
-            "risk": entry.risk.value,
-            "requiredScope": entry.required_scope,
-            "allowImpersonation": entry.allow_impersonation,
-            "annotations": entry.annotations,
-        }
-        if entry.output_schema is not None:
-            result["outputSchema"] = entry.output_schema
-        return result
+        return await service.get_schema(tool_name)
 
-    mcp.add_transform(transform)
+    @mcp.tool(name=CALL_TOOL_NAME)  # type: ignore[untyped-decorator, unused-ignore]
+    async def call_tool(
+        name: str,
+        arguments: dict[str, Any] | None = None,
+        response_mode: str = "compact",
+        fields: list[str] | None = None,
+        max_items: int | None = None,
+        ctx: Context | None = None,
+    ) -> dict[str, Any]:
+        """
+        Execute a canonical ``ma_api:*`` command found with ``search_tools``.
+
+        :param name: Canonical ``ma_api:*`` name.
+        :param arguments: Command arguments from get_tool_schema.
+        :param response_mode: ``compact`` (default) or explicit ``full``.
+        :param fields: Optional top-level fields to retain.
+        :param max_items: Optional smaller item limit.
+        """
+        if replacement := LEGACY_MIGRATIONS.get(name):
+            raise ToolError(f"Tool {name!r} was retired; use {replacement!r}")
+        if not name.startswith("ma_api:"):
+            raise ToolError(f"Tool {name!r} is not a canonical ma_api command")
+        if ctx is None:  # pragma: no cover - FastMCP always injects Context
+            raise ToolError("MCP request context is unavailable")
+        return await dynamic_adapter.call(
+            name,
+            dict(arguments or {}),
+            response_mode=response_mode,
+            fields=fields,
+            max_items=max_items,
+            ctx=ctx,
+        )
+
+    # Curated subservers remain available internally for provider recipes but
+    # are never exposed to model clients alongside the permanent meta surface.
+    mcp.disable(components={"tool"})
+    mcp.enable(names=_META_NAMES, components={"tool"})
