@@ -25,7 +25,12 @@ from provider.command_profiles import (
     CURATED_RECIPE_SOURCES,
     CommandProfile,
 )
-from provider.dynamic_api import DynamicAPIAdapter, DynamicEntry, DynamicPolicy, DynamicRisk
+from provider.dynamic_api import (
+    DynamicAPIAdapter,
+    DynamicEntry,
+    DynamicPolicy,
+    DynamicRisk,
+)
 from provider.meta_discovery import register_meta_discovery
 from provider.server import build_tag_lookup
 
@@ -63,7 +68,10 @@ class _FakeAdapter:
 
     async def get_visible_entry(self, name: str) -> DynamicEntry | None:
         """Resolve the fake command by name."""
-        return next((entry for entry in await self.visible_entries() if entry.name == name), None)
+        return next(
+            (entry for entry in await self.visible_entries() if entry.name == name),
+            None,
+        )
 
     async def call(
         self,
@@ -121,7 +129,10 @@ async def test_search_uses_alias_but_returns_canonical_ma_name() -> None:
     async with Client(mcp) as client:
         result = await client.call_tool("search_tools", {"query": "playback_play"})
     assert result.data == [
-        {"name": "ma_api:players/cmd/play", "description": "Start playback on a player."}
+        {
+            "name": "ma_api:players/cmd/play",
+            "description": "Start playback on a player.",
+        }
     ]
 
 
@@ -129,7 +140,9 @@ async def test_dynamic_schema_is_returned_on_demand() -> None:
     """A dynamic command exposes its real input schema only when requested."""
     mcp, _adapter = _server()
     async with Client(mcp) as client:
-        result = await client.call_tool("get_tool_schema", {"tool_name": "ma_api:players/cmd/play"})
+        result = await client.call_tool(
+            "get_tool_schema", {"tool_name": "ma_api:players/cmd/play"}
+        )
     assert result.data["name"] == "ma_api:players/cmd/play"
     assert result.data["kind"] == "ma_api"
     assert result.data["inputSchema"]["required"] == ["player_id"]
@@ -158,7 +171,9 @@ async def test_old_curated_name_is_not_callable() -> None:
     mcp, _adapter = _server()
     async with Client(mcp) as client:
         with pytest.raises(ToolError, match="ma_api:players/cmd/play"):
-            await client.call_tool("call_tool", {"name": "playback_play", "arguments": {}})
+            await client.call_tool(
+                "call_tool", {"name": "playback_play", "arguments": {}}
+            )
         with pytest.raises(ToolError):
             await client.call_tool("playback_play", {"player_id": "kitchen"})
 
@@ -261,7 +276,9 @@ async def test_adapter_observes_registry_changes_without_restart() -> None:
         return value
 
     adapter = _real_adapter(_handler("music/first", first))
-    assert [entry.name for entry in await adapter.visible_entries()] == ["ma_api:music/first"]
+    assert [entry.name for entry in await adapter.visible_entries()] == [
+        "ma_api:music/first"
+    ]
     adapter.mass.command_handlers = {"music/second": _handler("music/second", second)}
     entries = await adapter.visible_entries()
     assert [entry.name for entry in entries] == ["ma_api:music/second"]
@@ -282,7 +299,7 @@ async def test_adapter_executes_strictly_and_bounds_result() -> None:
 
     adapter = _real_adapter(_handler("music/values", values))
     ctx = MagicMock(session_id="session-1")
-    with pytest.raises(ToolError, match="Invalid parameter"):
+    with pytest.raises(ToolError, match="Unexpected argument\\(s\\): typo"):
         await adapter.call(
             "ma_api:music/values",
             {"prefix": "x", "typo": True},
@@ -345,7 +362,8 @@ async def test_recipe_keeps_curated_executor_behind_canonical_name() -> None:
     entries = await adapter.visible_entries()
     recipe = next(entry for entry in entries if entry.name == "mcp_api:players/summary")
     operations = {
-        branch["properties"]["operation"]["const"] for branch in recipe.input_schema["oneOf"]
+        branch["properties"]["operation"]["const"]
+        for branch in recipe.input_schema["oneOf"]
     }
     assert operations == {"list_players", "get_player"}
     get_branch = next(
@@ -388,11 +406,15 @@ def test_curated_migration_matrix_covers_every_registered_tool() -> None:
                 decorated = True
                 if call is not None:
                     for keyword in call.keywords:
-                        if keyword.arg == "name" and isinstance(keyword.value, ast.Constant):
+                        if keyword.arg == "name" and isinstance(
+                            keyword.value, ast.Constant
+                        ):
                             public_name = str(keyword.value.value)
             if decorated:
                 registered.add(f"{path.stem}_{public_name}")
-    recipe_sources = {source for sources in CURATED_RECIPE_SOURCES.values() for source in sources}
+    recipe_sources = {
+        source for sources in CURATED_RECIPE_SOURCES.values() for source in sources
+    }
     mapped = set(CURATED_PROFILE_MAPPINGS) | recipe_sources
     assert registered == mapped
     assert set(CURATED_PROFILE_MAPPINGS).isdisjoint(recipe_sources)
@@ -417,7 +439,11 @@ async def test_profile_converts_arguments_and_projects_only_compact_mode() -> No
         search_query: str, media_types: list[str] | None = None
     ) -> dict[str, list[dict[str, Any]]]:
         seen.append((search_query, media_types))
-        return {"tracks": [{"uri": "track://1", "name": "One", "provider_mappings": [1, 2, 3]}]}
+        return {
+            "tracks": [
+                {"uri": "track://1", "name": "One", "provider_mappings": [1, 2, 3]}
+            ]
+        }
 
     adapter = _real_adapter(_handler("music/search", search))
     compact = await adapter.call(
@@ -465,14 +491,18 @@ async def test_registry_incompatibility_is_reported_without_breaking_catalog() -
     valid = _handler("music/values", values)
     adapter = _real_adapter(valid)
     adapter.mass.command_handlers["broken"] = SimpleNamespace(target=None)
-    assert [entry.name for entry in await adapter.visible_entries()] == ["ma_api:music/values"]
+    assert [entry.name for entry in await adapter.visible_entries()] == [
+        "ma_api:music/values"
+    ]
     diagnostics = adapter.diagnostics()
     assert diagnostics["available"] is True
     assert diagnostics["incompatible_handlers"] == ("broken",)
     assert diagnostics["last_error"] == "1 incompatible handler(s) skipped"
     adapter.mass.command_handlers = []
     assert await adapter.visible_entries() == []
-    assert adapter.diagnostics()["last_error"] == "mass.command_handlers is not a mapping"
+    assert (
+        adapter.diagnostics()["last_error"] == "mass.command_handlers is not a mapping"
+    )
 
 
 async def test_recipe_requires_both_enabled_tag_and_ma_scope() -> None:
@@ -493,27 +523,36 @@ async def test_recipe_requires_both_enabled_tag_and_ma_scope() -> None:
     )
     denied_tag.ingest_curated([tool])
     assert not any(
-        entry.name == "mcp_api:players/summary" for entry in await denied_tag.visible_entries()
+        entry.name == "mcp_api:players/summary"
+        for entry in await denied_tag.visible_entries()
     )
 
     denied_scope = _real_adapter(
         _handler("music/values", values),
-        scope_checker=lambda _user, scope: str(getattr(scope, "value", scope)) != "players.read",
+        scope_checker=lambda _user, scope: str(getattr(scope, "value", scope))
+        != "players.read",
         allowed_tags={"query:players"},
     )
     denied_scope.ingest_curated([tool])
     assert not any(
-        entry.name == "mcp_api:players/summary" for entry in await denied_scope.visible_entries()
+        entry.name == "mcp_api:players/summary"
+        for entry in await denied_scope.visible_entries()
     )
 
 
-async def test_execution_sets_and_restores_ma_auth_context(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_execution_sets_and_restores_ma_auth_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Native and recipe execution share MA's request-local identity context."""
     current_user: contextvars.ContextVar[Any] = contextvars.ContextVar("current_user")
     current_token: contextvars.ContextVar[Any] = contextvars.ContextVar("current_token")
-    auth_middleware = SimpleNamespace(current_user=current_user, current_token=current_token)
+    auth_middleware = SimpleNamespace(
+        current_user=current_user, current_token=current_token
+    )
     helpers = SimpleNamespace(auth_middleware=auth_middleware)
-    monkeypatch.setitem(sys.modules, "music_assistant.controllers.webserver.helpers", helpers)
+    monkeypatch.setitem(
+        sys.modules, "music_assistant.controllers.webserver.helpers", helpers
+    )
 
     async def whoami() -> str:
         return str(current_user.get().user_id)
@@ -539,7 +578,9 @@ async def test_schema_covers_enum_union_collections_and_impersonation() -> None:
         ONE = "one"
         TWO = "two"
 
-    async def typed(mode: Mode, values: list[int], optional: str | None = None) -> dict[str, int]:
+    async def typed(
+        mode: Mode, values: list[int], optional: str | None = None
+    ) -> dict[str, int]:
         return {str(mode): len(values) + bool(optional)}
 
     handler = _handler("music/typed", typed)
@@ -568,7 +609,12 @@ async def test_schema_covers_enum_union_collections_and_impersonation() -> None:
             DynamicRisk.CONTROL,
             DynamicPolicy(control=True),
         ),
-        ("music/add_item", "library.write", DynamicRisk.WRITE, DynamicPolicy(write=True)),
+        (
+            "music/add_item",
+            "library.write",
+            DynamicRisk.WRITE,
+            DynamicPolicy(write=True),
+        ),
         ("config/read", "system.read", DynamicRisk.SYSTEM, DynamicPolicy(system=True)),
     ],
 )
@@ -656,12 +702,21 @@ async def test_confirmation_policy_is_mandatory_for_system_and_impersonation(
     adapter = _real_adapter(_handler("music/read", lambda: None))
     handler = object()
     ctx = MagicMock()
-    read = DynamicEntry("ma_api:read", "read", "read", {}, DynamicRisk.READ, None, False, handler)
+    read = DynamicEntry(
+        "ma_api:read", "read", "read", {}, DynamicRisk.READ, None, False, handler
+    )
     write = DynamicEntry(
         "ma_api:write", "write", "write", {}, DynamicRisk.WRITE, None, False, handler
     )
     system = DynamicEntry(
-        "ma_api:system", "system", "system", {}, DynamicRisk.SYSTEM, None, False, handler
+        "ma_api:system",
+        "system",
+        "system",
+        {},
+        DynamicRisk.SYSTEM,
+        None,
+        False,
+        handler,
     )
     adapter._confirmation_provider = lambda: False
     await adapter._confirm(read, ctx)

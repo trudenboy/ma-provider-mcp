@@ -162,6 +162,7 @@ class CommandProfile:
     compact_fields: tuple[str, ...] = ()
     risk_override: str | None = None
     annotations: Mapping[str, bool] = field(default_factory=dict)
+    allow_extra_kwargs: bool = False
 
     def convert_arguments(self, arguments: Mapping[str, Any]) -> dict[str, Any]:
         """Translate ergonomic aliases without overriding canonical values."""
@@ -316,7 +317,8 @@ COMMAND_PROFILES: dict[str, CommandProfile] = _build_profiles()
 def legacy_migrations() -> dict[str, str]:
     """Return concise replacements for every former curated public name."""
     migrations = {
-        legacy: f"ma_api:{command}" for legacy, command in CURATED_PROFILE_MAPPINGS.items()
+        legacy: f"ma_api:{command}"
+        for legacy, command in CURATED_PROFILE_MAPPINGS.items()
     }
     for recipe, sources in CURATED_RECIPE_SOURCES.items():
         migrations.update(dict.fromkeys(sources, recipe))
