@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from music_assistant_models.auth import UserRole
+from music_assistant_models.auth import Scope, UserRole
 from music_assistant_models.errors import AuthenticationRequired, InsufficientPermissions
 
-from ..tags import enabled_tags
+from provider.tags import enabled_tags
 
 if TYPE_CHECKING:
     from music_assistant_models.auth import User
@@ -16,9 +16,12 @@ if TYPE_CHECKING:
 try:
     from music_assistant.controllers.webserver.helpers.auth_middleware import (
         get_current_user,
+    )
+    from music_assistant.controllers.webserver.helpers.auth_middleware import (
         has_scope as _ma_has_scope,
     )
 except ImportError:
+
     def get_current_user() -> User | None:
         """Minimal-development fallback; real MA supplies the context-local user."""
         return None
@@ -34,14 +37,12 @@ def scope_allowed(user: User, required_scope: str) -> bool:
     if not isinstance(role, UserRole):
         try:
             role = UserRole(getattr(role, "value", role))
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return False
     if _ma_has_scope is not None:
         try:
-            from music_assistant_models.auth import Scope
-
             return bool(_ma_has_scope(user, Scope(required_scope)))
-        except (AttributeError, TypeError, ValueError):
+        except AttributeError, TypeError, ValueError:
             return False
     if required_scope.startswith(("system.", "config.")):
         return role is UserRole.ADMIN

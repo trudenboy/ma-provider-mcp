@@ -12,7 +12,6 @@ is invisible to MCP clients via ``TagFilterMiddleware``.
 from __future__ import annotations
 
 import asyncio
-import importlib.metadata
 import logging
 import time
 from collections.abc import Callable, Mapping
@@ -25,7 +24,6 @@ from mcp.types import ToolAnnotations
 from ..commands import debug as command_debug
 from ..debug.event_buffer import EventBuffer
 from ..debug.inspect_serializer import dump
-from ..debug.log_reader import SafeLogTail
 from ..models import (
     ConfigValueDump,
     EventBufferStats,
@@ -41,7 +39,6 @@ from ..models import (
     ProviderSummary,
     QueueInspect,
     ReloadResult,
-    RouteEntry,
     RouteList,
 )
 from ..tags import Tag
@@ -59,14 +56,6 @@ if TYPE_CHECKING:
 LOGGER = logging.getLogger("music_assistant.providers.fastmcp_server.debug")
 
 _PAYLOAD_CAP_BYTES = 256 * 1024
-
-_TRACKED_PACKAGES = (
-    "music_assistant",
-    "music_assistant_models",
-    "fastmcp",
-    "aiohttp",
-    "mashumaro",
-)
 
 _RELOAD_POLL_SECONDS = 5.0
 _RELOAD_POLL_INTERVAL = 0.1
@@ -172,8 +161,6 @@ def _register_reload_tool(
 
 
 def _register_logs_tool(sub: FastMCP, mass: MusicAssistant) -> None:
-    tail = SafeLogTail(mass)
-
     @sub.tool(
         tags={Tag.DEBUG_LOGS},
         annotations=_readonly("Tail MA log"),

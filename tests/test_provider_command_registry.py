@@ -1,4 +1,5 @@
 """Registration, authorization, and lifecycle tests for provider MA commands."""
+# ruff: noqa: D102, D107, PT012
 
 from __future__ import annotations
 
@@ -10,10 +11,9 @@ import pytest
 from music_assistant_models.auth import Scope, User, UserRole
 from music_assistant_models.errors import AuthenticationRequired, InsufficientPermissions
 
-from provider.commands import ProviderCommandSet
+from provider.commands import ProviderCommandSet, authorization
 from provider.commands.authorization import authorize_extension, scope_allowed
 from provider.tags import Tag
-
 
 COMMANDS = {
     "fastmcp/queue/remove_items_safe",
@@ -75,7 +75,7 @@ class LegacyCommandRegistry(CommandRegistry):
 def _config(*enabled: Tag) -> MagicMock:
     config = MagicMock()
     allowed = {str(tag) for tag in enabled}
-    config.get_value.side_effect = lambda key, default=None: any(
+    config.get_value.side_effect = lambda key, _default=None: any(
         str(tag) in allowed and tag.value.replace(":", "_") == key for tag in Tag
     )
     return config
@@ -89,31 +89,23 @@ def test_authorization_rejects_missing_and_disabled_users(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Every native handler requires a present, enabled MA user."""
-    from provider.commands import authorization
-
     config = _config(Tag.DEBUG_LOGS)
     monkeypatch.setattr(authorization, "get_current_user", lambda: None)
     with pytest.raises(AuthenticationRequired, match="enabled Music Assistant user"):
-        authorize_extension(
-            config, required_scope="system.read", required_tag=str(Tag.DEBUG_LOGS)
-        )
+        authorize_extension(config, required_scope="system.read", required_tag=str(Tag.DEBUG_LOGS))
 
     monkeypatch.setattr(authorization, "get_current_user", lambda: _user(enabled=False))
     with pytest.raises(AuthenticationRequired, match="enabled Music Assistant user"):
-        authorize_extension(
-            config, required_scope="system.read", required_tag=str(Tag.DEBUG_LOGS)
-        )
+        authorize_extension(config, required_scope="system.read", required_tag=str(Tag.DEBUG_LOGS))
 
 
 def test_authorization_rejects_wrong_scope_and_disabled_provider_tag(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """MA scope and provider config permissions are independent gates."""
-    from provider.commands import authorization
-
     monkeypatch.setattr(authorization, "_ma_has_scope", None)
     monkeypatch.setattr(authorization, "get_current_user", lambda: _user(UserRole.USER))
-    with pytest.raises(InsufficientPermissions, match="system.read"):
+    with pytest.raises(InsufficientPermissions, match=r"system\.read"):
         authorize_extension(
             _config(Tag.DEBUG_LOGS),
             required_scope="system.read",
@@ -133,8 +125,6 @@ def test_scope_fallback_is_role_based_and_fail_closed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Older role-only MA builds grant only the documented minimum roles."""
-    from provider.commands import authorization
-
     monkeypatch.setattr(authorization, "_ma_has_scope", None)
     assert scope_allowed(_user(UserRole.ADMIN), "system.read") is True
     assert scope_allowed(_user(UserRole.USER), "system.read") is False
@@ -160,8 +150,6 @@ async def test_legacy_registration_stays_protected_inside_handler(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Missing required_scope support cannot bypass current-user authorization."""
-    from provider.commands import authorization
-
     mass = LegacyCommandRegistry()
     command_set = ProviderCommandSet(mass, _config(*Tag))
     command_set.start()
@@ -195,8 +183,6 @@ async def test_stop_is_idempotent_and_update_config_is_live(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Handlers see updated config and repeated stop never double-unregisters."""
-    from provider.commands import authorization
-
     mass = LegacyCommandRegistry()
     command_set = ProviderCommandSet(mass, _config())
     command_set.start()

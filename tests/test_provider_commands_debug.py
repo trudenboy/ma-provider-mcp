@@ -68,7 +68,8 @@ async def test_log_handlers_preserve_redaction_paging_stats_and_worker_thread(
     assert "<redacted>" in redacted.lines[0].message
     assert stats.total_records == 3
     assert stats.level_counts == {"ERROR": 2, "INFO": 1}
-    assert seen_threads and all(thread is not main_thread for thread in seen_threads)
+    assert seen_threads
+    assert all(thread is not main_thread for thread in seen_threads)
 
 
 async def test_event_handlers_preserve_limits_and_stats(
@@ -142,9 +143,7 @@ async def test_health_rolls_up_state_and_respects_disabled_log_access() -> None:
 async def test_routes_handles_private_api_absence_and_attributes_known_paths() -> None:
     """Route reads attribute known prefixes and fail clearly on older MA layouts."""
     mass = MagicMock()
-    route = SimpleNamespace(
-        method="GET", resource=SimpleNamespace(canonical="/mcp/v1/sse")
-    )
+    route = SimpleNamespace(method="GET", resource=SimpleNamespace(canonical="/mcp/v1/sse"))
     mass.webserver._server = SimpleNamespace(
         app=SimpleNamespace(router=SimpleNamespace(routes=lambda: [route]))
     )
@@ -194,4 +193,3 @@ async def test_health_counts_recent_log_errors_off_event_loop(
     assert result.log_errors_last_5min == 1
     assert seen == [seen[0]]
     assert seen[0] is not main_thread
-

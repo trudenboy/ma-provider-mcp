@@ -21,13 +21,11 @@ async def test_safe_remove_never_deletes_played_or_buffered_rows() -> None:
         "future": [3, None],
         "stale": [None],
     }
-    mass.player_queues.index_by_id.side_effect = lambda _queue_id, item_id: positions[
-        item_id
-    ].pop(0)
-
-    result = await remove_items_safe(
-        mass, "q1", ["played", "buffered", "future", "stale"]
+    mass.player_queues.index_by_id.side_effect = lambda _queue_id, item_id: positions[item_id].pop(
+        0
     )
+
+    result = await remove_items_safe(mass, "q1", ["played", "buffered", "future", "stale"])
 
     assert result.skipped_played == ["played"]
     assert result.skipped_buffered == ["buffered"]
@@ -65,4 +63,3 @@ async def test_safe_remove_rejects_unknown_queue() -> None:
 
     with pytest.raises(KeyError, match="'q1'"):
         await remove_items_safe(mass, "q1", ["item"])
-

@@ -6,12 +6,10 @@ from typing import Any
 
 from music_assistant_models.errors import InvalidDataError
 
-from ..models import RemoveFromQueueResult
+from provider.models import RemoveFromQueueResult
 
 
-async def remove_items_safe(
-    mass: Any, queue_id: str, item_ids: list[str]
-) -> RemoveFromQueueResult:
+async def remove_items_safe(mass: Any, queue_id: str, item_ids: list[str]) -> RemoveFromQueueResult:
     """Remove only queue items that are neither played nor player-buffered."""
     if not item_ids:
         raise InvalidDataError("Provide at least one queue item id")
@@ -31,7 +29,7 @@ async def remove_items_safe(
         else:
             try:
                 mass.player_queues.delete_item(queue_id, item_id)
-            except (KeyError, InvalidDataError):
+            except KeyError, InvalidDataError:
                 result.not_found.append(item_id)
                 continue
             bucket = (

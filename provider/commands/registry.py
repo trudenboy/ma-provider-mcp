@@ -9,8 +9,9 @@ from typing import TYPE_CHECKING, Any
 
 from music_assistant_models.auth import Scope
 
-from ..debug.event_buffer import EventBuffer
-from ..tags import Tag, enabled_tags
+from provider.debug.event_buffer import EventBuffer
+from provider.tags import Tag, enabled_tags
+
 from . import debug, queue
 from .authorization import authorize_extension
 
@@ -46,6 +47,7 @@ class ProviderCommandSet:
     """Own and register the provider's minimal native MA command surface."""
 
     def __init__(self, mass: Any, config: ProviderConfig) -> None:
+        """Bind MA state and its currently active provider configuration."""
         self._mass = mass
         self._config = config
         self._buffer = EventBuffer(mass, capacity=500) if hasattr(mass, "subscribe") else None
@@ -134,12 +136,32 @@ class ProviderCommandSet:
             return await debug.packages()
 
         return (
-            ProviderCommand("fastmcp/queue/remove_items_safe", remove_items_safe, "queues.control", str(Tag.DELETE_QUEUE)),
+            ProviderCommand(
+                "fastmcp/queue/remove_items_safe",
+                remove_items_safe,
+                "queues.control",
+                str(Tag.DELETE_QUEUE),
+            ),
             ProviderCommand("fastmcp/debug/tail_log", tail_log, "system.read", str(Tag.DEBUG_LOGS)),
-            ProviderCommand("fastmcp/debug/log_stats", log_stats, "system.read", str(Tag.DEBUG_LOGS)),
-            ProviderCommand("fastmcp/debug/recent_events", recent_events, "system.read", str(Tag.DEBUG_EVENTS)),
-            ProviderCommand("fastmcp/debug/event_buffer_stats", event_buffer_stats, "system.read", str(Tag.DEBUG_EVENTS)),
-            ProviderCommand("fastmcp/debug/health", health, "system.read", str(Tag.DEBUG_PROVIDERS)),
-            ProviderCommand("fastmcp/debug/routes", routes, "system.read", str(Tag.DEBUG_PROVIDERS)),
-            ProviderCommand("fastmcp/debug/packages", packages, "system.read", str(Tag.DEBUG_PROVIDERS)),
+            ProviderCommand(
+                "fastmcp/debug/log_stats", log_stats, "system.read", str(Tag.DEBUG_LOGS)
+            ),
+            ProviderCommand(
+                "fastmcp/debug/recent_events", recent_events, "system.read", str(Tag.DEBUG_EVENTS)
+            ),
+            ProviderCommand(
+                "fastmcp/debug/event_buffer_stats",
+                event_buffer_stats,
+                "system.read",
+                str(Tag.DEBUG_EVENTS),
+            ),
+            ProviderCommand(
+                "fastmcp/debug/health", health, "system.read", str(Tag.DEBUG_PROVIDERS)
+            ),
+            ProviderCommand(
+                "fastmcp/debug/routes", routes, "system.read", str(Tag.DEBUG_PROVIDERS)
+            ),
+            ProviderCommand(
+                "fastmcp/debug/packages", packages, "system.read", str(Tag.DEBUG_PROVIDERS)
+            ),
         )

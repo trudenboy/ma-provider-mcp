@@ -10,9 +10,9 @@ from typing import Any
 
 from fastmcp.exceptions import ToolError
 
-from ..debug.event_buffer import EventBuffer
-from ..debug.log_reader import SafeLogTail
-from ..models import (
+from provider.debug.event_buffer import EventBuffer
+from provider.debug.log_reader import SafeLogTail
+from provider.models import (
     EventBufferStats,
     EventSnapshot,
     HealthSummary,
@@ -127,7 +127,7 @@ async def health(
     ]
     try:
         queues = list(mass.player_queues.all())
-    except (AttributeError, TypeError):
+    except AttributeError, TypeError:
         queues = []
     disabled_capabilities: list[str] = []
     events_per_min: dict[str, float] | None = None
@@ -136,7 +136,7 @@ async def health(
     else:
         stats = buffer.stats()
         subscribed_at = datetime.fromisoformat(stats.subscribed_since)
-        from music_assistant.helpers.datetime import now as ma_now
+        from music_assistant.helpers.datetime import now as ma_now  # noqa: PLC0415
 
         elapsed = max(1.0 / 60, (ma_now() - subscribed_at).total_seconds() / 60.0)
         events_per_min = {kind: round(count / elapsed, 2) for kind, count in stats.by_type.items()}
