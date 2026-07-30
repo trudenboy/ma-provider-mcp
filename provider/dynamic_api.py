@@ -8,8 +8,7 @@ import inspect
 import json
 from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import date, datetime
-from enum import Enum, StrEnum
+from enum import StrEnum
 from types import UnionType
 from typing import TYPE_CHECKING, Any, Union, get_args, get_origin
 
@@ -24,6 +23,7 @@ from .command_profiles import (
     aliases_by_command,
     legacy_migrations,
 )
+from .dynamic_serialization import json_value
 from .middleware import tags_visible
 from .tools._common import confirm_or_raise
 
@@ -591,15 +591,7 @@ class DynamicAPIAdapter:
     @classmethod
     def _json_value(cls, value: Any) -> Any:
         """Convert signature defaults to JSON-safe values."""
-        if value is None or isinstance(value, str | int | float | bool):
-            return value
-        if isinstance(value, Enum):
-            return value.value
-        if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
-            return [cls._json_value(item) for item in value]
-        if isinstance(value, Mapping):
-            return {str(key): cls._json_value(item) for key, item in value.items()}
-        return str(value)
+        return json_value(value)
 
     async def _confirm(
         self, entry: DynamicEntry, ctx: Context, *, impersonating: bool = False
@@ -697,7 +689,7 @@ class DynamicAPIAdapter:
             item_cap = max(1, min(item_cap, int(max_items)))
         byte_cap = _COMPACT_BYTES if compact else _FULL_BYTES
         string_cap = _COMPACT_STRING if compact else _FULL_STRING
-        raw = cls._json_value_deep(result)
+        raw = json_value(result)
         total_count = len(raw) if isinstance(raw, list) else None
         if compact and profile is not None:
             raw = profile.project_compact(raw)
@@ -744,32 +736,6 @@ class DynamicAPIAdapter:
                 any(changed for _item, changed in dict_nested.values()),
             )
         return value, False
-
-    @classmethod
-    def _json_value_deep(cls, value: Any) -> Any:
-        """Serialize MA models, dataclasses and common containers."""
-        if value is None or isinstance(value, str | int | float | bool):
-            return value
-        if isinstance(value, bytes | bytearray):
-            return value.decode(errors="replace")
-        if isinstance(value, datetime | date):
-            return value.isoformat()
-        if isinstance(value, Enum):
-            return value.value
-        if dataclasses.is_dataclass(value) and not isinstance(value, type):
-            return cls._json_value_deep(dataclasses.asdict(value))
-        if hasattr(value, "to_dict"):
-            return cls._json_value_deep(value.to_dict())
-        if hasattr(value, "model_dump"):
-            return cls._json_value_deep(value.model_dump(mode="json"))
-        if isinstance(value, Mapping):
-            return {str(key): cls._json_value_deep(item) for key, item in value.items()}
-        if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
-            return [cls._json_value_deep(item) for item in value]
-        try:
-            return json.loads(json.dumps(value, default=str))
-        except TypeError, ValueError:
-            return str(value)
 
     @staticmethod
     def _project_fields(value: Any, fields: list[str] | None) -> Any:
