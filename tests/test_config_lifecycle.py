@@ -206,6 +206,56 @@ async def test_config_reaches_commands_before_runtime_restart(
     assert call_order[:2] == ["commands.update", "runtime.stop"]
 
 
+@pytest.mark.asyncio
+async def test_failed_runtime_replacement_clears_runtime_and_retries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed non-hot restart leaves diagnostics unavailable and can be retried."""
+    mass = _LifecycleMass()
+    provider = _provider(mass, _config())
+    fail_replacement = False
+    instances: list[Runtime] = []
+
+    class Runtime:
+        def __init__(self, *_args: Any, **kwargs: Any) -> None:
+            self.event_buffer_provider = kwargs["event_buffer_provider"]
+            self.stopped = 0
+            instances.append(self)
+
+        async def start(self) -> None:
+            if fail_replacement:
+                raise KeyboardInterrupt("replacement interrupted")
+
+        async def stop(self) -> None:
+            self.stopped += 1
+
+        def dynamic_diagnostics(self) -> dict[str, bool]:
+            return {"available": True}
+
+    monkeypatch.setattr(server, "MCPServerRuntime", Runtime)
+    await provider.handle_async_init()
+    initial = provider._runtime
+    assert initial is not None
+
+    fail_replacement = True
+    with pytest.raises(KeyboardInterrupt, match="replacement interrupted"):
+        await provider.update_config(_config(), {"mount_path"})
+
+    assert initial.stopped == 1
+    assert instances[-1].stopped == 1
+    assert provider._runtime is None
+    assert provider._commands is not None
+    assert provider._commands._diagnostics_provider is not None
+    assert provider._commands._diagnostics_provider()["available"] is False
+
+    fail_replacement = False
+    await provider.update_config(_config(), {"mount_path"})
+
+    assert provider._runtime is instances[-1]
+    assert provider._runtime.event_buffer_provider() is provider._commands.event_buffer
+    await provider.unload()
+
+
 def test_runtime_exposes_dynamic_diagnostics_without_adapter_leak(
     mock_mass: MagicMock, mock_config: MagicMock
 ) -> None:

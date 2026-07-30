@@ -71,7 +71,9 @@ class ProviderCommandSet:
         )
         self._current_config: ProviderConfig | None = None
         self._diagnostics_provider = diagnostics_provider
-        self._buffer: EventBuffer | None = None
+        self._buffer: EventBuffer | None = EventBuffer(
+            self._mass, capacity=self._event_buffer_capacity(self._config())
+        )
         self._unregister: list[Callable[[], None]] = []
 
     @property
@@ -128,17 +130,22 @@ class ProviderCommandSet:
     def _configure_event_buffer(self, config: ProviderConfig) -> None:
         """Start, stop, or resize the subscription held across MCP restarts."""
         enabled = Tag.DEBUG_EVENTS in enabled_tags(config)
-        capacity_value = config.get_value(CONF_DEBUG_EVENT_BUFFER_CAPACITY)
-        capacity = int(capacity_value) if isinstance(capacity_value, int | float | str) else 500
-        if not enabled:
-            if self._buffer is not None:
-                self._buffer.stop()
-            return
-        if self._buffer is None or self._buffer.stats().capacity != max(50, min(capacity, 5000)):
+        capacity = self._event_buffer_capacity(config)
+        if self._buffer is None or self._buffer.stats().capacity != capacity:
             if self._buffer is not None:
                 self._buffer.stop()
             self._buffer = EventBuffer(self._mass, capacity=capacity)
+        if not enabled:
+            self._buffer.stop()
+            return
         self._buffer.start()
+
+    @staticmethod
+    def _event_buffer_capacity(config: ProviderConfig) -> int:
+        """Read and clamp the configured event buffer capacity."""
+        value = config.get_value(CONF_DEBUG_EVENT_BUFFER_CAPACITY)
+        capacity = int(value) if isinstance(value, int | float | str) else 500
+        return max(50, min(capacity, 5000))
 
     def _config(self) -> ProviderConfig:
         """Return the most recently applied config, or lazily read the provider state."""

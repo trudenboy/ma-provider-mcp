@@ -78,7 +78,6 @@ class MCPServerProvider(PluginProvider):
     async def handle_async_init(self) -> None:
         """Register MA commands, then build and start the FastMCP runtime."""
         from .commands import ProviderCommandSet  # noqa: PLC0415
-        from .server import MCPServerRuntime  # noqa: PLC0415
 
         self._commands = ProviderCommandSet(
             self.mass,
@@ -91,11 +90,7 @@ class MCPServerProvider(PluginProvider):
         )
         try:
             self._commands.start()
-            self._runtime = MCPServerRuntime(self.mass, self.config, self.logger)
-            self._runtime._event_buffer_provider = lambda: (
-                self._commands.event_buffer if self._commands is not None else None
-            )
-            await self._runtime.start()
+            await self._start_runtime(self.config)
         except BaseException:
             try:
                 if self._runtime is not None:
@@ -135,16 +130,34 @@ class MCPServerProvider(PluginProvider):
         if self._commands is not None:
             self._commands.update_config(config)
         if self._runtime is None:
+            if self._commands is not None:
+                await self._start_runtime(config)
             return
         normalized_keys = {k.removeprefix("values/") for k in changed_keys}
         if normalized_keys.issubset(HOT_SWAPPABLE_KEYS):
             await self._runtime.apply_permission_change(config, normalized_keys)
         else:
             await self._runtime.stop()
-            from .server import MCPServerRuntime  # noqa: PLC0415
+            self._runtime = None
+            await self._start_runtime(config)
 
-            self._runtime = MCPServerRuntime(self.mass, config, self.logger)
-            self._runtime._event_buffer_provider = lambda: (
+    async def _start_runtime(self, config: ProviderConfig) -> None:
+        """Create and start a runtime, leaving no failed instance attached."""
+        from .server import MCPServerRuntime  # noqa: PLC0415
+
+        runtime = MCPServerRuntime(
+            self.mass,
+            config,
+            self.logger,
+            event_buffer_provider=lambda: (
                 self._commands.event_buffer if self._commands is not None else None
-            )
-            await self._runtime.start()
+            ),
+        )
+        self._runtime = runtime
+        try:
+            await runtime.start()
+        except BaseException:
+            self._runtime = None
+            with suppress(BaseException):
+                await runtime.stop()
+            raise

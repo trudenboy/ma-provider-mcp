@@ -45,11 +45,20 @@ COMMANDS = set(COMMAND_ORDER)
 class CommandRegistry:
     """Small real registry surface mirroring current MA registration semantics."""
 
-    def __init__(self, *, fail_at: int | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        fail_at: int | None = None,
+        subscribe_error: Exception | None = None,
+    ) -> None:
         self.handlers: dict[str, Callable[..., Any]] = {}
         self.options: dict[str, dict[str, Any]] = {}
         self.removed: list[str] = []
         self.fail_at = fail_at
+        self.subscribe_error = subscribe_error
+        self.subscribed = 0
+        self.unsubscribed = 0
+        self.subscribers: list[Callable[..., Any]] = []
 
     def register_api_command(
         self,
@@ -74,6 +83,20 @@ class CommandRegistry:
 
         return unregister
 
+    def subscribe(self, callback: Callable[..., Any]) -> Callable[[], None]:
+        """Mirror MA subscriptions, including one-shot unsubscription."""
+        self.subscribed += 1
+        if self.subscribe_error is not None:
+            raise self.subscribe_error
+        self.subscribers.append(callback)
+
+        def unsubscribe() -> None:
+            if callback in self.subscribers:
+                self.subscribers.remove(callback)
+                self.unsubscribed += 1
+
+        return unsubscribe
+
 
 class LegacyCommandRegistry(CommandRegistry):
     """Older MA surface without the required_scope keyword."""
@@ -85,27 +108,6 @@ class LegacyCommandRegistry(CommandRegistry):
         authenticated: bool = True,
     ) -> Callable[[], None]:
         return super().register_api_command(command, handler, authenticated)
-
-
-class EventfulCommandRegistry(CommandRegistry):
-    """Registry stub with a controllable MA event subscription."""
-
-    def __init__(self, *, subscribe_error: Exception | None = None) -> None:
-        super().__init__()
-        self.subscribe_error = subscribe_error
-        self.subscribed = 0
-        self.unsubscribed = 0
-
-    def subscribe(self, _callback: Callable[..., Any]) -> Callable[[], None]:
-        """Return an unsubscribe callback unless the event bus rejects startup."""
-        self.subscribed += 1
-        if self.subscribe_error is not None:
-            raise self.subscribe_error
-
-        def unsubscribe() -> None:
-            self.unsubscribed += 1
-
-        return unsubscribe
 
 
 def _config(*enabled: Tag) -> MagicMock:
@@ -313,7 +315,7 @@ def test_partial_start_rolls_back_in_reverse_and_can_retry() -> None:
 
 def test_subscription_failure_rolls_back_commands_and_allows_retry() -> None:
     """Event capture is part of the same all-or-nothing startup transaction."""
-    mass = EventfulCommandRegistry(subscribe_error=RuntimeError("event bus offline"))
+    mass = CommandRegistry(subscribe_error=RuntimeError("event bus offline"))
     command_set = ProviderCommandSet(mass, _config(*Tag))
 
     with pytest.raises(RuntimeError, match="event bus offline"):
@@ -352,9 +354,49 @@ async def test_stop_is_idempotent_and_update_config_is_live(
     assert len(mass.removed) == 8
 
 
+def test_event_buffer_survives_event_hot_toggles_and_resizes_before_restart() -> None:
+    """The command owner retains one buffer until a non-hot capacity change replaces it."""
+    mass = CommandRegistry()
+    disabled = _config()
+    command_set = ProviderCommandSet(mass, disabled)
+
+    command_set.start()
+    buffer = command_set.event_buffer
+    assert buffer is not None
+    assert mass.subscribed == 0
+
+    command_set.update_config(_config(Tag.DEBUG_EVENTS))
+    assert command_set.event_buffer is buffer
+    assert mass.subscribed == 1
+
+    command_set.update_config(_config())
+    assert command_set.event_buffer is buffer
+    assert mass.unsubscribed == 1
+
+    command_set.update_config(_config(Tag.DEBUG_EVENTS))
+    assert command_set.event_buffer is buffer
+    assert mass.subscribed == 2
+
+    resized = _config(Tag.DEBUG_EVENTS)
+    resized.get_value.side_effect = lambda key, default=None: {
+        "debug_events": True,
+        "debug_event_buffer_capacity": 250,
+    }.get(key, default)
+    command_set.update_config(resized)
+
+    assert command_set.event_buffer is not buffer
+    assert command_set.event_buffer is not None
+    assert command_set.event_buffer.stats().capacity == 250
+    assert mass.unsubscribed == 2
+    assert mass.subscribed == 3
+
+    command_set.stop()
+    assert mass.unsubscribed == 3
+
+
 def test_stop_attempts_all_unregistrations_then_raises_first_error() -> None:
     """A bad unregister callback cannot leave later commands registered forever."""
-    mass = EventfulCommandRegistry()
+    mass = CommandRegistry()
     command_set = ProviderCommandSet(mass, _config(*Tag))
     command_set.start()
     original = command_set._unregister[-2]
