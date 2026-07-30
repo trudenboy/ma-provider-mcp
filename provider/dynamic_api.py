@@ -45,6 +45,10 @@ if TYPE_CHECKING:
 _ALIASES_BY_COMMAND = aliases_by_command()
 
 _DENIED_TRANSPORT_COMMANDS = frozenset({"dashboard/register", "dashboard/unregister"})
+_RECIPE_POLICY_COMMANDS = {
+    "queue_clear_queue": "player_queues/clear",
+    "queue_remove_item": "player_queues/delete_item",
+}
 _COMPACT_ITEMS = 25
 _FULL_ITEMS = 200
 _COMPACT_BYTES = 12_288
@@ -223,8 +227,7 @@ class DynamicAPIAdapter:
             raise ToolError("Authentication is required")
 
         if isinstance(entry.handler, RecipeBinding):
-            await self._confirm(entry, ctx)
-            result = await self._execute_recipe(entry.handler, arguments, auth)
+            result = await self._call_recipe(entry, arguments, auth, ctx)
             return self._bounded_envelope(
                 name,
                 result,
@@ -469,6 +472,54 @@ class DynamicAPIAdapter:
         auth: tuple[AccessToken, Any] | None = None,
     ) -> Any:
         """Select and invoke a retained executor under MA's auth context."""
+        _source, tool, call_arguments = self._authorize_recipe_operation(binding, arguments, auth)
+        context_tokens = self._set_auth_context(auth)
+        try:
+            result = await tool.run(call_arguments)
+        except ToolError:
+            raise
+        except Exception as exc:
+            raise ToolError(f"Recipe operation {tool.name!r} failed: {exc}") from exc
+        else:
+            if result.is_error:
+                raise ToolError(f"Recipe operation {tool.name!r} failed")
+            structured = result.structured_content
+            if isinstance(structured, dict) and set(structured) == {"result"}:
+                return structured["result"]
+            return structured if structured is not None else result.content
+        finally:
+            for variable, token in reversed(context_tokens):
+                variable.reset(token)
+
+    async def _call_recipe(
+        self,
+        entry: DynamicEntry,
+        arguments: dict[str, Any],
+        auth: tuple[AccessToken, Any] | None,
+        ctx: Context,
+    ) -> Any:
+        """Reauthorize, confirm and execute one retained recipe operation."""
+        if not self._policy_provider().allows(entry.risk):
+            raise ToolError(f"Tool {entry.name!r} not found or not permitted")
+        source, _tool, _call_arguments = self._authorize_recipe_operation(
+            entry.handler, arguments, auth
+        )
+        policy_command = _RECIPE_POLICY_COMMANDS.get(source)
+        confirmation = (
+            resolve_command_policy(policy_command, entry.required_scope, None).confirmation
+            if policy_command is not None
+            else None
+        )
+        await self._confirm(entry, ctx, confirmation=confirmation)
+        return await self._execute_recipe(entry.handler, arguments, auth)
+
+    def _authorize_recipe_operation(
+        self,
+        binding: RecipeBinding,
+        arguments: Mapping[str, Any],
+        auth: tuple[AccessToken, Any] | None,
+    ) -> tuple[str, Tool, dict[str, Any]]:
+        """Select a recipe operation and enforce its current tag and scope."""
         call_arguments = dict(arguments)
         if len(binding.tools) == 1:
             source, tool = next(iter(binding.tools.items()))
@@ -490,23 +541,7 @@ class DynamicAPIAdapter:
             raise ToolError(f"Recipe operation {tool.name!r} is not permitted")
         if not self._scope_checker(auth[1], binding.scopes[source]):
             raise ToolError(f"Recipe operation {tool.name!r} is not permitted")
-        context_tokens = self._set_auth_context(auth)
-        try:
-            result = await tool.run(call_arguments)
-        except ToolError:
-            raise
-        except Exception as exc:
-            raise ToolError(f"Recipe operation {tool.name!r} failed: {exc}") from exc
-        else:
-            if result.is_error:
-                raise ToolError(f"Recipe operation {tool.name!r} failed")
-            structured = result.structured_content
-            if isinstance(structured, dict) and set(structured) == {"result"}:
-                return structured["result"]
-            return structured if structured is not None else result.content
-        finally:
-            for variable, token in reversed(context_tokens):
-                variable.reset(token)
+        return source, tool, call_arguments
 
     @staticmethod
     def _description(target: Callable[..., Any], command: str) -> str:
@@ -556,10 +591,15 @@ class DynamicAPIAdapter:
         return schema
 
     async def _confirm(
-        self, entry: DynamicEntry, ctx: Context, *, impersonating: bool = False
+        self,
+        entry: DynamicEntry,
+        ctx: Context,
+        *,
+        impersonating: bool = False,
+        confirmation: Confirmation | None = None,
     ) -> None:
         """Apply the resolved confirmation mode and impersonation guard."""
-        confirmation = (
+        confirmation = confirmation or (
             entry.decision.confirmation
             if entry.decision is not None
             else Confirmation.ALWAYS
@@ -664,7 +704,12 @@ class DynamicAPIAdapter:
             ),
             (
                 getattr(user, "provider_filter", None),
-                ("instance_id", "provider_instance_id", "provider_filter"),
+                (
+                    "instance_id",
+                    "provider_instance_id",
+                    "provider_instance_or_domain",
+                    "provider_filter",
+                ),
                 ("providers", "provider_instance_ids"),
             ),
         )

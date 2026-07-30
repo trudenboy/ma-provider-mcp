@@ -62,6 +62,15 @@ def test_exact_policy_precedes_profile_and_family_policy() -> None:
     assert decision.confirmation is Confirmation.ALWAYS
 
 
+def test_safe_queue_extension_keeps_always_destructive_policy() -> None:
+    """The deferred safe-removal extension already has its mandatory policy."""
+    decision = resolve_command_policy("fastmcp/queue/remove_items_safe", "queues.control", None)
+    assert decision.risk is DynamicRisk.WRITE
+    assert decision.confirmation is Confirmation.ALWAYS
+    assert decision.required_tags == frozenset({str(Tag.DELETE_QUEUE)})
+    assert decision.annotations["destructiveHint"] is True
+
+
 @pytest.mark.parametrize(
     ("command", "scope", "risk"),
     [

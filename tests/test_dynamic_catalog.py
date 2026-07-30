@@ -18,6 +18,8 @@ from fastmcp import Client, FastMCP
 from fastmcp.exceptions import ToolError
 from fastmcp.server.auth import AccessToken
 from fastmcp.tools import Tool
+from music_assistant_models.config_entries import ConfigEntry
+from music_assistant_models.enums import ConfigEntryType
 
 from provider.command_policy import Confirmation
 from provider.command_profiles import (
@@ -35,6 +37,7 @@ from provider.dynamic_api import (
 from provider.meta_discovery import register_meta_discovery
 from provider.server import build_tag_lookup
 from provider.tags import Tag
+from provider.tools.queue import build_queue_server
 
 _META_NAMES = {"search_tools", "call_tool", "get_tool_schema"}
 
@@ -824,6 +827,247 @@ async def test_queue_delete_always_confirms_before_execution(
     )
     assert confirmation.await_args.kwargs["enabled"] is True
     assert called is True
+
+
+async def test_retained_queue_clear_recipe_always_confirms(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The legacy clear recipe cannot weaken native queue confirmation policy."""
+    confirmation = AsyncMock()
+    monkeypatch.setattr("provider.dynamic_api.confirm_or_raise", confirmation)
+
+    async def values() -> list[str]:
+        return []
+
+    adapter = _real_adapter(
+        _handler("music/values", values),
+        policy=DynamicPolicy(write=True),
+        allowed_tags={str(Tag.DELETE_QUEUE)},
+    )
+    adapter._confirmation_provider = lambda: False
+    adapter.mass.player_queues.clear = MagicMock()
+    queue_root = FastMCP(name="queue-root")
+    queue_root.mount(
+        build_queue_server(adapter.mass, require_confirmation=False),
+        namespace="queue",
+    )
+    adapter.ingest_curated(await queue_root.list_tools())
+
+    await adapter.call(
+        "mcp_api:queue/remove",
+        {"operation": "clear_queue", "queue_id": "kitchen"},
+        response_mode="compact",
+        fields=None,
+        max_items=None,
+        ctx=MagicMock(),
+    )
+
+    assert confirmation.await_args.kwargs["enabled"] is True
+    adapter.mass.player_queues.clear.assert_called_once_with("kitchen")
+
+
+async def test_playlist_provider_alias_is_filtered_before_confirmation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Profile alias conversion cannot bypass a restricted provider filter."""
+    confirmation = AsyncMock()
+    monkeypatch.setattr("provider.dynamic_api.confirm_or_raise", confirmation)
+    called = False
+
+    async def create_playlist(name: str, provider_instance_or_domain: str) -> dict[str, str]:
+        nonlocal called
+        called = True
+        return {"name": name, "provider": provider_instance_or_domain}
+
+    user = SimpleNamespace(
+        user_id="u1",
+        username="limited",
+        enabled=True,
+        role="user",
+        player_filter=[],
+        provider_filter=["allowed-provider"],
+    )
+    adapter = _real_adapter(
+        _handler(
+            "music/playlists/create_playlist",
+            create_playlist,
+            "library.write",
+        ),
+        policy=DynamicPolicy(write=True),
+        allowed_tags={str(Tag.EDIT_PLAYLISTS)},
+        user=user,
+    )
+    with pytest.raises(ToolError, match="not permitted"):
+        await adapter.call(
+            "ma_api:music/playlists/create_playlist",
+            {"name": "Blocked", "provider_instance_id": "blocked-provider"},
+            response_mode="compact",
+            fields=None,
+            max_items=None,
+            ctx=MagicMock(),
+        )
+    confirmation.assert_not_awaited()
+    assert called is False
+
+
+@pytest.mark.parametrize("revoked", ["policy", "tag", "scope"])
+async def test_native_live_authorization_revocation_prevents_elicitation(
+    revoked: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Native live policy, tag and scope revocation all fail before elicitation."""
+    confirmation = AsyncMock()
+    monkeypatch.setattr("provider.dynamic_api.confirm_or_raise", confirmation)
+    called = False
+    policy_checks = 0
+    tag_checks = 0
+    scope_checks = 0
+
+    async def write() -> None:
+        nonlocal called
+        called = True
+
+    adapter = _real_adapter(
+        _handler("music/write", write, "library.write"),
+        policy=DynamicPolicy(write=True),
+        allowed_tags={str(Tag.EDIT_LIBRARY)},
+    )
+
+    def policy_provider() -> DynamicPolicy:
+        nonlocal policy_checks
+        policy_checks += 1
+        return DynamicPolicy(write=revoked != "policy" or policy_checks == 1)
+
+    def tags_provider() -> set[str]:
+        nonlocal tag_checks
+        tag_checks += 1
+        return {str(Tag.EDIT_LIBRARY)} if revoked != "tag" or tag_checks == 1 else set()
+
+    def scope_checker(_user: Any, _scope: Any) -> bool:
+        nonlocal scope_checks
+        scope_checks += 1
+        return revoked != "scope" or scope_checks == 1
+
+    adapter._policy_provider = policy_provider
+    adapter._allowed_tags_provider = tags_provider
+    adapter._scope_checker = scope_checker
+    with pytest.raises(ToolError, match="not permitted"):
+        await adapter.call(
+            "ma_api:music/write",
+            {},
+            response_mode="compact",
+            fields=None,
+            max_items=None,
+            ctx=MagicMock(),
+        )
+    confirmation.assert_not_awaited()
+    assert called is False
+
+
+@pytest.mark.parametrize("revoked", ["policy", "tag", "scope"])
+async def test_recipe_live_authorization_revocation_prevents_elicitation(
+    revoked: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Recipe live policy, tag and scope revocation all fail before elicitation."""
+    confirmation = AsyncMock()
+    monkeypatch.setattr("provider.dynamic_api.confirm_or_raise", confirmation)
+    called = False
+    policy_checks = 0
+    tag_checks = 0
+    scope_checks = 0
+
+    async def clear_queue(queue_id: str) -> None:
+        nonlocal called
+        del queue_id
+        called = True
+
+    async def values() -> list[str]:
+        return []
+
+    tool = Tool.from_function(fn=clear_queue, name="queue_clear_queue")
+    tool = tool.model_copy(update={"tags": {str(Tag.DELETE_QUEUE)}})
+    adapter = _real_adapter(
+        _handler("music/values", values),
+        policy=DynamicPolicy(write=True),
+        allowed_tags={str(Tag.DELETE_QUEUE)},
+    )
+    adapter.mass.command_handlers = {}
+    adapter.ingest_curated([tool])
+
+    def policy_provider() -> DynamicPolicy:
+        nonlocal policy_checks
+        policy_checks += 1
+        return DynamicPolicy(write=revoked != "policy" or policy_checks == 1)
+
+    def tags_provider() -> set[str]:
+        nonlocal tag_checks
+        tag_checks += 1
+        return {str(Tag.DELETE_QUEUE)} if revoked != "tag" or tag_checks <= 2 else set()
+
+    def scope_checker(_user: Any, _scope: Any) -> bool:
+        nonlocal scope_checks
+        scope_checks += 1
+        return revoked != "scope" or scope_checks == 1
+
+    adapter._policy_provider = policy_provider
+    adapter._allowed_tags_provider = tags_provider
+    adapter._scope_checker = scope_checker
+    with pytest.raises(ToolError, match="not permitted"):
+        await adapter.call(
+            "mcp_api:queue/remove",
+            {"queue_id": "kitchen"},
+            response_mode="compact",
+            fields=None,
+            max_items=None,
+            ctx=MagicMock(),
+        )
+    confirmation.assert_not_awaited()
+    assert called is False
+
+
+async def test_native_config_secret_denial_precedes_confirmation_and_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Native config secret preflight rejects before elicitation or mutation."""
+    confirmation = AsyncMock()
+    monkeypatch.setattr("provider.dynamic_api.confirm_or_raise", confirmation)
+    called = False
+
+    async def save_provider_config(
+        provider_domain: str,
+        values: dict[str, Any],
+        instance_id: str | None = None,
+    ) -> None:
+        nonlocal called
+        del provider_domain, values, instance_id
+        called = True
+
+    adapter = _real_adapter(
+        _handler(
+            "config/providers/save",
+            save_provider_config,
+            "config.providers.write",
+        ),
+        policy=DynamicPolicy(write=True),
+        allowed_tags={str(Tag.CONFIG_WRITE_PROVIDER)},
+    )
+    adapter.mass.config.get_provider_config_entries = AsyncMock(
+        return_value=[ConfigEntry(key="token", type=ConfigEntryType.SECURE_STRING, label="Token")]
+    )
+    with pytest.raises(ToolError, match="config:write:secret"):
+        await adapter.call(
+            "ma_api:config/providers/save",
+            {
+                "provider_domain": "demo",
+                "instance_id": "demo--1",
+                "values": {"token": "secret"},
+            },
+            response_mode="compact",
+            fields=None,
+            max_items=None,
+            ctx=MagicMock(),
+        )
+    confirmation.assert_not_awaited()
+    assert called is False
 
 
 async def test_impersonation_is_authorized_before_confirmation_and_execution(
