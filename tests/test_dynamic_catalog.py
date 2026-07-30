@@ -161,6 +161,143 @@ def _meta_service(adapter: DynamicAPIAdapter) -> Any:
     return service_type(adapter)
 
 
+def _catalog_entry(name: str, description: str) -> DynamicEntry:
+    """Build a minimal entry for direct discovery-index tests."""
+    return DynamicEntry(
+        name=name,
+        command=name.removeprefix("ma_api:"),
+        description=description,
+        input_schema={"type": "object", "properties": {}},
+        risk=DynamicRisk.READ,
+        required_scope=None,
+        allow_impersonation=False,
+        handler=object(),
+    )
+
+
+class _SnapshotAdapter:
+    """Expose one immutable base snapshot and matching visible view."""
+
+    def __init__(self, snapshot: CatalogSnapshot) -> None:
+        self.snapshot = snapshot
+
+    async def base_snapshot(self) -> CatalogSnapshot:
+        """Return the test snapshot."""
+        return self.snapshot
+
+    async def visible_catalog(self) -> CatalogView:
+        """Make all test entries visible."""
+        return CatalogView(self.snapshot.fingerprint, self.snapshot.entries)
+
+
+async def test_search_retries_when_registry_changes_between_catalog_reads() -> None:
+    """Search retries so metadata and returned descriptions share one generation."""
+    first = CatalogSnapshot(
+        (1, "test", (("music/first", 1),)),
+        (_catalog_entry("ma_api:music/first", "Original collection."),),
+    )
+    second = CatalogSnapshot(
+        (1, "test", (("music/replacement", 2),)),
+        (_catalog_entry("ma_api:music/replacement", "Replacement collection."),),
+    )
+
+    class _ChangingAdapter(_SnapshotAdapter):
+        def __init__(self) -> None:
+            super().__init__(first)
+            self.changed = False
+
+        async def base_snapshot(self) -> CatalogSnapshot:
+            """Replace the live registry after the first visible-catalog read."""
+            self.changed = True
+            return second
+
+        async def visible_catalog(self) -> CatalogView:
+            """Return whichever generation is visible at this instant."""
+            snapshot = second if self.changed else first
+            return CatalogView(snapshot.fingerprint, snapshot.entries)
+
+    service = _meta_service(_ChangingAdapter())
+    assert await service.search("replacement") == [
+        {"name": "ma_api:music/replacement", "description": "Replacement collection."}
+    ]
+
+
+async def test_parallel_searches_contend_for_one_awaitable_index_build(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Followers wait on the cold-build lock instead of starting duplicate builds."""
+    snapshot = CatalogSnapshot(
+        (1, "test", (("music/search", 1),)),
+        (_catalog_entry("ma_api:music/search", "Search music."),),
+    )
+    service = _meta_service(_SnapshotAdapter(snapshot))
+    build_index = getattr(service, "_build_index", None)
+    assert build_index is not None
+    started = asyncio.Event()
+    release = asyncio.Event()
+    attempts = 0
+
+    async def delayed_build(candidate: CatalogSnapshot) -> Any:
+        nonlocal attempts
+        attempts += 1
+        started.set()
+        await release.wait()
+        return await build_index(candidate)
+
+    monkeypatch.setattr(service, "_build_index", delayed_build)
+    leader = asyncio.create_task(service.search("search"))
+    await started.wait()
+    followers = [asyncio.create_task(service.search("search")) for _index in range(19)]
+    await asyncio.sleep(0)
+    release.set()
+    await asyncio.gather(leader, *followers)
+    assert attempts == 1
+    assert service.index_build_count == 1
+
+
+async def test_failed_index_build_releases_waiters_and_retries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A transient index failure does not poison later discovery searches."""
+    snapshot = CatalogSnapshot(
+        (1, "test", (("music/search", 1),)),
+        (_catalog_entry("ma_api:music/search", "Search music."),),
+    )
+    service = _meta_service(_SnapshotAdapter(snapshot))
+    build_index = getattr(service, "_build_index", None)
+    assert build_index is not None
+    attempts = 0
+
+    async def fail_once(candidate: CatalogSnapshot) -> Any:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("transient index failure")
+        return await build_index(candidate)
+
+    monkeypatch.setattr(service, "_build_index", fail_once)
+    first, second = await asyncio.gather(
+        service.search("search"), service.search("search"), return_exceptions=True
+    )
+    assert isinstance(first, RuntimeError)
+    assert second == [{"name": "ma_api:music/search", "description": "Search music."}]
+    assert await service.search("search") == second
+    assert attempts == 2
+
+
+def test_search_index_does_not_expose_mutable_token_counters() -> None:
+    """Callers cannot mutate cached BM25 term frequencies between requests."""
+    snapshot = CatalogSnapshot(
+        (1, "test", (("music/search", 1),)),
+        (_catalog_entry("ma_api:music/search", "Search music."),),
+    )
+    index = meta_discovery._build_search_index(snapshot)
+    with pytest.raises(TypeError):
+        index.documents["ma_api:other"] = ()  # type: ignore[index]
+    with pytest.raises(TypeError):
+        index.frequencies["ma_api:music/search"]["search"] = 99  # type: ignore[index]
+
+
 async def test_parallel_search_builds_one_index() -> None:
     """Concurrent searches share one immutable base-snapshot index."""
 

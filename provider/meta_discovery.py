@@ -67,7 +67,7 @@ class SearchIndex:
 
     fingerprint: CatalogFingerprint
     documents: Mapping[str, tuple[str, ...]]
-    frequencies: Mapping[str, Counter[str]]
+    frequencies: Mapping[str, Mapping[str, int]]
     document_frequencies: Mapping[str, int]
     average_length: float
 
@@ -81,13 +81,13 @@ def _tokens(value: str) -> list[str]:
 def _build_search_index(snapshot: CatalogSnapshot) -> SearchIndex:
     """Compile immutable BM25 documents once for a base catalog snapshot."""
     documents: dict[str, tuple[str, ...]] = {}
-    frequencies: dict[str, Counter[str]] = {}
+    frequencies: dict[str, Mapping[str, int]] = {}
     document_frequencies: Counter[str] = Counter()
     for entry in snapshot.entries:
         document = tuple(_tokens(" ".join((entry.name, entry.description, *entry.search_aliases))))
         documents[entry.name] = document
         frequency = Counter(document)
-        frequencies[entry.name] = frequency
+        frequencies[entry.name] = MappingProxyType(dict(frequency))
         document_frequencies.update(frequency.keys())
     average_length = sum(map(len, documents.values())) / len(documents) if documents else 1.0
     return SearchIndex(
@@ -115,7 +115,7 @@ def _rank(index: SearchIndex, query_tokens: list[str], *, allowed_names: set[str
             continue
         score = 0.0
         for token in query_tokens:
-            frequency = frequencies[token]
+            frequency = frequencies.get(token, 0)
             if not frequency:
                 continue
             document_frequency = index.document_frequencies.get(token, 0)
@@ -147,8 +147,12 @@ class MetaDiscoveryService:
 
     async def search(self, query: str) -> list[dict[str, str]]:
         """Return lightweight matches from the caller's visible catalog only."""
-        view = await self.adapter.visible_catalog()
-        index = await self._index_for(await self.adapter.base_snapshot())
+        while True:
+            view = await self.adapter.visible_catalog()
+            snapshot = await self.adapter.base_snapshot()
+            if view.fingerprint == snapshot.fingerprint:
+                break
+        index = await self._index_for(snapshot)
         visible = {entry.name: entry for entry in view.entries}
         names = _rank(index, _tokens(query), allowed_names=set(visible))
         return [
@@ -176,9 +180,13 @@ class MetaDiscoveryService:
             return self._index
         async with self._index_lock:
             if self._index is None or self._index.fingerprint != snapshot.fingerprint:
-                self._index = _build_search_index(snapshot)
+                self._index = await self._build_index(snapshot)
                 self.index_build_count += 1
             return self._index
+
+    async def _build_index(self, snapshot: CatalogSnapshot) -> SearchIndex:
+        """Build index data synchronously behind the async singleflight lock."""
+        return _build_search_index(snapshot)
 
 
 def _schema_result(entry: DynamicEntry) -> dict[str, Any]:
