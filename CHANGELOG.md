@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0] — 2026-07-31
+
+### Added
+- Cursor-based pagination for blank and semantic `search_tools` discovery,
+  with stable catalog revisions and deterministic ordering.
+- A names-only `catalog://commands{?cursor,limit}` resource that exposes the
+  same permission-filtered command set as tool discovery.
+- Native provider-extension commands for queue and debug operations, registered
+  through Music Assistant's command lifecycle.
+
+### Changed
+- Provider functionality now uses one unified Music Assistant command catalog;
+  the duplicated custom FastMCP tool implementation and legacy recipes are
+  replaced by native `ma_api:*` commands, declarative profiles, and provider
+  extensions.
+- Discovery, schema lookup, and execution share the same cached request-visible
+  catalog while the public MCP surface remains limited to `search_tools`,
+  `get_tool_schema`, and `call_tool`.
+- Development and integration tests run against a real Music Assistant dev
+  source slice, including connected MCP catalog, album, track, player, provider,
+  and queue coverage.
+
+### Fixed
+- Dynamic command authorization is revalidated after confirmation and before
+  execution, including impersonation, permission, scope, and target filters.
+- Paginated discovery rejects stale, malformed, oversized, conflicting, and
+  non-strict cursor or limit inputs without leaking hidden command metadata.
+
 ## [0.18.0] — 2026-07-29
 
 ### Added
