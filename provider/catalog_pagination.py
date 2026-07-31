@@ -99,7 +99,10 @@ def encode_cursor(state: CursorState) -> str:
         "r": state.revision,
     }
     raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
-    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+    cursor = base64.urlsafe_b64encode(raw).decode().rstrip("=")
+    if len(cursor) > MAX_CURSOR_LENGTH:
+        raise PaginationError("invalid_cursor", "cursor is malformed")
+    return cursor
 
 
 def decode_cursor(cursor: str) -> CursorState:

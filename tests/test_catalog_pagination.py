@@ -9,6 +9,7 @@ import pytest
 
 from provider.catalog_pagination import (
     CATALOG_DEFAULT_LIMIT,
+    MAX_CURSOR_LENGTH,
     MAX_PAGE_LIMIT,
     SEARCH_DEFAULT_LIMIT,
     CursorState,
@@ -78,6 +79,22 @@ def test_cursor_round_trips_without_padding() -> None:
     encoded = encode_cursor(state)
     assert "=" not in encoded
     assert decode_cursor(encoded) == state
+
+
+def test_encode_cursor_rejects_output_beyond_maximum_length() -> None:
+    """Reject cursor state that cannot produce a decodable cursor."""
+    state = CursorState(
+        version=1,
+        mode="search",
+        query="a" * MAX_CURSOR_LENGTH,
+        offset=5,
+        revision="abc123",
+    )
+
+    with pytest.raises(PaginationError) as exc_info:
+        encode_cursor(state)
+
+    assert exc_info.value.code == "invalid_cursor"
 
 
 @pytest.mark.parametrize(
