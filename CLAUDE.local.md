@@ -9,9 +9,14 @@ Provider repo for the Music Assistant `mcp_server` plugin. Synced into the
 ## Architecture
 
 - `provider/` — runtime code; `manifest.json` declares `type=plugin`, `domain=mcp_server`.
-- `provider/server.py::MCPServerRuntime` builds a root `FastMCP`, mounts 8 sub-servers
-  by namespace, registers resources/prompts, applies `restrict_tag` middleware, and
-  mounts the streamable-HTTP ASGI app under MA's webserver via `http_bridge.py`.
+- `provider/server.py::MCPServerRuntime` builds one root `FastMCP` with exactly three
+  permanent meta-tools: `search_tools`, `get_tool_schema`, and `call_tool`.
+- `provider/dynamic_api.py::DynamicAPIAdapter` exposes native `ma_api` commands from
+  MA's live command-handler registry. Eight registered provider-extension handlers,
+  plus resources and prompts, remain available through that catalog rather than a
+  sub-server tool surface.
+- The runtime applies `restrict_tag` middleware and mounts the streamable-HTTP ASGI app
+  under MA's webserver via `http_bridge.py`.
 - `provider/auth.py::MASTokenVerifier` is the only auth code — delegates to
   `mass.webserver.auth.authenticate_with_token`.
 - `provider/tags.py` maps the 16 permission `ConfigEntry` booleans to FastMCP tags.
@@ -56,8 +61,9 @@ duplicate it with a second line from a different agent.
 
 ## Testing
 
-In-memory FastMCP `Client` transport (no HTTP). Reuse the canonical `mass` fixture
-from MA's `tests/conftest.py` rather than mocking `mass.music`.
+Run tests through the project's `uv` virtual environment. Use the canonical fresh-MA
+fixture and source slice (including MA's `tests/conftest.py` `mass` fixture) for
+integration behavior; keep focused unit tests isolated from unrelated MA services.
 
 ## Auto-generated files
 

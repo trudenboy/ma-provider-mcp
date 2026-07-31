@@ -6,7 +6,7 @@
     },
     "require_auth": {
       "label": "Require authentication",
-      "description": "Reject unauthenticated MCP clients. Strongly recommended — with auth disabled, every MCP client on the network can drive playback."
+      "description": "Fail closed when the MCP token is missing, invalid, or belongs to a disabled user. Disabling this compatibility toggle does not expose unified registry commands: they remain hidden or fail closed. Keep authentication enabled for supported operation."
     },
     "mount_path": {
       "label": "Mount path",

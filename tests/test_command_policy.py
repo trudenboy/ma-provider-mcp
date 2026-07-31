@@ -11,8 +11,10 @@ from music_assistant_models.config_entries import ConfigEntry
 from music_assistant_models.enums import ConfigEntryType
 
 from provider.command_policy import (
+    CommandDecision,
     Confirmation,
     DynamicRisk,
+    command_tags_visible,
     preflight_command,
     resolve_command_policy,
 )
@@ -76,6 +78,23 @@ def test_player_queue_write_operations_require_edit_queue_permission() -> None:
     decision = resolve_command_policy("player_queues/save_as_playlist", "library.write", None)
 
     assert decision.required_tags == frozenset({str(Tag.EDIT_QUEUE)})
+
+
+def test_fixed_tags_and_alternative_tags_use_distinct_permission_semantics() -> None:
+    """Fixed requirements are conjunctive while setup-flow categories are any-of."""
+    decision = CommandDecision(
+        DynamicRisk.WRITE,
+        {},
+        frozenset({"fixed:first", "fixed:second"}),
+        alternative_tags=frozenset({"category:provider", "category:player"}),
+    )
+
+    assert command_tags_visible(
+        decision,
+        {"fixed:first", "fixed:second", "category:player"},
+    )
+    assert not command_tags_visible(decision, {"fixed:first", "category:player"})
+    assert not command_tags_visible(decision, {"fixed:first", "fixed:second"})
 
 
 def test_provider_reload_is_confirmed_destructive_config_write() -> None:
@@ -145,6 +164,18 @@ def _config_mass() -> SimpleNamespace:
     return SimpleNamespace(config=config)
 
 
+def _flow_mass(
+    scope: str | None,
+    entries: list[ConfigEntry],
+) -> SimpleNamespace:
+    """Build the current MA setup-flow API surface needed by request preflight."""
+    config = SimpleNamespace(
+        get_setup_flow_required_scope=lambda _flow_id: scope,
+        get_setup_flow=AsyncMock(return_value=SimpleNamespace(entries=entries)),
+    )
+    return SimpleNamespace(config=config)
+
+
 async def test_secure_config_preflight_requires_independent_secret_tag() -> None:
     """Generic provider config-write permission cannot authorize a secret value."""
     mass = _config_mass()
@@ -193,3 +224,83 @@ async def test_secret_config_preflight_accepts_explicit_secret_tag() -> None:
         },
         {str(Tag.CONFIG_WRITE_PROVIDER), str(Tag.CONFIG_WRITE_SECRET)},
     )
+
+
+async def test_provider_setup_flow_secret_requires_secret_tag() -> None:
+    """A provider flow cannot submit a secure value without the orthogonal tag."""
+    mass = _flow_mass(
+        "config.providers.write",
+        [ConfigEntry(key="token", type=ConfigEntryType.SECURE_STRING, label="Token")],
+    )
+    decision = resolve_command_policy("config/flows/submit", None, None)
+
+    with pytest.raises(ToolError, match="config:write:secret"):
+        await preflight_command(
+            mass,
+            decision,
+            {"flow_id": "provider-flow", "values": {"token": "secret"}},
+            {str(Tag.CONFIG_WRITE_PROVIDER)},
+        )
+
+
+async def test_provider_setup_flow_secret_accepts_provider_and_secret_tags() -> None:
+    """A provider flow accepts secure values with both required permissions."""
+    mass = _flow_mass(
+        "config.providers.write",
+        [ConfigEntry(key="token", type=ConfigEntryType.SECURE_STRING, label="Token")],
+    )
+    decision = resolve_command_policy("config/flows/submit", None, None)
+
+    await preflight_command(
+        mass,
+        decision,
+        {"flow_id": "provider-flow", "values": {"token": "secret"}},
+        {str(Tag.CONFIG_WRITE_PROVIDER), str(Tag.CONFIG_WRITE_SECRET)},
+    )
+
+
+async def test_player_setup_flow_allows_player_only_nonsecret_write() -> None:
+    """A player flow needs its own category tag, not the provider category."""
+    mass = _flow_mass(
+        "config.players.write",
+        [ConfigEntry(key="name", type=ConfigEntryType.STRING, label="Name")],
+    )
+    decision = resolve_command_policy("config/flows/submit", None, None)
+
+    await preflight_command(
+        mass,
+        decision,
+        {"flow_id": "player-flow", "values": {"name": "Kitchen"}},
+        {str(Tag.CONFIG_WRITE_PLAYER)},
+    )
+
+
+async def test_setup_flow_rejects_the_wrong_config_category() -> None:
+    """Provider flow submission cannot use the player-write permission."""
+    mass = _flow_mass(
+        "config.providers.write",
+        [ConfigEntry(key="name", type=ConfigEntryType.STRING, label="Name")],
+    )
+    decision = resolve_command_policy("config/flows/submit", None, None)
+
+    with pytest.raises(ToolError, match="config:write:provider"):
+        await preflight_command(
+            mass,
+            decision,
+            {"flow_id": "provider-flow", "values": {"name": "Kitchen"}},
+            {str(Tag.CONFIG_WRITE_PLAYER)},
+        )
+
+
+async def test_unknown_setup_flow_fails_closed() -> None:
+    """A missing flow scope cannot become an unguarded config write."""
+    mass = _flow_mass(None, [])
+    decision = resolve_command_policy("config/flows/submit", None, None)
+
+    with pytest.raises(ToolError, match="setup flow"):
+        await preflight_command(
+            mass,
+            decision,
+            {"flow_id": "missing-flow", "values": {}},
+            {str(Tag.CONFIG_WRITE_PROVIDER), str(Tag.CONFIG_WRITE_PLAYER)},
+        )

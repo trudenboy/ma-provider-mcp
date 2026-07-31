@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
+from fastmcp.exceptions import ToolError
+
 from .config_io.secret_handler import gate_secret_writes
 from .tags import Tag
 
@@ -55,6 +57,7 @@ class CommandDecision:
     required_tags: frozenset[str] = frozenset()
     confirmation: Confirmation = Confirmation.NEVER
     preflight: str | None = None
+    alternative_tags: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True, slots=True)
@@ -197,6 +200,14 @@ EXACT_POLICIES: dict[str, CommandDecision] = {
     "player_queues/clear": _destructive_write(Tag.DELETE_QUEUE),
     "fastmcp/queue/remove_items_safe": _destructive_write(Tag.DELETE_QUEUE),
     "config/providers/reload": _destructive_write(Tag.CONFIG_WRITE_PROVIDER),
+    "config/flows/submit": CommandDecision(
+        DynamicRisk.WRITE,
+        _CONTROL_ANNOTATIONS,
+        frozenset(),
+        Confirmation.CONFIGURED,
+        "config_flow_submit",
+        frozenset({str(Tag.CONFIG_WRITE_PROVIDER), str(Tag.CONFIG_WRITE_PLAYER)}),
+    ),
     "fastmcp/debug/tail_log": _readonly_system(Tag.DEBUG_LOGS),
     "fastmcp/debug/log_stats": _readonly_system(Tag.DEBUG_LOGS),
     "fastmcp/debug/recent_events": _readonly_system(Tag.DEBUG_EVENTS),
@@ -272,19 +283,29 @@ async def preflight_command(
     :param arguments: Strictly parsed command arguments.
     :param allowed_tags: Current provider permission tags.
     """
-    if decision.preflight != "config_secret_write":
-        return
-    values = arguments.get("values")
-    if not isinstance(values, Mapping):
-        return
-    getter_name, target = _config_entries_target(arguments)
-    entries = getattr(mass.config, getter_name)(target)
-    if inspect.isawaitable(entries):
-        entries = await entries
-    gate_secret_writes(
-        entries,
-        values,
-        secret_tag_enabled=str(Tag.CONFIG_WRITE_SECRET) in allowed_tags,
+    if decision.preflight == "config_secret_write":
+        values = arguments.get("values")
+        if not isinstance(values, Mapping):
+            return
+        getter_name, target = _config_entries_target(arguments)
+        entries = getattr(mass.config, getter_name)(target)
+        if inspect.isawaitable(entries):
+            entries = await entries
+        gate_secret_writes(
+            entries,
+            values,
+            secret_tag_enabled=str(Tag.CONFIG_WRITE_SECRET) in allowed_tags,
+        )
+    elif decision.preflight == "config_flow_submit":
+        await _preflight_setup_flow_submit(mass, arguments, allowed_tags)
+
+
+def command_tags_visible(decision: CommandDecision, allowed_tags: set[str]) -> bool:
+    """Return whether a command's fixed and any-of tag requirements are visible."""
+    required = decision.required_tags
+    alternatives = decision.alternative_tags
+    return required.issubset(allowed_tags) and (
+        not alternatives or bool(alternatives & allowed_tags)
     )
 
 
@@ -377,3 +398,51 @@ def _config_entries_target(arguments: Mapping[str, Any]) -> tuple[str, str]:
     if "player_id" in arguments:
         return "get_player_config_entries", str(arguments["player_id"])
     raise ValueError("Config save arguments do not identify a target")
+
+
+async def _preflight_setup_flow_submit(
+    mass: Any,
+    arguments: Mapping[str, Any],
+    allowed_tags: set[str],
+) -> None:
+    """Authorize one live setup-flow submission and gate its secure fields."""
+    flow_id = arguments.get("flow_id")
+    values = arguments.get("values")
+    if not isinstance(flow_id, str) or not flow_id or not isinstance(values, Mapping):
+        raise ToolError("Invalid setup flow submission")
+    get_scope = getattr(mass.config, "get_setup_flow_required_scope", None)
+    get_flow = getattr(mass.config, "get_setup_flow", None)
+    if not callable(get_scope) or not callable(get_flow):
+        raise ToolError("Unable to authorize setup flow submission")
+    scope = get_scope(flow_id)
+    if inspect.isawaitable(scope):
+        scope = await scope
+    required_tag = _setup_flow_write_tag(scope)
+    if required_tag is None:
+        raise ToolError("Unknown setup flow or unsupported setup flow scope")
+    if str(required_tag) not in allowed_tags:
+        raise ToolError(f"Setup flow requires {required_tag} tag")
+    try:
+        step = get_flow(flow_id)
+        if inspect.isawaitable(step):
+            step = await step
+    except Exception as exc:
+        raise ToolError("Unable to inspect setup flow") from exc
+    entries = getattr(step, "entries", None)
+    if not isinstance(entries, list | tuple):
+        raise ToolError("Malformed setup flow step")
+    gate_secret_writes(
+        entries,
+        values,
+        secret_tag_enabled=str(Tag.CONFIG_WRITE_SECRET) in allowed_tags,
+    )
+
+
+def _setup_flow_write_tag(scope: Any) -> Tag | None:
+    """Map a current MA setup-flow scope to its one config write tag."""
+    value = str(getattr(scope, "value", scope) or "").casefold()
+    if value == "config.providers.write":
+        return Tag.CONFIG_WRITE_PROVIDER
+    if value == "config.players.write":
+        return Tag.CONFIG_WRITE_PLAYER
+    return None

@@ -20,6 +20,7 @@ from .command_policy import (
     Confirmation,
     DynamicPolicy,
     DynamicRisk,
+    command_tags_visible,
     preflight_command,
     resolve_command_policy,
 )
@@ -36,7 +37,6 @@ from .dynamic_signatures import (
     UnsupportedSignatureError,
     compile_signature,
 )
-from .middleware import tags_visible
 
 if TYPE_CHECKING:
     from fastmcp import Context
@@ -63,16 +63,22 @@ def _command_error(command: str, exc: Exception) -> ToolError:
     return ToolError(f"Command {command!r} failed: {detail}")
 
 
-async def confirm_or_raise(ctx: Context | None, prompt: str, *, enabled: bool) -> None:
+async def confirm_or_raise(ctx: Context | None, prompt: str, *, required: bool) -> None:
     """Ask the MCP client to confirm an operation when elicitation is available."""
-    if not enabled or ctx is None:
+    if ctx is None:
+        if required:
+            raise ToolError("Client confirmation is required for this operation")
         return
     try:
         result = await ctx.elicit(prompt, response_type=bool)  # type: ignore[arg-type, unused-ignore]
     except NotImplementedError:
+        if required:
+            raise ToolError("Client confirmation is required for this operation") from None
         return
     except McpError as exc:
         if exc.error.code in (INVALID_REQUEST, METHOD_NOT_FOUND):
+            if required:
+                raise ToolError("Client confirmation is required for this operation") from exc
             return
         raise
     if getattr(result, "action", None) != "accept" or not getattr(result, "data", None):
@@ -203,7 +209,7 @@ class DynamicAPIAdapter:
             )
             and policy.allows(entry.risk)
             and entry.decision is not None
-            and tags_visible(entry.decision.required_tags, allowed_tags)
+            and command_tags_visible(entry.decision, allowed_tags)
         ]
         visible = tuple(sorted(entries, key=lambda entry: entry.name))
         return CatalogView(snapshot.fingerprint, visible)
@@ -254,27 +260,22 @@ class DynamicAPIAdapter:
         except (KeyError, TypeError, ValueError) as exc:
             raise ToolError(str(exc)) from exc
 
-        entry = self._reauthorize_entry(entry, auth)
-        impersonated_user = (
-            await self._resolve_impersonated_user(auth, str(impersonated))
-            if impersonating
-            else None
-        )
-        if impersonated_user is not None:
-            self._enforce_target_filters(impersonated_user, parsed)
-        elif auth is not None:
-            self._enforce_target_filters(auth[1], parsed)
-        decision = entry.decision
-        if decision is None:
-            decision = resolve_command_policy(entry.command, entry.required_scope, entry.profile)
-        await preflight_command(
-            self.mass,
-            decision,
+        entry, impersonated_user = await self._authorize_call(
+            entry,
+            auth,
             parsed,
-            self._allowed_tags_provider(),
+            impersonated=impersonated,
         )
         await self._confirm(entry, ctx, impersonating=impersonating)
-        entry = self._reauthorize_entry(entry, auth)
+        auth = await self._authentication()
+        if auth is None and self._auth_required_provider():
+            raise ToolError("Authentication is required")
+        entry, impersonated_user = await self._authorize_call(
+            entry,
+            auth,
+            parsed,
+            impersonated=impersonated,
+        )
 
         try:
             async with asyncio.timeout(_CALL_TIMEOUT_SECONDS):
@@ -492,12 +493,12 @@ class DynamicAPIAdapter:
             if entry.risk is DynamicRisk.WRITE
             else Confirmation.NEVER
         )
-        enabled = (
-            impersonating
-            or confirmation is Confirmation.ALWAYS
-            or (confirmation is Confirmation.CONFIGURED and self._confirmation_provider())
-        )
-        await confirm_or_raise(ctx, f"Run {entry.name} ({entry.risk.value})?", enabled=enabled)
+        required = impersonating or confirmation is Confirmation.ALWAYS
+        optional = confirmation is Confirmation.CONFIGURED and self._confirmation_provider()
+        if required:
+            await confirm_or_raise(ctx, f"Run {entry.name} ({entry.risk.value})?", required=True)
+        elif optional:
+            await confirm_or_raise(ctx, f"Run {entry.name} ({entry.risk.value})?", required=False)
 
     async def _execute(
         self,
@@ -545,8 +546,8 @@ class DynamicAPIAdapter:
             raise ToolError(f"Tool {entry.name!r} not found or not permitted")
         profile = COMMAND_PROFILES.get(entry.command)
         decision = resolve_command_policy(entry.command, scope, profile)
-        if not self._policy_provider().allows(decision.risk) or not tags_visible(
-            decision.required_tags, self._allowed_tags_provider()
+        if not self._policy_provider().allows(decision.risk) or not command_tags_visible(
+            decision, self._allowed_tags_provider()
         ):
             raise ToolError(f"Tool {entry.name!r} not found or not permitted")
         return dataclasses.replace(
@@ -555,6 +556,48 @@ class DynamicAPIAdapter:
             annotations=dict(decision.annotations),
             decision=decision,
         )
+
+    async def _preflight(
+        self,
+        decision: CommandDecision,
+        arguments: Mapping[str, Any],
+        auth: tuple[AccessToken, Any] | None,
+    ) -> None:
+        """Run request-dependent policy checks under the current MA auth context."""
+        context_tokens = self._set_auth_context(auth)
+        try:
+            await preflight_command(
+                self.mass,
+                decision,
+                arguments,
+                self._allowed_tags_provider(),
+            )
+        finally:
+            for variable, token in reversed(context_tokens):
+                variable.reset(token)
+
+    async def _authorize_call(
+        self,
+        entry: DynamicEntry,
+        auth: tuple[AccessToken, Any] | None,
+        arguments: Mapping[str, Any],
+        *,
+        impersonated: Any,
+    ) -> tuple[DynamicEntry, Any | None]:
+        """Refresh authorization, impersonation, target filters and request preflight."""
+        entry = self._reauthorize_entry(entry, auth)
+        impersonated_user = (
+            await self._resolve_impersonated_user(auth, str(impersonated)) if impersonated else None
+        )
+        if impersonated_user is not None:
+            self._enforce_target_filters(impersonated_user, arguments)
+        elif auth is not None:
+            self._enforce_target_filters(auth[1], arguments)
+        decision = entry.decision
+        if decision is None:
+            decision = resolve_command_policy(entry.command, entry.required_scope, entry.profile)
+        await self._preflight(decision, arguments, auth)
+        return entry, impersonated_user
 
     async def _resolve_impersonated_user(
         self,

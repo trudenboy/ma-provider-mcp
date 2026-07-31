@@ -16,6 +16,8 @@ import pytest
 from fastmcp import Client, FastMCP
 from fastmcp.exceptions import ToolError
 from fastmcp.server.auth import AccessToken
+from mcp.shared.exceptions import McpError
+from mcp.types import INVALID_REQUEST, METHOD_NOT_FOUND, ErrorData
 from music_assistant_models.config_entries import ConfigEntry
 from music_assistant_models.enums import ConfigEntryType
 
@@ -31,6 +33,7 @@ from provider.dynamic_api import (
     CatalogView,
     DynamicAPIAdapter,
     DynamicEntry,
+    confirm_or_raise,
 )
 from provider.meta_discovery import DynamicAdapter, register_meta_discovery
 from provider.server import build_tag_lookup
@@ -459,6 +462,64 @@ def _real_adapter(
             allowed_tags if allowed_tags is not None else {str(tag) for tag in Tag}
         ),
     )
+
+
+class _UnsupportedElicitationContext:
+    """Raise the configured protocol-level unsupported elicitation result."""
+
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+
+    async def elicit(self, _prompt: str, *, response_type: type[bool]) -> None:
+        """Simulate a client that cannot receive elicitation requests."""
+        del response_type
+        raise self.error
+
+
+def _bypass_ma_argument_parser(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep authorization tests independent of MA parser optional dependencies."""
+    monkeypatch.setattr(
+        "provider.dynamic_api.CompiledSignature.parse",
+        lambda _signature, arguments: dict(arguments),
+    )
+
+
+async def test_required_confirmation_rejects_missing_context() -> None:
+    """Mandatory confirmation fails closed when no MCP context is available."""
+    with pytest.raises(ToolError, match="confirmation is required"):
+        await confirm_or_raise(None, "Confirm", required=True)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        NotImplementedError(),
+        McpError(ErrorData(code=INVALID_REQUEST, message="unsupported")),
+        McpError(ErrorData(code=METHOD_NOT_FOUND, message="unsupported")),
+    ],
+)
+async def test_required_confirmation_rejects_unsupported_elicitation(error: Exception) -> None:
+    """Mandatory confirmation cannot silently skip unsupported client elicitation."""
+    with pytest.raises(ToolError, match="confirmation is required"):
+        await confirm_or_raise(_UnsupportedElicitationContext(error), "Confirm", required=True)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        NotImplementedError(),
+        McpError(ErrorData(code=INVALID_REQUEST, message="unsupported")),
+        McpError(ErrorData(code=METHOD_NOT_FOUND, message="unsupported")),
+    ],
+)
+async def test_configured_confirmation_skips_unsupported_elicitation(error: Exception) -> None:
+    """Configured prompts retain compatibility with clients without elicitation."""
+    await confirm_or_raise(_UnsupportedElicitationContext(error), "Confirm", required=False)
+
+
+async def test_configured_confirmation_skips_missing_context() -> None:
+    """Configured prompts retain compatibility when no elicitation context is injected."""
+    await confirm_or_raise(None, "Confirm", required=False)
 
 
 async def test_adapter_discovers_handler_and_compiles_schema() -> None:
@@ -1136,13 +1197,12 @@ async def test_confirmation_policy_is_mandatory_for_system_and_impersonation(
         False,
         handler,
     )
-    adapter._confirmation_provider = lambda: False
+    adapter._confirmation_provider = lambda: True
     await adapter._confirm(read, ctx)
     await adapter._confirm(write, ctx)
     await adapter._confirm(system, ctx)
     await adapter._confirm(read, ctx, impersonating=True)
-    assert [call.kwargs["enabled"] for call in confirmation.await_args_list] == [
-        False,
+    assert [call.kwargs["required"] for call in confirmation.await_args_list] == [
         False,
         True,
         True,
@@ -1182,7 +1242,7 @@ async def test_queue_delete_always_confirms_before_execution(
     )
     await_args = confirmation.await_args
     assert await_args is not None
-    assert await_args.kwargs["enabled"] is True
+    assert await_args.kwargs["required"] is True
     assert called is True
 
 
@@ -1329,6 +1389,282 @@ async def test_native_authorization_revoked_during_confirmation_prevents_executi
         )
     confirmation.assert_awaited_once()
     assert called == []
+
+
+@pytest.mark.parametrize("replacement", [None, "disabled"])
+async def test_fresh_authentication_rejects_removed_or_disabled_user_after_confirmation(
+    replacement: str | None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A user that changes while confirming cannot execute with stale authentication."""
+    _bypass_ma_argument_parser(monkeypatch)
+    called = False
+    initial_user = SimpleNamespace(user_id="u1", enabled=True, role="admin")
+    current_user: Any = initial_user
+
+    async def reload_provider() -> None:
+        nonlocal called
+        called = True
+
+    adapter = _real_adapter(
+        _handler("config/providers/reload", reload_provider, "config.providers.write"),
+        policy=DynamicPolicy(write=True),
+        allowed_tags={str(Tag.CONFIG_WRITE_PROVIDER)},
+        user=initial_user,
+    )
+    adapter.mass.webserver.auth.get_user = AsyncMock(side_effect=lambda _user_id: current_user)
+
+    async def change_user(*_args: Any, **_kwargs: Any) -> None:
+        nonlocal current_user
+        current_user = (
+            None
+            if replacement is None
+            else SimpleNamespace(user_id="u1", enabled=False, role="admin")
+        )
+
+    monkeypatch.setattr(
+        "provider.dynamic_api.confirm_or_raise",
+        AsyncMock(side_effect=change_user),
+    )
+
+    with pytest.raises(ToolError, match="Authentication is required"):
+        await adapter.call(
+            "ma_api:config/providers/reload",
+            {},
+            response_mode="compact",
+            fields=None,
+            max_items=None,
+            ctx=MagicMock(),
+        )
+    assert called is False
+
+
+async def test_target_filter_revoked_during_confirmation_prevents_execution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Post-confirm authorization re-applies the current user's target filters."""
+    _bypass_ma_argument_parser(monkeypatch)
+    called = False
+    current_user: Any = SimpleNamespace(
+        user_id="u1",
+        enabled=True,
+        role="user",
+        player_filter=["kitchen"],
+        provider_filter=[],
+    )
+
+    async def clear(queue_id: str) -> None:
+        nonlocal called
+        del queue_id
+        called = True
+
+    adapter = _real_adapter(
+        _handler("player_queues/clear", clear, "queues.control"),
+        policy=DynamicPolicy(write=True),
+        allowed_tags={str(Tag.DELETE_QUEUE)},
+        user=current_user,
+    )
+    adapter.mass.webserver.auth.get_user = AsyncMock(side_effect=lambda _user_id: current_user)
+
+    async def revoke_filter(*_args: Any, **_kwargs: Any) -> None:
+        nonlocal current_user
+        current_user = SimpleNamespace(
+            user_id="u1",
+            enabled=True,
+            role="user",
+            player_filter=["living-room"],
+            provider_filter=[],
+        )
+
+    monkeypatch.setattr(
+        "provider.dynamic_api.confirm_or_raise",
+        AsyncMock(side_effect=revoke_filter),
+    )
+
+    with pytest.raises(ToolError, match="target is not permitted"):
+        await adapter.call(
+            "ma_api:player_queues/clear",
+            {"queue_id": "kitchen"},
+            response_mode="compact",
+            fields=None,
+            max_items=None,
+            ctx=MagicMock(),
+        )
+    assert called is False
+
+
+async def test_secret_tag_revoked_during_confirmation_prevents_config_execution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The request-dependent secret guard runs again after the prompt returns."""
+    _bypass_ma_argument_parser(monkeypatch)
+    called = False
+    state = {"secret": True}
+
+    async def save_provider_config(
+        provider_domain: str,
+        values: dict[str, Any],
+        instance_id: str | None = None,
+    ) -> None:
+        nonlocal called
+        del provider_domain, values, instance_id
+        called = True
+
+    adapter = _real_adapter(
+        _handler("config/providers/save", save_provider_config, "config.providers.write"),
+        policy=DynamicPolicy(write=True),
+        allowed_tags=set(),
+    )
+    adapter._allowed_tags_provider = lambda: {
+        str(Tag.CONFIG_WRITE_PROVIDER),
+        *({str(Tag.CONFIG_WRITE_SECRET)} if state["secret"] else set()),
+    }
+    adapter.mass.config.get_provider_config_entries = AsyncMock(
+        return_value=[ConfigEntry(key="token", type=ConfigEntryType.SECURE_STRING, label="Token")]
+    )
+
+    async def revoke_secret(*_args: Any, **_kwargs: Any) -> None:
+        state["secret"] = False
+
+    monkeypatch.setattr(
+        "provider.dynamic_api.confirm_or_raise",
+        AsyncMock(side_effect=revoke_secret),
+    )
+
+    with pytest.raises(ToolError, match="config:write:secret"):
+        await adapter.call(
+            "ma_api:config/providers/save",
+            {
+                "provider_domain": "demo",
+                "instance_id": "demo--1",
+                "values": {"token": "secret"},
+            },
+            response_mode="compact",
+            fields=None,
+            max_items=None,
+            ctx=MagicMock(),
+        )
+    assert called is False
+
+
+async def test_flow_category_revoked_during_confirmation_prevents_execution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A flow rechecks its exact provider/player permission after confirmation."""
+    _bypass_ma_argument_parser(monkeypatch)
+    called = False
+    state = {"provider": True}
+
+    async def submit_flow(flow_id: str, values: dict[str, Any]) -> None:
+        nonlocal called
+        del flow_id, values
+        called = True
+
+    adapter = _real_adapter(
+        _handler("config/flows/submit", submit_flow),
+        policy=DynamicPolicy(write=True),
+        allowed_tags=set(),
+    )
+    adapter._allowed_tags_provider = lambda: {
+        str(Tag.CONFIG_WRITE_PLAYER),
+        *({str(Tag.CONFIG_WRITE_PROVIDER)} if state["provider"] else set()),
+    }
+    adapter.mass.config.get_setup_flow_required_scope = lambda _flow_id: "config.providers.write"
+    adapter.mass.config.get_setup_flow = AsyncMock(
+        return_value=SimpleNamespace(
+            entries=[ConfigEntry(key="name", type=ConfigEntryType.STRING, label="Name")]
+        )
+    )
+
+    async def revoke_provider_category(*_args: Any, **_kwargs: Any) -> None:
+        state["provider"] = False
+
+    monkeypatch.setattr(
+        "provider.dynamic_api.confirm_or_raise",
+        AsyncMock(side_effect=revoke_provider_category),
+    )
+
+    with pytest.raises(ToolError, match="config:write:provider"):
+        await adapter.call(
+            "ma_api:config/flows/submit",
+            {"flow_id": "provider-flow", "values": {"name": "Kitchen"}},
+            response_mode="compact",
+            fields=None,
+            max_items=None,
+            ctx=MagicMock(),
+        )
+    assert called is False
+
+
+async def test_player_only_tag_executes_a_player_setup_flow(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Catalog any-of visibility still permits the matching live flow category."""
+    _bypass_ma_argument_parser(monkeypatch)
+    called = False
+
+    async def submit_flow(flow_id: str, values: dict[str, Any]) -> None:
+        nonlocal called
+        del flow_id, values
+        called = True
+
+    adapter = _real_adapter(
+        _handler("config/flows/submit", submit_flow),
+        policy=DynamicPolicy(write=True),
+        allowed_tags={str(Tag.CONFIG_WRITE_PLAYER)},
+    )
+    adapter.mass.config.get_setup_flow_required_scope = lambda _flow_id: "config.players.write"
+    adapter.mass.config.get_setup_flow = AsyncMock(
+        return_value=SimpleNamespace(
+            entries=[ConfigEntry(key="name", type=ConfigEntryType.STRING, label="Name")]
+        )
+    )
+    monkeypatch.setattr("provider.dynamic_api.confirm_or_raise", AsyncMock())
+
+    await adapter.call(
+        "ma_api:config/flows/submit",
+        {"flow_id": "player-flow", "values": {"name": "Kitchen"}},
+        response_mode="compact",
+        fields=None,
+        max_items=None,
+        ctx=MagicMock(),
+    )
+    assert called is True
+
+
+async def test_provider_setup_flow_rejects_player_only_tag_before_confirmation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Catalog visibility does not let a player tag invoke a provider flow."""
+    _bypass_ma_argument_parser(monkeypatch)
+    confirmation = AsyncMock()
+
+    async def submit_flow(flow_id: str, values: dict[str, Any]) -> None:
+        del flow_id, values
+
+    adapter = _real_adapter(
+        _handler("config/flows/submit", submit_flow),
+        policy=DynamicPolicy(write=True),
+        allowed_tags={str(Tag.CONFIG_WRITE_PLAYER)},
+    )
+    adapter.mass.config.get_setup_flow_required_scope = lambda _flow_id: "config.providers.write"
+    adapter.mass.config.get_setup_flow = AsyncMock(
+        return_value=SimpleNamespace(
+            entries=[ConfigEntry(key="name", type=ConfigEntryType.STRING, label="Name")]
+        )
+    )
+    monkeypatch.setattr("provider.dynamic_api.confirm_or_raise", confirmation)
+
+    with pytest.raises(ToolError, match="config:write:provider"):
+        await adapter.call(
+            "ma_api:config/flows/submit",
+            {"flow_id": "provider-flow", "values": {"name": "Kitchen"}},
+            response_mode="compact",
+            fields=None,
+            max_items=None,
+            ctx=MagicMock(),
+        )
+    confirmation.assert_not_awaited()
 
 
 async def test_native_config_secret_denial_precedes_confirmation_and_target(
