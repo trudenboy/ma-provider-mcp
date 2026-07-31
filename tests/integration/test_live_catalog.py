@@ -120,7 +120,7 @@ async def collect_resource_catalog(client: LiveClient) -> tuple[list[str], str]:
         names.extend(str(item["name"]) for item in page["items"])
         uri = page["next_uri"]
     assert len(names) == total
-    return names, cast("str", revision)
+    return names, revision
 
 
 async def call_ma(client: LiveClient, command: str, arguments: Mapping[str, Any]) -> Any:
