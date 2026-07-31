@@ -1,4 +1,5 @@
 """Plain Music Assistant queue command handlers."""
+# ruff: noqa: TID252 -- provider source is transplanted under the MA package.
 
 from __future__ import annotations
 
@@ -6,7 +7,7 @@ from typing import Any
 
 from music_assistant_models.errors import InvalidDataError
 
-from provider.models import RemoveFromQueueResult
+from ..models import RemoveFromQueueResult
 
 
 async def remove_items_safe(mass: Any, queue_id: str, item_ids: list[str]) -> RemoveFromQueueResult:

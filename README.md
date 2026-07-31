@@ -108,6 +108,36 @@ uv run ruff check provider tests
 uv run mypy provider
 ```
 
+### Opt-in Docker integration coverage
+
+The live catalog smoke tests run in the complete Linux MA virtual environment and
+use the persisted development instance in `.ma-data/`. Start Docker, mint a
+dedicated MA user token, and supply it only through your shell:
+
+```bash
+docker compose -f docker-compose.dev.yml up -d --build
+docker compose -f docker-compose.dev.yml exec -T ma \
+  /app/venv/bin/uv pip install --quiet --python /app/venv/bin/python \
+  pytest==9.0.3 pytest-asyncio==1.3.0
+docker compose -f docker-compose.dev.yml exec -T \
+  -e MA_MCP_URL=http://127.0.0.1:8095/mcp/v1 \
+  -e MA_MCP_TOKEN="$MA_MCP_TOKEN" \
+  -e MA_TEST_PLAYER_ID="$MA_TEST_PLAYER_ID" \
+  ma /app/venv/bin/python -m pytest -o addopts= -p no:cacheprovider \
+  /tmp/provider-tests/integration/test_live_catalog.py -m integration -v -s
+```
+
+Set `MA_DATA_DIR=/absolute/path/to/.ma-data` on `docker compose` when a worktree
+should reuse an already configured development instance without copying its data.
+The implementation suite mounts the authoritative fresh MA `dev` source tree from
+`/Users/renso/Projects/ma-server`; `.superpowers/sdd/2026-07-30-native-ma-command-catalog/run-ma-tests.sh`
+runs it in the same complete Linux MA virtual environment.
+
+`MA_TEST_PLAYER_ID` is optional, but required for the one reversible queue mutation
+test. Choose a dedicated player with an active queue; the test refuses unsafe rows
+and removes only the item it adds. The suite is skipped unless both MCP URL and token
+are explicitly provided.
+
 ## License
 
 [MIT](LICENSE)

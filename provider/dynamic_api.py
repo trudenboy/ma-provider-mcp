@@ -758,17 +758,36 @@ class DynamicAPIAdapter:
 
     @classmethod
     def _fit_bytes(cls, envelope: dict[str, Any], byte_cap: int) -> None:
-        """Shrink list results until the complete envelope fits the byte cap."""
-        data = envelope["data"]
-        if isinstance(data, list):
-            while data and cls._encoded_size(envelope) > byte_cap:
-                data.pop()
-                envelope["truncated"] = True
-            envelope["returned_count"] = len(data)
+        """Shrink nested result lists until the complete envelope fits the byte cap."""
+        while cls._encoded_size(envelope) > byte_cap and cls._pop_largest_list(envelope["data"]):
+            envelope["truncated"] = True
+        if isinstance(envelope["data"], list):
+            envelope["returned_count"] = len(envelope["data"])
         if cls._encoded_size(envelope) > byte_cap:
             envelope["data"] = "[response exceeded byte budget]"
             envelope["returned_count"] = 1
             envelope["truncated"] = True
+
+    @staticmethod
+    def _pop_largest_list(value: Any) -> bool:
+        """Remove one row from the largest, shallowest nested list deterministically."""
+        candidates: list[tuple[int, int, int, list[Any]]] = []
+
+        def collect(item: Any, depth: int) -> None:
+            if isinstance(item, list):
+                if item:
+                    candidates.append((len(item), -depth, -len(candidates), item))
+                for child in item:
+                    collect(child, depth + 1)
+            elif isinstance(item, dict):
+                for child in item.values():
+                    collect(child, depth + 1)
+
+        collect(value, 0)
+        if not candidates:
+            return False
+        max(candidates, key=lambda candidate: candidate[:3])[3].pop()
+        return True
 
     @staticmethod
     def _encoded_size(value: Any) -> int:
@@ -794,6 +813,8 @@ class DynamicAPIAdapter:
         return bool(has_scope(user, scope))
 
 
-LEGACY_MIGRATIONS: Mapping[str, LegacyMigration] = MappingProxyType({
-    **LEGACY_COMMAND_MAPPINGS,
-})
+LEGACY_MIGRATIONS: Mapping[str, LegacyMigration] = MappingProxyType(
+    {
+        **LEGACY_COMMAND_MAPPINGS,
+    }
+)

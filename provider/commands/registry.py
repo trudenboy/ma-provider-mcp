@@ -1,4 +1,5 @@
 """Registration compatibility and lifecycle for native MA API commands."""
+# ruff: noqa: TID252 -- provider source is transplanted under the MA package.
 
 from __future__ import annotations
 
@@ -10,9 +11,9 @@ from typing import TYPE_CHECKING, Any
 
 from music_assistant_models.auth import Scope
 
-from provider.constants import CONF_DEBUG_EVENT_BUFFER_CAPACITY
-from provider.debug.event_buffer import EventBuffer
-from provider.models import (
+from ..constants import CONF_DEBUG_EVENT_BUFFER_CAPACITY
+from ..debug.event_buffer import EventBuffer
+from ..models import (
     EventBufferStats,
     EventSnapshot,
     HealthSummary,
@@ -22,8 +23,7 @@ from provider.models import (
     RemoveFromQueueResult,
     RouteList,
 )
-from provider.tags import Tag, enabled_tags
-
+from ..tags import Tag, enabled_tags
 from . import debug, queue
 from .authorization import authorize_extension
 

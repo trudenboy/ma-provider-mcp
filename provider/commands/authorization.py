@@ -1,4 +1,5 @@
 """Authorization shared by provider-owned native MA API commands."""
+# ruff: noqa: TID252 -- provider source is transplanted under the MA package.
 
 from __future__ import annotations
 
@@ -7,7 +8,7 @@ from typing import TYPE_CHECKING, Any
 from music_assistant_models.auth import Scope, UserRole
 from music_assistant_models.errors import AuthenticationRequired, InsufficientPermissions
 
-from provider.tags import enabled_tags
+from ..tags import enabled_tags
 
 if TYPE_CHECKING:
     from music_assistant_models.auth import User

@@ -778,6 +778,37 @@ def test_nested_response_lists_are_bounded_deterministically() -> None:
     assert first["truncated"] is True
 
 
+def test_large_search_envelope_keeps_mapping_shape_within_byte_budget() -> None:
+    """Large SearchResults mappings shrink nested rows instead of becoming a string."""
+    payload = {
+        "tracks": [
+            {
+                "uri": f"provider://track/{index}",
+                "name": f"Track {index} " + ("x" * 900),
+                "media_type": "track",
+                "artists": [{"uri": "provider://artist/1", "name": "Artist"}],
+            }
+            for index in range(30)
+        ],
+        "albums": [],
+    }
+
+    result = DynamicAPIAdapter._bounded_envelope(
+        "ma_api:music/search",
+        payload,
+        response_mode="compact",
+        fields=None,
+        max_items=None,
+        profile=COMMAND_PROFILES["music/search"],
+    )
+
+    assert isinstance(result["data"], dict)
+    assert 0 < len(result["data"]["tracks"]) < 30
+    assert result["data"]["albums"] == []
+    assert result["truncated"] is True
+    assert result["bytes"] <= 12_288
+
+
 async def test_registry_incompatibility_is_reported_without_breaking_catalog() -> None:
     """Structural MA drift is isolated and leaves actionable diagnostics."""
 

@@ -1,4 +1,5 @@
 """Plain, bounded debug command handlers for MA's native API registry."""
+# ruff: noqa: TID252 -- provider source is transplanted under the MA package.
 
 from __future__ import annotations
 
@@ -10,9 +11,9 @@ from typing import Any
 
 from fastmcp.exceptions import ToolError
 
-from provider.debug.event_buffer import EventBuffer
-from provider.debug.log_reader import SafeLogTail
-from provider.models import (
+from ..debug.event_buffer import EventBuffer
+from ..debug.log_reader import SafeLogTail
+from ..models import (
     EventBufferStats,
     EventSnapshot,
     HealthSummary,
