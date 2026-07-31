@@ -159,14 +159,20 @@ any provider/player visibility constraints.
 ### Provider extensions
 
 Only functionality that passes the extension-command criteria is registered under
-`fastmcp/*`. Likely candidates are safe queue mutation with server-side invariants
-and aggregated provider diagnostics. Each candidate must first be checked against
-the actual target Music Assistant registry; if a native command is sufficient, no
-extension is added.
+`fastmcp/*`. The implemented set is exactly eight commands: one server-side safe
+queue batch-removal command plus bounded log-tail, log-statistics, recent-event,
+event-buffer-statistics, health, route, and package diagnostics. Each command was
+checked against the target Music Assistant registry; native commands remain the
+only path whenever MA already provides equivalent behavior.
 
 Extension handlers are plain typed Python callables with no FastMCP decorators or
 FastMCP request context. They return Music Assistant models or JSON-compatible
 values and rely on the common adapter for serialization and response limits.
+
+Native `config/*` commands retain the existing Config permission toggles. Secret
+writes additionally require `config:write:secret`, while destructive native queue
+commands and `fastmcp/queue/remove_items_safe` retain mandatory elicitation. The
+resource and prompt surfaces are unchanged by the tool migration.
 
 ### FastMCP server
 

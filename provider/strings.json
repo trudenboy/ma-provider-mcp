@@ -14,7 +14,7 @@
     },
     "require_confirmation": {
       "label": "Confirm destructive operations",
-      "description": "Ask the MCP client to confirm before running destructive tools (clear_queue, remove_item, remove_tracks, remove_from_library, remove_from_favorites). If the client doesn't support elicitation, the call falls through to the permission flag."
+      "description": "Ask the MCP client to confirm configured write commands discovered from MA's registry. Destructive queue clear/delete commands, safe batch removal, system commands, and impersonation keep mandatory confirmation regardless of this setting."
     },
     "enforce_audience": {
       "label": "Enforce token audience (RFC 8707)",
@@ -29,8 +29,8 @@
       "description": "Optional explicit base URL the Connect Wizard should open at (e.g. `https://ha.example.com/<addon-slug>` for Home Assistant add-on ingress). Used only when the wizard cannot auto-detect the external URL from the active client connection — set it if your reverse proxy strips the `X-Forwarded-Host` / `X-Ingress-Path` headers."
     },
     "lean_admin_schema": {
-      "label": "Lean schemas for Config/Debug tools",
-      "description": "Omit machine-readable output schemas from the Config and Debug tools to shrink the per-request context they cost. Leave off for Claude clients (which defer tool schemas anyway); enable only for MCP hosts that load every schema up-front. Tool results are unaffected — only the structured-output type hints are dropped."
+      "label": "Legacy lean admin schemas",
+      "description": "Compatibility setting for installations upgraded from the former Config/Debug tool namespaces. The unified three-tool catalog already retrieves individual schemas on demand, so clients no longer load those admin schemas up front."
     },
     "dynamic_api_read": {
       "label": "Dynamic API: read commands",
@@ -154,19 +154,19 @@
     },
     "config_read": {
       "label": "Config: read core/provider/player settings",
-      "description": "Exposes read access to MA core, provider, and player configuration over MCP (secrets stay masked). Disable in production unless needed."
+      "description": "Allows native MA config commands in the unified catalog to read core, provider, and player configuration (secrets stay masked). Disable in production unless needed."
     },
     "config_write_provider": {
       "label": "Config: edit provider settings",
-      "description": "Allows MCP clients to change provider configuration and trigger provider config actions. Changes may reload the provider and interrupt its streams. Disable in production."
+      "description": "Allows native MA config commands to change provider configuration and trigger provider config actions. Changes may reload the provider and interrupt its streams. Disable in production."
     },
     "config_write_core": {
       "label": "Config: edit core settings",
-      "description": "Allows MCP clients to change MA core controller configuration (webserver, streams, cache, ...). Core changes may RESTART subsystems and interrupt ALL playback. Disable in production."
+      "description": "Allows native MA config commands to change core controller configuration (webserver, streams, cache, ...). Core changes may RESTART subsystems and interrupt ALL playback. Disable in production."
     },
     "config_write_player": {
       "label": "Config: edit player settings",
-      "description": "Allows MCP clients to change per-player configuration and DSP. Disable in production."
+      "description": "Allows native MA config commands to change per-player configuration and DSP. Disable in production."
     },
     "config_write_secret": {
       "label": "Config: allow writing secret values",
@@ -183,7 +183,7 @@
     "delete_permissions": "Delete Permissions",
     "mcp_resources": "MCP Resources",
     "mcp_config": "Config",
-    "dynamic_api": "Dynamic MA API"
+    "dynamic_api": "Unified MA API"
   },
   "setup_flow": {
     "connect": {

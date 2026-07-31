@@ -13,11 +13,11 @@
 
 **MCP Server** plugin provider for [Music Assistant](https://github.com/music-assistant/server).
 
-Exposes MA's library, queue, playback, players, and metadata controllers as a
+Exposes Music Assistant's live API-command registry through a compact
 [Model Context Protocol](https://modelcontextprotocol.io/) server, accessible to
 Claude, Cursor, Codex, the OpenClaw and Hermes multi-agent orchestrators, and any
-other MCP-aware client. Optional `debug` and `config` namespaces add
-troubleshooting and settings management for power users.
+other MCP-aware client. The catalog covers library, queue, playback, players,
+configuration, and provider diagnostics without maintaining a parallel tool API.
 
 ## Highlights
 
@@ -29,11 +29,27 @@ troubleshooting and settings management for power users.
   off-by-default namespaces (`debug`, `config`) add 5 + 5 capability flags.
 - **Mounted into MA's existing webserver** at `/mcp/v1` — reuses TLS, reverse proxy,
   and Home Assistant ingress out of the box. No second port, no extra firewall rule.
-- 8 always-on namespaced sub-servers (library, queue, playback, players, playlists,
-  volume, media, metadata) plus the optional `debug` and `config` namespaces — exposing
-  tools as `library_search_tracks`, `queue_get_active_queue`, `playback_play_media`, etc.
+- The MCP surface contains exactly three tools: `search_tools`, `get_tool_schema`,
+  and `call_tool`. They discover and invoke Music Assistant's live API registry as
+  `ma_api:*` commands.
+- Provider-owned `fastmcp/*` commands use that same registry and exist only for safe
+  queue batch removal and diagnostics that Music Assistant does not expose natively.
 
 ## Usage
+
+### Unified command catalog
+
+Start with `search_tools` using a short intent such as `album tracks` or `queue
+items`, inspect the selected `ma_api:*` command with `get_tool_schema`, then invoke
+it through `call_tool`. Schemas are loaded one at a time, and runtime changes to
+Music Assistant's command registry become discoverable without adding MCP wrappers.
+
+The provider registers eight ordinary MA extension commands under `fastmcp/*`: one
+server-side safe queue batch-removal command and seven bounded diagnostics commands.
+They are discovered and called as `ma_api:fastmcp/*`; there is no separate recipe
+dispatcher or executable `mcp_api:*` namespace. Existing `library://`, `player://`,
+and `queue://` resources and the canned prompts remain available through the normal
+MCP resource and prompt APIs.
 
 ### Quick connect (recommended)
 
@@ -79,10 +95,14 @@ events, providers, reload) and **Config** (5 — read, edit provider / core /
 player, allow secret writes; writes delegate to MA's atomic save). Every
 capability outside the Query group is off by default.
 
-Each maps to a tag (`query:library`, `control:playback`, …). A custom
-`TagFilterMiddleware` filters `tools/list` / `resources/list` / `prompts/list`
-**and** blocks direct invocation of disabled components — so a client that
-cached a tool name from an earlier permission set cannot bypass the filter.
+Each maps to a tag (`query:library`, `control:playback`, …). The unified catalog
+applies those tags to native MA commands before discovery and repeats the check
+immediately before execution, so a cached command cannot bypass a revoked permission.
+Native `config/*` commands use the existing Config read/provider/core/player toggles;
+writing a `SECURE_STRING` additionally requires `config:write:secret`. Direct queue
+clear/delete operations and the safe batch-removal extension always elicit client
+confirmation. Resource and prompt visibility continues to use the three MCP Resource
+toggles above.
 
 ## Spec compliance (MCP 2025-06-18 / draft)
 
@@ -103,10 +123,15 @@ cached a tool name from an earlier permission set cannot bypass the filter.
 
 ```bash
 uv sync --all-extras
-uv run pytest
+bash .superpowers/sdd/2026-07-30-native-ma-command-catalog/run-ma-tests.sh -q
 uv run ruff check provider tests
-uv run mypy provider
+uv run ruff format --check provider tests
 ```
+
+MA-dependent tests and final type checking must run in a complete Linux virtual
+environment from the current Music Assistant `dev` checkout; the repository wrapper
+mounts `/Users/renso/Projects/ma-server` at `/ma-server` and reuses MA's canonical
+fixtures.
 
 ### Opt-in Docker integration coverage
 
