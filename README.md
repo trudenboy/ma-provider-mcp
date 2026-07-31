@@ -127,6 +127,7 @@ docker compose -f docker-compose.dev.yml exec -T \
   -e MA_MCP_TOKEN="$MA_MCP_TOKEN" \
   -e MA_TEST_PLAYER_ID="$MA_TEST_PLAYER_ID" \
   ma /app/venv/bin/python -m pytest -o addopts= -p no:cacheprovider \
+  --confcutdir=/tmp/provider-tests/integration \
   /tmp/provider-tests/integration/test_live_catalog.py -m integration -v -s
 ```
 
@@ -135,7 +136,9 @@ should reuse an already configured development instance without copying its data
 `MA_SERVER_ROOT` defaults to `/Users/renso/Projects/ma-server`; Compose mounts that
 checkout at `/ma-server`, overlays this provider inside it, and refuses startup unless
 the imported MA package and `fastmcp_server` provider paths both begin with
-`/ma-server/`.
+`/ma-server/`. The test command cuts conftest discovery at the integration
+directory, so it does not load the repository's unit-test fixtures (which import
+the source-root `provider` package).
 `.superpowers/sdd/2026-07-30-native-ma-command-catalog/run-ma-tests.sh` runs the
 implementation suite in the same complete Linux MA virtual environment.
 
