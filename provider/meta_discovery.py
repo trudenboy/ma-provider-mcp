@@ -16,6 +16,19 @@ from fastmcp import Context  # noqa: TC002  -- FastMCP resolves injected annotat
 from fastmcp.exceptions import NotFoundError, ToolError
 from mcp.types import ToolAnnotations
 
+from .catalog_pagination import (
+    CURSOR_VERSION,
+    CursorState,
+    DiscoveryItem,
+    DiscoveryMode,
+    DiscoveryPage,
+    PaginationError,
+    catalog_revision,
+    decode_cursor,
+    encode_cursor,
+    normalize_query,
+    resolve_limit,
+)
 from .dynamic_api import (
     LEGACY_MIGRATIONS,
     CatalogFingerprint,
@@ -32,7 +45,6 @@ if TYPE_CHECKING:
     from .middleware import TagsLookup
 
 GET_TOOL_SCHEMA_NAME = "get_tool_schema"
-SEARCH_MAX_RESULTS = 5
 CALL_TOOL_NAME = "call_tool"
 SEARCH_TOOL_NAME = "search_tools"
 _META_NAMES = {CALL_TOOL_NAME, SEARCH_TOOL_NAME, GET_TOOL_SCHEMA_NAME}
@@ -145,27 +157,88 @@ class MetaDiscoveryService:
         self._index_lock = asyncio.Lock()
         self.index_build_count = 0
 
-    async def search(self, query: str) -> list[dict[str, str]]:
-        """Return lightweight matches from the caller's visible catalog only."""
+    async def discover(
+        self,
+        query: str | None = None,
+        *,
+        cursor: str | None = None,
+        limit: int | None = None,
+    ) -> DiscoveryPage:
+        """Return one visible ranked-search or alphabetical-catalog page."""
+        explicit_query = normalize_query(query)
+        state = decode_cursor(cursor) if cursor is not None else None
+        mode: DiscoveryMode
+        if state is not None:
+            if query is not None and explicit_query != state.query:
+                raise PaginationError("invalid_cursor", "cursor query does not match query")
+            mode = state.mode
+            normalized_query = state.query
+            offset = state.offset
+        else:
+            mode = "search" if explicit_query else "catalog"
+            normalized_query = explicit_query
+            offset = 0
+        page_limit = resolve_limit(mode, limit)
+
         while True:
             view = await self.adapter.visible_catalog()
             snapshot = await self.adapter.base_snapshot()
             if view.fingerprint == snapshot.fingerprint:
                 break
-        index = await self._index_for(snapshot)
         visible = {entry.name: entry for entry in view.entries}
-        legacy = LEGACY_MIGRATIONS.get(query)
+        revision = catalog_revision(snapshot.fingerprint, view.entries)
+        if state is not None and state.revision != revision:
+            raise PaginationError(
+                "catalog_changed",
+                "catalog changed; restart pagination without a cursor",
+            )
+
+        index = await self._index_for(snapshot) if mode == "search" else None
+        legacy = LEGACY_MIGRATIONS.get(normalized_query) if mode == "search" else None
+        ordered_items: list[DiscoveryItem]
         if legacy is not None:
             canonical = f"ma_api:{legacy.command}" if legacy.command is not None else None
             if canonical is not None and canonical in visible:
-                return [{"name": canonical, "description": visible[canonical].description}]
-            hint = canonical or legacy.message
-            return [{"name": query, "description": f"Retired tool; use {hint}."}]
-        names = _rank(index, _tokens(query), allowed_names=set(visible))
-        return [
-            {"name": name, "description": visible[name].description}
-            for name in names[:SEARCH_MAX_RESULTS]
-        ]
+                ordered_items = [{"name": canonical, "description": visible[canonical].description}]
+            else:
+                hint = canonical or legacy.message
+                ordered_items = [
+                    {"name": normalized_query, "description": f"Retired tool; use {hint}."}
+                ]
+        elif mode == "search":
+            assert index is not None
+            names = _rank(index, _tokens(normalized_query), allowed_names=set(visible))
+            ordered_items = [
+                {"name": name, "description": visible[name].description} for name in names
+            ]
+        else:
+            ordered_items = [{"name": name} for name in sorted(visible)]
+
+        total = len(ordered_items)
+        if state is not None and offset >= total:
+            raise PaginationError("invalid_cursor", "cursor offset is outside the result set")
+        page_items = ordered_items[offset : offset + page_limit]
+        next_offset = offset + len(page_items)
+        next_cursor = (
+            encode_cursor(
+                CursorState(
+                    version=CURSOR_VERSION,
+                    mode=mode,
+                    query=normalized_query,
+                    offset=next_offset,
+                    revision=revision,
+                )
+            )
+            if next_offset < total
+            else None
+        )
+        return {
+            "mode": mode,
+            "items": page_items,
+            "total": total,
+            "next_cursor": next_cursor,
+            "catalog_revision": revision,
+        }
 
     async def get_schema(self, tool_name: str) -> dict[str, Any]:
         """Return one current request-visible entry's complete schema descriptor."""
@@ -238,16 +311,24 @@ def register_meta_discovery(
             openWorldHint=False,
         ),
     )  # type: ignore[untyped-decorator, unused-ignore]
-    async def search_tools(query: str) -> list[dict[str, str]]:
+    async def search_tools(
+        query: str | None = None,
+        cursor: str | None = None,
+        limit: int | None = None,
+    ) -> DiscoveryPage:
         """
-        Find visible Music Assistant API commands by name, description, or legacy alias.
+        Search visible commands or browse the catalog.
 
-        Results contain only canonical names and descriptions. Use
-        ``get_tool_schema`` to retrieve arguments before using ``call_tool``.
+        Follow ``next_cursor`` for another page; fetch a schema only before invocation.
 
-        :param query: Natural-language command name, description, or legacy alias.
+        :param query: Search text, or empty to browse.
+        :param cursor: Previous page cursor.
+        :param limit: Page size, 1-50.
         """
-        return await service.search(query)
+        try:
+            return await service.discover(query, cursor=cursor, limit=limit)
+        except PaginationError as exc:
+            raise ToolError(f"{exc.code}: {exc}") from exc
 
     @mcp.tool(
         name=GET_TOOL_SCHEMA_NAME,

@@ -6,7 +6,7 @@ import asyncio
 import contextvars
 import inspect
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from types import SimpleNamespace
 from typing import Any, cast
@@ -22,6 +22,11 @@ from music_assistant_models.config_entries import ConfigEntry
 from music_assistant_models.enums import ConfigEntryType
 
 from provider import meta_discovery
+from provider.catalog_pagination import (
+    PaginationError,
+    decode_cursor,
+    encode_cursor,
+)
 from provider.command_policy import Confirmation, DynamicPolicy, DynamicRisk
 from provider.command_profiles import (
     COMMAND_PROFILES,
@@ -142,12 +147,45 @@ async def test_search_uses_alias_but_returns_canonical_ma_name() -> None:
     mcp, _adapter = _server()
     async with Client(mcp) as client:
         result = await client.call_tool("search_tools", {"query": "playback_play"})
-    assert result.data == [
+    assert result.structured_content is not None
+    assert result.structured_content["mode"] == "search"
+    assert result.structured_content["items"] == [
         {
             "name": "ma_api:players/cmd/play",
             "description": "Start playback on a player.",
         }
     ]
+    assert result.structured_content["total"] == 1
+    assert result.structured_content["next_cursor"] is None
+    assert result.structured_content["catalog_revision"]
+
+
+async def test_search_tool_rejects_invalid_limit_with_stable_code() -> None:
+    """The wire contract exposes invalid page-size errors without transport detail."""
+    mcp, _adapter = _server()
+    async with Client(mcp) as client:
+        with pytest.raises(ToolError, match="invalid_limit"):
+            await client.call_tool("search_tools", {"query": "music", "limit": 0})
+
+
+async def test_search_tool_rejects_malformed_cursor_with_stable_code() -> None:
+    """The wire contract exposes malformed cursor errors with a stable code."""
+    mcp, _adapter = _server()
+    async with Client(mcp) as client:
+        with pytest.raises(ToolError, match="invalid_cursor"):
+            await client.call_tool("search_tools", {"cursor": "not-json"})
+
+
+async def test_search_tools_schema_advertises_pagination() -> None:
+    """Clients can discover the complete paginated input and output contract."""
+    mcp, _adapter = _server()
+    async with Client(mcp) as client:
+        tool = next(item for item in await client.list_tools() if item.name == "search_tools")
+    assert set(tool.inputSchema["properties"]) == {"query", "cursor", "limit"}
+    assert tool.outputSchema is not None
+    assert {"mode", "items", "total", "next_cursor", "catalog_revision"} <= set(
+        tool.outputSchema["properties"]
+    )
 
 
 async def test_call_tool_rejects_retired_name_with_concrete_migration() -> None:
@@ -165,8 +203,9 @@ async def test_search_returns_retired_alias_as_non_executable_migration_hint() -
         search = await client.call_tool("search_tools", {"query": "config_list_targets"})
         with pytest.raises(ToolError, match="Use search_tools"):
             await client.call_tool("call_tool", {"name": "config_list_targets"})
-    assert search.data[0]["name"] == "config_list_targets"
-    assert "Use search_tools" in search.data[0]["description"]
+    assert search.structured_content is not None
+    assert search.structured_content["items"][0]["name"] == "config_list_targets"
+    assert "Use search_tools" in search.structured_content["items"][0]["description"]
 
 
 def _meta_service(adapter: DynamicAdapter) -> Any:
@@ -187,6 +226,18 @@ def _catalog_entry(name: str, description: str) -> DynamicEntry:
         required_scope=None,
         allow_impersonation=False,
         handler=object(),
+    )
+
+
+def _catalog_snapshot(count: int = 7) -> CatalogSnapshot:
+    """Build a deterministically ordered discovery catalog."""
+    entries = tuple(
+        _catalog_entry(f"ma_api:music/command_{index:02d}", f"Music command {index}")
+        for index in range(count)
+    )
+    return CatalogSnapshot(
+        (1, "test", tuple((entry.command, index) for index, entry in enumerate(entries))),
+        entries,
     )
 
 
@@ -219,6 +270,87 @@ class _SnapshotAdapter:
         raise NotImplementedError
 
 
+async def test_empty_query_browses_alphabetical_catalog_without_descriptions() -> None:
+    """Catalog pages expose every visible command name in stable order."""
+    service = _meta_service(_SnapshotAdapter(_catalog_snapshot()))
+    first = await service.discover("", limit=3)
+    second = await service.discover(cursor=first["next_cursor"], limit=3)
+    third = await service.discover(cursor=second["next_cursor"], limit=3)
+    assert first["mode"] == second["mode"] == third["mode"] == "catalog"
+    assert first["total"] == second["total"] == third["total"] == 7
+    assert [item["name"] for page in (first, second, third) for item in page["items"]] == [
+        f"ma_api:music/command_{index:02d}" for index in range(7)
+    ]
+    assert all(set(item) == {"name"} for page in (first, second, third) for item in page["items"])
+    assert third["next_cursor"] is None
+
+
+async def test_ranked_search_pages_have_no_duplicates_or_gaps() -> None:
+    """Search continuations preserve the ranked result sequence."""
+    service = _meta_service(_SnapshotAdapter(_catalog_snapshot()))
+    first = await service.discover("music command", limit=2)
+    second = await service.discover(cursor=first["next_cursor"], limit=2)
+    assert first["mode"] == second["mode"] == "search"
+    assert first["total"] == 7
+    assert len({item["name"] for item in first["items"] + second["items"]}) == 4
+    assert all("description" in item for item in first["items"] + second["items"])
+
+
+async def test_cursor_accepts_matching_query_and_rejects_conflicting_query() -> None:
+    """A continuation accepts normalized text but rejects another search."""
+    service = _meta_service(_SnapshotAdapter(_catalog_snapshot()))
+    first = await service.discover("music", limit=2)
+    resumed = await service.discover(" MUSIC ", cursor=first["next_cursor"], limit=2)
+    assert resumed["items"]
+    with pytest.raises(PaginationError) as exc_info:
+        await service.discover("players", cursor=first["next_cursor"])
+    assert exc_info.value.code == "invalid_cursor"
+
+
+async def test_catalog_change_invalidates_cursor() -> None:
+    """A base-catalog revision cannot resume an earlier page sequence."""
+    adapter = _SnapshotAdapter(_catalog_snapshot())
+    service = _meta_service(adapter)
+    first = await service.discover(limit=2)
+    adapter.snapshot = _catalog_snapshot(8)
+    with pytest.raises(PaginationError) as exc_info:
+        await service.discover(cursor=first["next_cursor"])
+    assert exc_info.value.code == "catalog_changed"
+
+
+async def test_impossible_cursor_offset_is_rejected() -> None:
+    """A validly encoded but out-of-range offset cannot yield an empty page."""
+    service = _meta_service(_SnapshotAdapter(_catalog_snapshot(2)))
+    first = await service.discover(limit=1)
+    state = decode_cursor(cast("str", first["next_cursor"]))
+    forged = encode_cursor(replace(state, offset=99))
+    with pytest.raises(PaginationError) as exc_info:
+        await service.discover(cursor=forged)
+    assert exc_info.value.code == "invalid_cursor"
+
+
+async def test_visibility_change_invalidates_cursor_without_leaking_hidden_name() -> None:
+    """Visibility changes invalidate pages while the next browse hides removed commands."""
+
+    class _VisibilityAdapter(_SnapshotAdapter):
+        restricted = False
+
+        async def visible_catalog(self) -> CatalogView:
+            entries = self.snapshot.entries[:-1] if self.restricted else self.snapshot.entries
+            return CatalogView(self.snapshot.fingerprint, entries)
+
+    adapter = _VisibilityAdapter(_catalog_snapshot())
+    service = _meta_service(adapter)
+    first = await service.discover(limit=2)
+    hidden_name = adapter.snapshot.entries[-1].name
+    adapter.restricted = True
+    with pytest.raises(PaginationError) as exc_info:
+        await service.discover(cursor=first["next_cursor"])
+    assert exc_info.value.code == "catalog_changed"
+    restricted = await service.discover(limit=50)
+    assert hidden_name not in {item["name"] for item in restricted["items"]}
+
+
 async def test_search_retries_when_registry_changes_between_catalog_reads() -> None:
     """Search retries so metadata and returned descriptions share one generation."""
     first = CatalogSnapshot(
@@ -246,7 +378,7 @@ async def test_search_retries_when_registry_changes_between_catalog_reads() -> N
             return CatalogView(snapshot.fingerprint, snapshot.entries)
 
     service = _meta_service(_ChangingAdapter())
-    assert await service.search("replacement") == [
+    assert (await service.discover("replacement"))["items"] == [
         {"name": "ma_api:music/replacement", "description": "Replacement collection."}
     ]
 
@@ -274,9 +406,9 @@ async def test_parallel_searches_contend_for_one_awaitable_index_build(
         return await build_index(candidate)
 
     monkeypatch.setattr(service, "_build_index", delayed_build)
-    leader = asyncio.create_task(service.search("search"))
+    leader = asyncio.create_task(service.discover("search"))
     await started.wait()
-    followers = [asyncio.create_task(service.search("search")) for _index in range(19)]
+    followers = [asyncio.create_task(service.discover("search")) for _index in range(19)]
     await asyncio.sleep(0)
     release.set()
     await asyncio.gather(leader, *followers)
@@ -306,13 +438,13 @@ async def test_failed_index_build_releases_waiters_and_retries(
 
     monkeypatch.setattr(service, "_build_index", fail_once)
     outcomes = await asyncio.gather(
-        service.search("search"), service.search("search"), return_exceptions=True
+        service.discover("search"), service.discover("search"), return_exceptions=True
     )
     first, second = outcomes
     assert isinstance(first, RuntimeError)
     assert not isinstance(second, BaseException)
-    assert second == [{"name": "ma_api:music/search", "description": "Search music."}]
-    assert await service.search("search") == second
+    assert second["items"] == [{"name": "ma_api:music/search", "description": "Search music."}]
+    assert await service.discover("search") == second
     assert attempts == 2
 
 
@@ -338,7 +470,7 @@ async def test_parallel_search_builds_one_index() -> None:
 
     adapter = _real_adapter(_handler("music/search", search))
     service = _meta_service(adapter)
-    await asyncio.gather(*(service.search("album") for _index in range(20)))
+    await asyncio.gather(*(service.discover("album") for _index in range(20)))
     assert service.index_build_count == 1
 
 
@@ -355,11 +487,11 @@ async def test_registry_change_rebuilds_discovery_index_immediately() -> None:
 
     adapter = _real_adapter(_handler("music/existing", existing))
     service = _meta_service(adapter)
-    before = await service.search("new command")
+    before = await service.discover("new command")
     adapter.mass.command_handlers["music/new_command"] = _handler("music/new_command", new_command)
-    after = await service.search("new command")
-    assert before == []
-    assert after[0]["name"] == "ma_api:music/new_command"
+    after = await service.discover("new command")
+    assert before["items"] == []
+    assert after["items"][0]["name"] == "ma_api:music/new_command"
     assert service.index_build_count == 2
 
 
