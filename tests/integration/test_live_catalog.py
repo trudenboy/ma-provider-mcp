@@ -69,6 +69,13 @@ async def restricted_live_client() -> AsyncIterator[LiveClient]:
         yield client
 
 
+def structured_content(result: Any) -> Mapping[str, Any]:
+    """Require FastMCP's typed structured result instead of display-oriented data."""
+    assert not result.is_error, result.content
+    assert result.structured_content is not None, result.content
+    return cast("Mapping[str, Any]", result.structured_content)
+
+
 async def collect_tool_catalog(client: LiveClient) -> tuple[list[str], str]:
     """Traverse every alphabetical command page through the discovery tool."""
     names: list[str] = []
@@ -82,8 +89,7 @@ async def collect_tool_catalog(client: LiveClient) -> tuple[list[str], str]:
         else:
             arguments["cursor"] = cursor
         result = await client.call_tool("search_tools", arguments)
-        assert not result.is_error, result.content
-        page = result.data
+        page = structured_content(result)
         assert page["mode"] == "catalog"
         revision = revision or str(page["catalog_revision"])
         total = int(page["total"]) if total is None else total
@@ -105,6 +111,8 @@ async def collect_resource_catalog(client: LiveClient) -> tuple[list[str], str]:
     while uri is not None:
         contents = await client.read_resource(uri)
         page = json.loads(next(item.text for item in contents if hasattr(item, "text")))
+        assert set(page) == {"items", "total", "next_cursor", "next_uri", "catalog_revision"}
+        assert all(set(item) == {"name"} for item in page["items"])
         revision = revision or str(page["catalog_revision"])
         total = int(page["total"]) if total is None else total
         assert page["catalog_revision"] == revision
@@ -120,8 +128,7 @@ async def call_ma(client: LiveClient, command: str, arguments: Mapping[str, Any]
     result = await client.call_tool(
         "call_tool", {"name": f"ma_api:{command}", "arguments": dict(arguments)}
     )
-    assert not result.is_error, result.content
-    envelope = result.data
+    envelope = structured_content(result)
     assert envelope["command"] == f"ma_api:{command}"
     json.dumps(envelope["data"])
     return envelope["data"]
@@ -240,7 +247,7 @@ async def test_live_paginated_catalog_tool_resource_parity(live_client: LiveClie
     ):
         assert name in tool_names
         schema = await live_client.call_tool("get_tool_schema", {"tool_name": name})
-        assert schema.data["name"] == name
+        assert structured_content(schema)["name"] == name
 
 
 @pytest.mark.integration
@@ -254,7 +261,7 @@ async def test_live_restricted_catalog_isolated_from_broader_cursor(
     assert set(restricted_names) < set(broad_names)
     with pytest.raises(ToolError, match="catalog_changed"):
         await restricted_live_client.call_tool(
-            "search_tools", {"cursor": broad_first.data["next_cursor"]}
+            "search_tools", {"cursor": structured_content(broad_first)["next_cursor"]}
         )
 
 
@@ -307,8 +314,7 @@ async def test_live_library_items_have_truthful_schema_and_execute(
     schema_result = await live_client.call_tool(
         "get_tool_schema", {"tool_name": f"ma_api:{command}"}
     )
-    assert not schema_result.is_error, schema_result.content
-    schema = schema_result.data
+    schema = structured_content(schema_result)
     assert "kwargs" not in schema["inputSchema"].get("properties", {})
     assert "kwargs" not in schema["inputSchema"].get("required", [])
     output = schema.get("outputSchema", {})
@@ -389,13 +395,15 @@ async def test_live_annotations_and_declined_queue_confirmation(
         "fastmcp/queue/remove_items_safe",
     ):
         result = await live_client.call_tool("get_tool_schema", {"tool_name": f"ma_api:{command}"})
-        assert result.data["annotations"]["destructiveHint"] is True
-        assert result.data["risk"] == "write"
+        schema = structured_content(result)
+        assert schema["annotations"]["destructiveHint"] is True
+        assert schema["risk"] == "write"
     health = await live_client.call_tool(
         "get_tool_schema", {"tool_name": "ma_api:fastmcp/debug/health"}
     )
-    assert health.data["annotations"]["readOnlyHint"] is True
-    assert health.data["risk"] == "system"
+    health_schema = structured_content(health)
+    assert health_schema["annotations"]["readOnlyHint"] is True
+    assert health_schema["risk"] == "system"
     declines = 0
 
     async def decline_elicitation(
