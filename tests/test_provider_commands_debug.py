@@ -283,7 +283,9 @@ async def test_health_counts_recent_log_errors_off_event_loop(
 
     def recording_count(self: SafeLogTail, *, name: str = "musicassistant.log") -> int:
         seen.append(threading.current_thread())
-        return real_count(self, name=name)
+        result: object = real_count(self, name=name)
+        assert isinstance(result, int)
+        return result
 
     monkeypatch.setattr(SafeLogTail, "count_errors_last_5min", recording_count)
     result = await health(mass, buffer=None, logs_enabled=True)
