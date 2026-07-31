@@ -26,12 +26,12 @@ if TYPE_CHECKING:
 
 
 def test_config_to_tag_is_total() -> None:
-    """Core permission keys have unique tags in CONFIG_TO_TAG (16 core + 5 debug + 5 config)."""
+    """Permission keys have unique tags (16 core + 4 debug + 5 config)."""
     assert set(PERMISSION_KEYS).issubset(set(CONFIG_TO_TAG))
     assert (
         len({v for k, v in CONFIG_TO_TAG.items() if k in PERMISSION_KEYS})
         == len(PERMISSION_KEYS)
-        == 26
+        == 25
     )
 
 
