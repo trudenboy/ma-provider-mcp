@@ -34,7 +34,7 @@ def _load_ma_has_scope() -> Callable[[User, Scope], bool] | None:
         )
     except ImportError:
         return None
-    return has_scope
+    return has_scope  # type: ignore[no-any-return, unused-ignore]
 
 
 _ma_has_scope = _load_ma_has_scope()
@@ -81,4 +81,4 @@ def authorize_extension(
         raise InsufficientPermissions(f"Scope {required_scope!r} is required")
     if required_tag not in {str(tag) for tag in enabled_tags(config)}:
         raise InsufficientPermissions(f"Provider permission {required_tag!r} is disabled")
-    return user
+    return user  # type: ignore[no-any-return, unused-ignore]

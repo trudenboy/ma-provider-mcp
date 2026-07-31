@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 LOGGER = logging.getLogger(__name__)
 
 
-class MCPServerProvider(PluginProvider):
+class MCPServerProvider(PluginProvider):  # type: ignore[misc, unused-ignore]
     """Music Assistant plugin provider wrapping an MCP server runtime."""
 
     _runtime: MCPServerRuntime | None = None

@@ -154,6 +154,12 @@ class MCPServerRuntime:
         await self.stop()
         await self.start()
 
+    def dynamic_diagnostics(self) -> dict[str, Any]:
+        """Return a public snapshot of dynamic-command health without exposing its adapter."""
+        if self._dynamic_adapter is None:
+            return {"available": False, "last_error": "catalog not initialized"}
+        return dict(self._dynamic_adapter.diagnostics())
+
     async def _start_impl(self) -> None:
         """Mount the runtime; see :meth:`start` for the public-facing wrapper."""
         from fastmcp import FastMCP  # noqa: PLC0415
@@ -240,12 +246,6 @@ class MCPServerRuntime:
             bool(verifier),
             len(enabled_tags(self._config)),
         )
-
-    def dynamic_diagnostics(self) -> dict[str, Any]:
-        """Return a public snapshot of dynamic-command health without exposing its adapter."""
-        if self._dynamic_adapter is None:
-            return {"available": False, "last_error": "catalog not initialized"}
-        return dict(self._dynamic_adapter.diagnostics())
 
     def _register_meta_discovery(self, mcp: Any) -> None:
         """Install the permanent dynamic command discovery layer."""

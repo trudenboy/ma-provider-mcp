@@ -37,7 +37,9 @@ def _now() -> datetime:
     # init (and optional deps) at module load; here it runs inside the host.
     from music_assistant.helpers.datetime import now as ma_now  # noqa: PLC0415
 
-    return ma_now()
+    # MA's source is fully typed when transplanted under its package; standalone
+    # provider checks see the external package as untyped.
+    return ma_now()  # type: ignore[no-any-return, unused-ignore]
 
 
 class EventBuffer:

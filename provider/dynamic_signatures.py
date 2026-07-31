@@ -50,7 +50,9 @@ class CompiledSignature:
             strict=True,
         )
         parsed.update(extras)
-        return parsed
+        # The standalone provider environment treats MA's parser as untyped;
+        # the transplanted MA environment verifies its concrete dict return.
+        return parsed  # type: ignore[no-any-return, unused-ignore]
 
 
 def compile_signature(
