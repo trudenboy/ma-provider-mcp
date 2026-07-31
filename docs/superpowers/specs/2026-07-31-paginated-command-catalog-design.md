@@ -4,10 +4,10 @@ Date: 2026-07-31
 
 ## Status
 
-The functional contract was approved in conversation on 2026-07-31; this detailed
-specification is pending final review. It extends the discovery contract in
-`2026-07-30-native-ma-command-catalog-design.md`; all authorization, policy,
-invocation, and provider-extension decisions from that design remain in force.
+Approved in conversation on 2026-07-31. This specification extends the discovery
+contract in `2026-07-30-native-ma-command-catalog-design.md`; all authorization,
+policy, invocation, and provider-extension decisions from that design remain in
+force.
 
 ## Problem
 
