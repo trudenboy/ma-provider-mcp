@@ -11,8 +11,8 @@ from provider.constants import (
 
 
 def test_permission_keys_count() -> None:
-    """Twenty-six curated permission keys map one-to-one onto tags."""
-    assert len(PERMISSION_KEYS) == 26
+    """Twenty-five curated permission keys map one-to-one onto tags."""
+    assert len(PERMISSION_KEYS) == 25
 
 
 def test_resource_keys_count() -> None:
