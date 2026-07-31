@@ -9,10 +9,6 @@ CONF_EXTRA_ALLOWED_ORIGINS = "extra_allowed_origins"
 CONF_ENFORCE_AUDIENCE = "enforce_audience"
 CONF_REQUIRE_CONFIRMATION = "require_confirmation"
 CONF_CONNECT_EXTERNAL_URL = "connect_external_url"
-# Read at sub-server build time (affects tool registration), so it is
-# deliberately NOT in PERMISSION_KEYS/RESOURCE_KEYS below — toggling it falls
-# through to a full runtime restart rather than a tag-filter hot-swap.
-CONF_LEAN_ADMIN_SCHEMA = "lean_admin_schema"
 CONF_TRUST_FORWARDED_PROTO = "trust_forwarded_proto"
 
 # ── Dynamic MA command catalog ────────────────────────────────────────────────
@@ -57,7 +53,6 @@ CONF_DEBUG_INSPECT = "debug_inspect"
 CONF_DEBUG_LOGS = "debug_logs"
 CONF_DEBUG_EVENTS = "debug_events"
 CONF_DEBUG_PROVIDERS = "debug_providers"
-CONF_DEBUG_RELOAD = "debug_reload"
 CONF_DEBUG_EVENT_BUFFER_CAPACITY = "debug_event_buffer_capacity"
 
 # ── Config namespace permission flags (all off-by-default) ────────────────────
@@ -89,7 +84,6 @@ PERMISSION_KEYS: frozenset[str] = frozenset(
         CONF_DEBUG_LOGS,
         CONF_DEBUG_EVENTS,
         CONF_DEBUG_PROVIDERS,
-        CONF_DEBUG_RELOAD,
         CONF_CONFIG_READ,
         CONF_CONFIG_WRITE_PROVIDER,
         CONF_CONFIG_WRITE_CORE,

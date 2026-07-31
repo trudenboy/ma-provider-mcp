@@ -28,10 +28,6 @@
       "label": "Connect Wizard external URL (fallback)",
       "description": "Optional explicit base URL the Connect Wizard should open at (e.g. `https://ha.example.com/<addon-slug>` for Home Assistant add-on ingress). Used only when the wizard cannot auto-detect the external URL from the active client connection — set it if your reverse proxy strips the `X-Forwarded-Host` / `X-Ingress-Path` headers."
     },
-    "lean_admin_schema": {
-      "label": "Legacy lean admin schemas",
-      "description": "Compatibility setting for installations upgraded from the former Config/Debug tool namespaces. The unified three-tool catalog already retrieves individual schemas on demand, so clients no longer load those admin schemas up front."
-    },
     "dynamic_api_read": {
       "label": "Dynamic API: read commands",
       "description": "Expose read-only commands discovered from Music Assistant's live API registry. Enabled by default. The client still sees only the three compact discovery tools."
@@ -147,10 +143,6 @@
     "debug_providers": {
       "label": "Debug: inspect configured providers",
       "description": "Exposes provider state, masked configuration, registered webserver routes, installed package versions, and a health summary roll-up. Intended for troubleshooting. Disable in production."
-    },
-    "debug_reload": {
-      "label": "Debug: reload a provider instance",
-      "description": "Allows MCP clients to unload and reload provider instances, INTERRUPTING ANY ACTIVE STREAMS on the affected provider. Each call requires elicitation confirmation. Intended for provider-development iteration. Disable in production."
     },
     "config_read": {
       "label": "Config: read core/provider/player settings",

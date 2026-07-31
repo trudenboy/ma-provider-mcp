@@ -16,7 +16,6 @@ from provider.constants import (
     CONF_DEBUG_INSPECT,
     CONF_DEBUG_LOGS,
     CONF_DEBUG_PROVIDERS,
-    CONF_DEBUG_RELOAD,
     CONF_DELETE_LIBRARY,
     CONF_QUERY_LIBRARY,
     CONF_REQUIRE_AUTH,
@@ -30,9 +29,9 @@ if TYPE_CHECKING:
 
 
 def test_total_entry_count(mock_mass: MagicMock) -> None:
-    """Forty-four entries include four independent dynamic API risk gates."""
+    """Forty-two entries include four dynamic risk gates and live-only debug controls."""
     entries = build_config_entries(mock_mass, DEFAULT_MOUNT_PATH)
-    assert len(entries) == 1 + 1 + 8 + 4 + 16 + 3 + 6 + 5
+    assert len(entries) == 1 + 1 + 7 + 4 + 16 + 3 + 5 + 5
 
 
 def test_all_permission_keys_present(mock_mass: MagicMock) -> None:
@@ -118,7 +117,6 @@ def test_debug_entries_present_with_off_defaults(mock_mass: MagicMock) -> None:
         CONF_DEBUG_LOGS,
         CONF_DEBUG_EVENTS,
         CONF_DEBUG_PROVIDERS,
-        CONF_DEBUG_RELOAD,
     ):
         assert key in entries, f"missing {key}"
         assert entries[key].default_value is False, f"{key} must be off by default"
@@ -127,6 +125,13 @@ def test_debug_entries_present_with_off_defaults(mock_mass: MagicMock) -> None:
     cap = entries[CONF_DEBUG_EVENT_BUFFER_CAPACITY]
     assert cap.default_value == 500
     assert cap.range == (50, 5000)
+
+
+def test_retired_config_keys_are_not_exposed(mock_mass: MagicMock) -> None:
+    """Dead controls do not remain discoverable in the provider configuration UI."""
+    keys = {entry.key for entry in build_config_entries(mock_mass, DEFAULT_MOUNT_PATH)}
+
+    assert {"debug_reload", "lean_admin_schema"}.isdisjoint(keys)
 
 
 def test_config_entries_present_with_off_defaults(mock_mass: MagicMock) -> None:

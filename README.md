@@ -26,7 +26,7 @@ configuration, and provider diagnostics without maintaining a parallel tool API.
   `mass.webserver.auth.authenticate_with_token` (handles both JWT and legacy tokens).
 - **Tag-based access control** — 16 action permissions (query / control / edit / delete × 4)
   plus 3 MCP-resource toggles; reads on, all mutations off by default. Two further
-  off-by-default namespaces (`debug`, `config`) add 5 + 5 capability flags.
+  off-by-default namespaces (`debug`, `config`) add 4 + 5 capability flags.
 - **Mounted into MA's existing webserver** at `/mcp/v1` — reuses TLS, reverse proxy,
   and Home Assistant ingress out of the box. No second port, no extra firewall rule.
 - The MCP surface contains exactly three tools: `search_tools`, `get_tool_schema`,
@@ -90,8 +90,8 @@ The provider config exposes 16 action-permission booleans, grouped by category:
 
 Three further **MCP Resources** toggles control which `library://`,
 `player://` / `queue://`, and prompt resources are advertised. Two optional,
-off-by-default namespaces add their own flags: **Debug** (5 — inspect, logs,
-events, providers, reload) and **Config** (5 — read, edit provider / core /
+off-by-default namespaces add their own flags: **Debug** (4 — inspect, logs,
+events, providers) and **Config** (5 — read, edit provider / core /
 player, allow secret writes; writes delegate to MA's atomic save). Every
 capability outside the Query group is off by default.
 

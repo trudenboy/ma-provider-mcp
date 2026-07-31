@@ -19,7 +19,6 @@ from .constants import (
     CONF_DEBUG_INSPECT,
     CONF_DEBUG_LOGS,
     CONF_DEBUG_PROVIDERS,
-    CONF_DEBUG_RELOAD,
     CONF_DELETE_FAVORITES,
     CONF_DELETE_LIBRARY,
     CONF_DELETE_PLAYLISTS,
@@ -61,7 +60,6 @@ class Tag(StrEnum):
     DEBUG_LOGS = "debug:logs"
     DEBUG_EVENTS = "debug:events"
     DEBUG_PROVIDERS = "debug:providers"
-    DEBUG_RELOAD = "debug:reload"
     CONFIG_READ = "config:read"
     CONFIG_WRITE_PROVIDER = "config:write:provider"
     CONFIG_WRITE_CORE = "config:write:core"
@@ -90,7 +88,6 @@ CONFIG_TO_TAG: dict[str, Tag] = {
     CONF_DEBUG_LOGS: Tag.DEBUG_LOGS,
     CONF_DEBUG_EVENTS: Tag.DEBUG_EVENTS,
     CONF_DEBUG_PROVIDERS: Tag.DEBUG_PROVIDERS,
-    CONF_DEBUG_RELOAD: Tag.DEBUG_RELOAD,
     CONF_CONFIG_READ: Tag.CONFIG_READ,
     CONF_CONFIG_WRITE_PROVIDER: Tag.CONFIG_WRITE_PROVIDER,
     CONF_CONFIG_WRITE_CORE: Tag.CONFIG_WRITE_CORE,

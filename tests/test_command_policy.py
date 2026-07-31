@@ -71,6 +71,28 @@ def test_safe_queue_extension_keeps_always_destructive_policy() -> None:
     assert decision.annotations["destructiveHint"] is True
 
 
+def test_player_queue_write_operations_require_edit_queue_permission() -> None:
+    """Saving a queue is an edit, not an untagged write-scope escape hatch."""
+    decision = resolve_command_policy("player_queues/save_as_playlist", "library.write", None)
+
+    assert decision.required_tags == frozenset({str(Tag.EDIT_QUEUE)})
+
+
+def test_provider_reload_is_confirmed_destructive_config_write() -> None:
+    """Native provider reload cannot bypass the provider-write permission or confirmation."""
+    decision = resolve_command_policy("config/providers/reload", "config.providers.write", None)
+
+    assert decision.risk is DynamicRisk.WRITE
+    assert decision.required_tags == frozenset({str(Tag.CONFIG_WRITE_PROVIDER)})
+    assert decision.confirmation is Confirmation.ALWAYS
+    assert decision.annotations == {
+        "readOnlyHint": False,
+        "destructiveHint": True,
+        "idempotentHint": False,
+        "openWorldHint": False,
+    }
+
+
 @pytest.mark.parametrize(
     ("command", "scope", "risk"),
     [
