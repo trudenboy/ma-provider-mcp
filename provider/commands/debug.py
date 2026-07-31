@@ -132,10 +132,10 @@ async def health(
         queues = []
     disabled_capabilities: list[str] = []
     events_per_min: dict[str, float] | None = None
-    if buffer is None or buffer.stats().subscribed_since is None:
+    stats = buffer.stats() if buffer is not None else None
+    if stats is None or stats.subscribed_since is None:
         disabled_capabilities.append("DEBUG_EVENTS")
     else:
-        stats = buffer.stats()
         subscribed_at = datetime.fromisoformat(stats.subscribed_since)
         from music_assistant.helpers.datetime import now as ma_now  # noqa: PLC0415
 

@@ -7,7 +7,7 @@ import inspect
 from collections.abc import Callable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from music_assistant_models.auth import Scope
 
@@ -52,7 +52,10 @@ def _register(mass: Any, definition: ProviderCommand) -> Callable[[], None]:
     options: dict[str, Any] = {"authenticated": True}
     if "required_scope" in supported:
         options["required_scope"] = _scope(definition.required_scope)
-    return mass.register_api_command(definition.command, definition.handler, **options)
+    return cast(
+        "Callable[[], None]",
+        mass.register_api_command(definition.command, definition.handler, **options),
+    )
 
 
 class ProviderCommandSet:
@@ -66,9 +69,12 @@ class ProviderCommandSet:
     ) -> None:
         """Bind MA state and lazy providers for configuration and diagnostics."""
         self._mass = mass
-        self._config_provider = (
-            (lambda: config_provider) if hasattr(config_provider, "get_value") else config_provider
-        )
+        self._config_provider: Callable[[], ProviderConfig]
+        if hasattr(config_provider, "get_value"):
+            fixed_config = cast("ProviderConfig", config_provider)
+            self._config_provider = lambda: fixed_config
+        else:
+            self._config_provider = config_provider
         self._current_config: ProviderConfig | None = None
         self._diagnostics_provider = diagnostics_provider
         self._buffer: EventBuffer | None = EventBuffer(

@@ -15,7 +15,7 @@ async def test_safe_remove_never_deletes_played_or_buffered_rows() -> None:
     """Every requested id is classified once and only a future row is deleted."""
     mass = MagicMock()
     mass.player_queues.get.return_value = SimpleNamespace(current_index=1, index_in_buffer=2)
-    positions = {
+    positions: dict[str, list[int | None]] = {
         "played": [1],
         "buffered": [2],
         "future": [3, None],

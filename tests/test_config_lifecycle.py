@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -214,7 +214,6 @@ async def test_failed_runtime_replacement_clears_runtime_and_retries(
     mass = _LifecycleMass()
     provider = _provider(mass, _config())
     fail_replacement = False
-    instances: list[Runtime] = []
 
     class Runtime:
         def __init__(self, *_args: Any, **_kwargs: Any) -> None:
@@ -231,9 +230,11 @@ async def test_failed_runtime_replacement_clears_runtime_and_retries(
         def dynamic_diagnostics(self) -> dict[str, bool]:
             return {"available": True}
 
+    instances: list[Runtime] = []
+
     monkeypatch.setattr(server, "MCPServerRuntime", Runtime)
     await provider.handle_async_init()
-    initial = provider._runtime
+    initial = cast("Runtime | None", provider._runtime)
     assert initial is not None
 
     fail_replacement = True
@@ -250,7 +251,7 @@ async def test_failed_runtime_replacement_clears_runtime_and_retries(
     fail_replacement = False
     await provider.update_config(_config(), {"mount_path"})
 
-    assert provider._runtime is instances[-1]
+    assert cast("Runtime | None", provider._runtime) is instances[-1]
     assert provider._commands.event_buffer is not None
     await provider.unload()
 

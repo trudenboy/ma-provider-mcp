@@ -24,7 +24,9 @@ def _wire_queue(
         index_in_buffer=index_in_buffer,
     )
     mass.player_queues.index_by_id.side_effect = lambda _queue_id, item_id: indices.get(item_id)
-    mass.player_queues.delete_item.side_effect = lambda _queue_id, item_id: indices.pop(item_id, None)
+    mass.player_queues.delete_item.side_effect = lambda _queue_id, item_id: indices.pop(
+        item_id, None
+    )
 
 
 async def test_remove_items_safe_reports_every_requested_item(mock_mass: MagicMock) -> None:

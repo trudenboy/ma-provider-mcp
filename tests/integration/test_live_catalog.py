@@ -7,7 +7,7 @@ import json
 import os
 import time
 from collections.abc import AsyncIterator, Mapping
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from fastmcp import Client
@@ -25,6 +25,8 @@ LIBRARY_ITEM_COMMANDS = [
     "music/tracks/library_items",
 ]
 
+type LiveClient = Client[Any]
+
 
 async def _accept_elicitation(message: str, response_type: Any, params: Any, context: Any) -> Any:
     """Accept only in the explicit, reversible integration environment."""
@@ -41,7 +43,7 @@ def _live_settings() -> tuple[str, str]:
 
 
 @pytest.fixture
-async def live_client() -> AsyncIterator[Client]:
+async def live_client() -> AsyncIterator[LiveClient]:
     """Yield a live authenticated client only when credentials were supplied."""
     url, token = _live_settings()
     transport = StreamableHttpTransport(url, auth=token)
@@ -49,7 +51,7 @@ async def live_client() -> AsyncIterator[Client]:
         yield client
 
 
-async def call_ma(client: Client, command: str, arguments: Mapping[str, Any]) -> Any:
+async def call_ma(client: LiveClient, command: str, arguments: Mapping[str, Any]) -> Any:
     """Invoke a canonical MA command and return its JSON-compatible payload."""
     result = await client.call_tool(
         "call_tool", {"name": f"ma_api:{command}", "arguments": dict(arguments)}
@@ -74,12 +76,15 @@ def item_id(item: Mapping[str, Any]) -> str:
     return str(item.get("queue_item_id") or item["item_id"])
 
 
-async def queue_items(client: Client, queue_id: str) -> list[dict[str, Any]]:
+async def queue_items(client: LiveClient, queue_id: str) -> list[dict[str, Any]]:
     """Read enough queue items to compare ordering after reversible cleanup."""
-    return await call_ma(client, "player_queues/items", {"queue_id": queue_id, "limit": 500})
+    return cast(
+        "list[dict[str, Any]]",
+        await call_ma(client, "player_queues/items", {"queue_id": queue_id, "limit": 500}),
+    )
 
 
-async def find_test_track_uri(client: Client, *, purpose: str) -> str:
+async def find_test_track_uri(client: LiveClient, *, purpose: str) -> str:
     """Find one provider-backed item, or explicitly skip unavailable live coverage."""
     search = await call_ma(
         client,
@@ -102,11 +107,13 @@ async def find_test_track_uri(client: Client, *, purpose: str) -> str:
 
 
 async def wait_for_own_added_item(
-    client: Client, queue_id: str, before_ids: set[str], track_uri: str
+    client: LiveClient, queue_id: str, before_ids: set[str], track_uri: str
 ) -> dict[str, Any]:
     """Find only this test's one new URI, never a concurrent caller's row."""
     for _attempt in range(20):
-        added = [item for item in await queue_items(client, queue_id) if item_id(item) not in before_ids]
+        added = [
+            item for item in await queue_items(client, queue_id) if item_id(item) not in before_ids
+        ]
         owned = [item for item in added if str(item.get("uri", "")) == track_uri]
         if len(owned) == 1:
             return owned[0]
@@ -116,7 +123,7 @@ async def wait_for_own_added_item(
     raise AssertionError("test-added queue item did not appear within five seconds")
 
 
-async def remove_added_item(client: Client, queue_id: str, added_id: str) -> None:
+async def remove_added_item(client: LiveClient, queue_id: str, added_id: str) -> None:
     """Remove the exact queue item ID established from this test's unique diff."""
     removed = await call_ma(
         client,
@@ -127,7 +134,7 @@ async def remove_added_item(client: Client, queue_id: str, added_id: str) -> Non
 
 
 @pytest.mark.integration
-async def test_live_meta_surface_and_discovery_latency(live_client: Client) -> None:
+async def test_live_meta_surface_and_discovery_latency(live_client: LiveClient) -> None:
     """The mounted endpoint exposes only discovery tools and has bounded lookup latency."""
     assert {tool.name for tool in await live_client.list_tools()} == {
         "search_tools",
@@ -148,7 +155,9 @@ async def test_live_meta_surface_and_discovery_latency(live_client: Client) -> N
 
 
 @pytest.mark.integration
-async def test_live_track_album_and_player_calls_are_json_serializable(live_client: Client) -> None:
+async def test_live_track_album_and_player_calls_are_json_serializable(
+    live_client: LiveClient,
+) -> None:
     """Provider-backed item, album, and player paths serialize through one envelope."""
     providers = await call_ma(live_client, "providers", {})
     assert any(
@@ -175,7 +184,9 @@ async def test_live_track_album_and_player_calls_are_json_serializable(live_clie
         pytest.skip("configured MA instance has no player for players/get regression")
     player_id = str(players[0]["player_id"])
     await call_ma(live_client, "players/get", {"player_id": player_id})
-    active_queue = await call_ma(live_client, "player_queues/get_active_queue", {"player_id": player_id})
+    active_queue = await call_ma(
+        live_client, "player_queues/get_active_queue", {"player_id": player_id}
+    )
     if not active_queue:
         pytest.skip("configured player has no active queue for queue read regression")
     queue_id = str(active_queue["queue_id"])
@@ -186,7 +197,7 @@ async def test_live_track_album_and_player_calls_are_json_serializable(live_clie
 @pytest.mark.integration
 @pytest.mark.parametrize("command", LIBRARY_ITEM_COMMANDS)
 async def test_live_library_items_have_truthful_schema_and_execute(
-    live_client: Client, command: str
+    live_client: LiveClient, command: str
 ) -> None:
     """Library list schemas have no synthetic kwargs and return JSON data."""
     schema_result = await live_client.call_tool(
@@ -202,7 +213,7 @@ async def test_live_library_items_have_truthful_schema_and_execute(
 
 
 @pytest.mark.integration
-async def test_live_reversible_queue_cycle(live_client: Client) -> None:
+async def test_live_reversible_queue_cycle(live_client: LiveClient) -> None:
     """Only an explicitly selected non-current queue item is added and removed."""
     player_id = require_env("MA_TEST_PLAYER_ID")
     queue = await call_ma(live_client, "player_queues/get_active_queue", {"player_id": player_id})
@@ -255,9 +266,7 @@ async def test_live_reversible_queue_cycle(live_client: Client) -> None:
                 # Recover the exact test-owned row if the first visibility poll
                 # timed out or its response was interrupted. Ambiguous concurrent
                 # rows are rejected by wait_for_own_added_item rather than removed.
-                added = await wait_for_own_added_item(
-                    live_client, queue_id, before_ids, track_uri
-                )
+                added = await wait_for_own_added_item(live_client, queue_id, before_ids, track_uri)
                 added_id = item_id(added)
             await remove_added_item(live_client, queue_id, added_id)
     assert [item_id(item) for item in await queue_items(live_client, queue_id)] == [
@@ -266,7 +275,9 @@ async def test_live_reversible_queue_cycle(live_client: Client) -> None:
 
 
 @pytest.mark.integration
-async def test_live_annotations_and_declined_queue_confirmation(live_client: Client) -> None:
+async def test_live_annotations_and_declined_queue_confirmation(
+    live_client: LiveClient,
+) -> None:
     """Destructive queue schemas and read-only health annotations remain truthful."""
     for command in (
         "player_queues/delete_item",

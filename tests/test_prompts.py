@@ -32,7 +32,9 @@ def mcp_with_prompts() -> FastMCP:
 
 
 def _text(result: Any) -> str:
-    return " ".join(message.content.text for message in result.messages if hasattr(message.content, "text"))
+    return " ".join(
+        message.content.text for message in result.messages if hasattr(message.content, "text")
+    )
 
 
 async def test_gate_off_registers_no_prompts() -> None:

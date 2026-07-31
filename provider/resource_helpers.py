@@ -125,9 +125,7 @@ def to_brief_queue(
                     name=item_name,
                     index=items_offset + row_index,
                     duration=_int(getattr(item, "duration", None)),
-                    artists=_names(
-                        getattr(getattr(item, "media_item", None), "artists", None)
-                    ),
+                    artists=_names(getattr(getattr(item, "media_item", None), "artists", None)),
                 )
             )
     raw_total = getattr(queue, "items", None)

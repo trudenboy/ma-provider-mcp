@@ -3,7 +3,8 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 from music_assistant_models.auth import Scope, UserRole
 from music_assistant_models.errors import AuthenticationRequired, InsufficientPermissions
@@ -25,22 +26,33 @@ except ImportError:
         return None
 
 
-try:
-    from music_assistant.controllers.webserver.helpers.auth_middleware import (
-        has_scope as _ma_has_scope,
-    )
-except ImportError:
-    _ma_has_scope: Any = None
+def _load_ma_has_scope() -> Callable[[User, Scope], bool] | None:
+    """Load MA's scope helper while retaining compatibility with older releases."""
+    try:
+        from music_assistant.controllers.webserver.helpers.auth_middleware import (  # noqa: PLC0415
+            has_scope,
+        )
+    except ImportError:
+        return None
+    return has_scope
+
+
+_ma_has_scope = _load_ma_has_scope()
 
 
 def scope_allowed(user: User, required_scope: str) -> bool:
     """Use MA scope checks when available; otherwise apply a narrow role fallback."""
     if not getattr(user, "enabled", False):
         return False
-    role = getattr(user, "role", None)
-    if not isinstance(role, UserRole):
+    raw_role = getattr(user, "role", None)
+    if isinstance(raw_role, UserRole):
+        role = raw_role
+    else:
+        role_value = getattr(raw_role, "value", raw_role)
+        if not isinstance(role_value, str):
+            return False
         try:
-            role = UserRole(getattr(role, "value", role))
+            role = UserRole(role_value)
         except TypeError, ValueError:
             return False
     if _ma_has_scope is not None:

@@ -12,7 +12,8 @@ import pytest
 from fastmcp.server.auth import AccessToken
 from music_assistant_models.media_items import Track  # noqa: TC002
 
-from provider.dynamic_api import DynamicAPIAdapter, DynamicPolicy
+from provider.command_policy import DynamicPolicy
+from provider.dynamic_api import DynamicAPIAdapter
 from provider.dynamic_signatures import UnsupportedSignatureError, compile_signature
 from provider.tags import Tag
 

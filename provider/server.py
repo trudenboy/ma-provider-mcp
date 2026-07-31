@@ -251,7 +251,8 @@ class MCPServerRuntime:
         """Install the permanent dynamic command discovery layer."""
         from fastmcp.server.dependencies import get_access_token  # noqa: PLC0415
 
-        from .dynamic_api import DynamicAPIAdapter, DynamicPolicy  # noqa: PLC0415
+        from .command_policy import DynamicPolicy  # noqa: PLC0415
+        from .dynamic_api import DynamicAPIAdapter  # noqa: PLC0415
         from .meta_discovery import register_meta_discovery  # noqa: PLC0415
 
         def config_bool(key: str, *, default: bool = False) -> bool:

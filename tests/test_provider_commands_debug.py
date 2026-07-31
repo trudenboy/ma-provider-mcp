@@ -145,12 +145,8 @@ async def test_event_callback_isolates_malformed_payloads_and_stays_usable(
     buffer = EventBuffer(mock_mass, capacity=50)
     buffer.start()
 
-    fake_event_emitter.emit(
-        SimpleNamespace(event="broken", object_id="bad", data=payload)
-    )
-    fake_event_emitter.emit(
-        SimpleNamespace(event="healthy", object_id="good", data={"ok": True})
-    )
+    fake_event_emitter.emit(SimpleNamespace(event="broken", object_id="bad", data=payload))
+    fake_event_emitter.emit(SimpleNamespace(event="healthy", object_id="good", data={"ok": True}))
 
     snapshot = await recent_events(buffer, limit=10)
     stats = await event_buffer_stats(buffer)

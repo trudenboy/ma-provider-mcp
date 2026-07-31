@@ -66,9 +66,7 @@ def compile_signature(
         if parameter.kind is inspect.Parameter.VAR_POSITIONAL
     ]
     if variadic:
-        raise UnsupportedSignatureError(
-            f"Unsupported variadic parameter *{variadic[0].name}"
-        )
+        raise UnsupportedSignatureError(f"Unsupported variadic parameter *{variadic[0].name}")
     named = [
         parameter
         for parameter in signature.parameters.values()
@@ -77,14 +75,10 @@ def compile_signature(
     parse_signature = signature.replace(parameters=named)
     schema = _input_schema(parse_signature, type_hints)
     schema["additionalProperties"] = allow_extra_kwargs
-    return CompiledSignature(
-        signature, parse_signature, type_hints, schema, allow_extra_kwargs
-    )
+    return CompiledSignature(signature, parse_signature, type_hints, schema, allow_extra_kwargs)
 
 
-def _input_schema(
-    signature: inspect.Signature, type_hints: Mapping[str, Any]
-) -> dict[str, Any]:
+def _input_schema(signature: inspect.Signature, type_hints: Mapping[str, Any]) -> dict[str, Any]:
     """Build the JSON schema for supported named input parameters."""
     properties: dict[str, Any] = {}
     required: list[str] = []

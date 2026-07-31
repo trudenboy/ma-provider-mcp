@@ -58,6 +58,7 @@ CURATED_PROFILE_MAPPINGS: dict[str, str] = {
     "volume_group_volume_set": "players/cmd/group_volume",
 }
 
+
 @dataclass(frozen=True, slots=True)
 class LegacyMigration:
     """One non-executable legacy-name replacement or concrete usage hint."""
@@ -126,9 +127,13 @@ LEGACY_COMMAND_MAPPINGS: dict[str, LegacyMigration] = {
     "mcp_api:config/entries": retired("Use the target-specific config/*/get_entries command"),
     "mcp_api:config/save": retired("Use the target-specific config/*/save command"),
     "mcp_api:config/save_dsp": migration("config/players/dsp/save"),
-    "mcp_api:debug/inspect": retired("Use native players, queues, providers, config, or diagnostics commands"),
+    "mcp_api:debug/inspect": retired(
+        "Use native players, queues, providers, config, or diagnostics commands"
+    ),
     "mcp_api:debug/logs": retired("Use fastmcp/debug/tail_log or fastmcp/debug/log_stats"),
-    "mcp_api:debug/events": retired("Use fastmcp/debug/recent_events or fastmcp/debug/event_buffer_stats"),
+    "mcp_api:debug/events": retired(
+        "Use fastmcp/debug/recent_events or fastmcp/debug/event_buffer_stats"
+    ),
     "mcp_api:debug/health": migration("fastmcp/debug/health"),
     "mcp_api:debug/routes": migration("fastmcp/debug/routes"),
     "mcp_api:debug/packages": migration("fastmcp/debug/packages"),
@@ -262,7 +267,15 @@ def _build_profiles() -> dict[str, CommandProfile]:
         )
     profiles["providers"] = CommandProfile(
         command="providers",
-        compact_fields=("instance_id", "domain", "type", "name", "available", "enabled", "last_error"),
+        compact_fields=(
+            "instance_id",
+            "domain",
+            "type",
+            "name",
+            "available",
+            "enabled",
+            "last_error",
+        ),
         risk_override="read",
         annotations=_READ_ANNOTATIONS,
     )

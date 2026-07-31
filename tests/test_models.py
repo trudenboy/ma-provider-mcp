@@ -158,7 +158,9 @@ def test_to_brief_queue_does_not_infer_total_from_partial_page() -> None:
         shuffle_enabled=False,
         repeat_mode=None,
     )
-    assert to_brief_queue(queue, [SimpleNamespace(queue_item_id="1", name="One")]).item_count is None
+    assert (
+        to_brief_queue(queue, [SimpleNamespace(queue_item_id="1", name="One")]).item_count is None
+    )
 
 
 def test_safe_active_queue_swallows_upstream_lookup_errors() -> None:

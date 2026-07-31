@@ -20,7 +20,7 @@ from music_assistant_models.config_entries import ConfigEntry
 from music_assistant_models.enums import ConfigEntryType
 
 from provider import meta_discovery
-from provider.command_policy import Confirmation
+from provider.command_policy import Confirmation, DynamicPolicy, DynamicRisk
 from provider.command_profiles import (
     COMMAND_PROFILES,
     CURATED_PROFILE_MAPPINGS,
@@ -31,10 +31,8 @@ from provider.dynamic_api import (
     CatalogView,
     DynamicAPIAdapter,
     DynamicEntry,
-    DynamicPolicy,
-    DynamicRisk,
 )
-from provider.meta_discovery import register_meta_discovery
+from provider.meta_discovery import DynamicAdapter, register_meta_discovery
 from provider.server import build_tag_lookup
 from provider.tags import Tag
 
@@ -168,7 +166,7 @@ async def test_search_returns_retired_alias_as_non_executable_migration_hint() -
     assert "Use search_tools" in search.data[0]["description"]
 
 
-def _meta_service(adapter: DynamicAPIAdapter) -> Any:
+def _meta_service(adapter: DynamicAdapter) -> Any:
     """Construct the direct discovery service after proving it is exported."""
     service_type = getattr(meta_discovery, "MetaDiscoveryService", None)
     assert service_type is not None
@@ -202,6 +200,20 @@ class _SnapshotAdapter:
     async def visible_catalog(self) -> CatalogView:
         """Make all test entries visible."""
         return CatalogView(self.snapshot.fingerprint, self.snapshot.entries)
+
+    async def call(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+        *,
+        response_mode: str,
+        fields: list[str] | None,
+        max_items: int | None,
+        ctx: Any,
+    ) -> dict[str, Any]:
+        """Satisfy the discovery adapter protocol; these tests never execute calls."""
+        del name, arguments, response_mode, fields, max_items, ctx
+        raise NotImplementedError
 
 
 async def test_search_retries_when_registry_changes_between_catalog_reads() -> None:
@@ -290,10 +302,12 @@ async def test_failed_index_build_releases_waiters_and_retries(
         return await build_index(candidate)
 
     monkeypatch.setattr(service, "_build_index", fail_once)
-    first, second = await asyncio.gather(
+    outcomes = await asyncio.gather(
         service.search("search"), service.search("search"), return_exceptions=True
     )
+    first, second = outcomes
     assert isinstance(first, RuntimeError)
+    assert not isinstance(second, BaseException)
     assert second == [{"name": "ma_api:music/search", "description": "Search music."}]
     assert await service.search("search") == second
     assert attempts == 2
@@ -632,6 +646,7 @@ async def test_failed_snapshot_build_does_not_poison_future_reads(
         adapter.base_snapshot(), adapter.base_snapshot(), return_exceptions=True
     )
     assert isinstance(outcomes[0], RuntimeError)
+    assert isinstance(outcomes[1], CatalogSnapshot)
     assert outcomes[1].entries[0].name == "ma_api:music/search"
     assert (await adapter.base_snapshot()) is outcomes[1]
     assert attempts == 2
@@ -653,7 +668,7 @@ async def test_cancelled_snapshot_builder_and_waiter_leave_later_reads_usable(
         nonlocal attempts
         attempts += 1
         if attempts == 1:
-            raise asyncio.CancelledError()
+            raise asyncio.CancelledError
         return compile_snapshot(fingerprint)
 
     monkeypatch.setattr(adapter, "_compile_snapshot", cancel_once)
@@ -1000,7 +1015,7 @@ async def test_invocation_rejects_targets_outside_user_filters(
     )
     handler = _handler(command, operation, "players.read")
     handler.type_hints = {parameter: str, "return": dict[str, Any]}
-    filters = {"player_filter": [], "provider_filter": []}
+    filters: dict[str, list[str]] = {"player_filter": [], "provider_filter": []}
     filters[user_filter] = [f"allowed-{user_filter.removesuffix('_filter')}"]
     user = SimpleNamespace(
         user_id="u1",
@@ -1155,6 +1170,7 @@ async def test_queue_delete_always_confirms_before_execution(
     adapter._confirmation_provider = lambda: False
     entry = (await adapter.visible_entries())[0]
     assert entry.risk is DynamicRisk.WRITE
+    assert entry.decision is not None
     assert entry.decision.confirmation is Confirmation.ALWAYS
     await adapter.call(
         "ma_api:player_queues/clear",
@@ -1164,7 +1180,9 @@ async def test_queue_delete_always_confirms_before_execution(
         max_items=None,
         ctx=MagicMock(),
     )
-    assert confirmation.await_args.kwargs["enabled"] is True
+    await_args = confirmation.await_args
+    assert await_args is not None
+    assert await_args.kwargs["enabled"] is True
     assert called is True
 
 

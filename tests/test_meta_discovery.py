@@ -8,6 +8,7 @@ from typing import Any
 from fastmcp import Client, FastMCP
 
 from provider import meta_discovery
+from provider.command_policy import DynamicRisk
 from provider.config import build_config_entries
 from provider.constants import (
     CONF_DYNAMIC_API_CONTROL,
@@ -17,7 +18,7 @@ from provider.constants import (
     DEFAULT_MOUNT_PATH,
     HOT_SWAPPABLE_KEYS,
 )
-from provider.dynamic_api import CatalogSnapshot, CatalogView, DynamicEntry, DynamicRisk
+from provider.dynamic_api import CatalogSnapshot, CatalogView, DynamicEntry
 from provider.meta_discovery import register_meta_discovery
 from provider.server import build_tag_lookup
 

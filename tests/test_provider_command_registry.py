@@ -14,7 +14,8 @@ from music_assistant_models.auth import Scope, User, UserRole
 from music_assistant_models.errors import AuthenticationRequired, InsufficientPermissions
 
 from music_assistant.helpers.api import APICommandHandler, parse_arguments
-from provider.commands import ProviderCommandSet, authorization, registry
+from provider.commands import ProviderCommandSet, authorization
+from provider.commands import debug as debug_commands
 from provider.commands.authorization import authorize_extension, scope_allowed
 from provider.dynamic_signatures import compile_signature
 from provider.models import (
@@ -274,7 +275,7 @@ async def test_registered_handlers_keep_native_parseable_signatures_and_result_t
     plain_tail = AsyncMock(
         return_value=LogTailResult(log_path="x", lines=[], bytes_scanned=0, truncated=False)
     )
-    monkeypatch.setattr(registry.debug, "tail_log", plain_tail)
+    monkeypatch.setattr(debug_commands, "tail_log", plain_tail)
     result = await tail(**parsed)
     assert result.log_path == "x"
     plain_tail.assert_awaited_once_with(mass, **parsed)
