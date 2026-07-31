@@ -12,14 +12,14 @@ Provider repo for the Music Assistant `mcp_server` plugin. Synced into the
 - `provider/server.py::MCPServerRuntime` builds one root `FastMCP` with exactly three
   permanent meta-tools: `search_tools`, `get_tool_schema`, and `call_tool`.
 - `provider/dynamic_api.py::DynamicAPIAdapter` exposes native `ma_api` commands from
-  MA's live command-handler registry. Eight registered provider-extension handlers,
-  plus resources and prompts, remain available through that catalog rather than a
-  sub-server tool surface.
-- The runtime applies `restrict_tag` middleware and mounts the streamable-HTTP ASGI app
+  MA's live command-handler registry. Eight registered provider-extension handlers
+  remain available through that catalog rather than a sub-server tool surface.
+- Resources and prompts are registered directly on the root `FastMCP`.
+- The runtime applies custom `TagFilterMiddleware` and mounts the streamable-HTTP ASGI app
   under MA's webserver via `http_bridge.py`.
 - `provider/auth.py::MASTokenVerifier` is the only auth code — delegates to
   `mass.webserver.auth.authenticate_with_token`.
-- `provider/tags.py` maps the 16 permission `ConfigEntry` booleans to FastMCP tags.
+- `provider/tags.py` maps the 25 permission `ConfigEntry` booleans to FastMCP tags.
 
 ## Conventions
 

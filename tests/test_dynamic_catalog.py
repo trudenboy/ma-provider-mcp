@@ -9,11 +9,11 @@ import sys
 from dataclasses import dataclass
 from enum import StrEnum
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from fastmcp import Client, FastMCP
+from fastmcp import Client, Context, FastMCP
 from fastmcp.exceptions import ToolError
 from fastmcp.server.auth import AccessToken
 from mcp.shared.exceptions import McpError
@@ -450,6 +450,7 @@ def _real_adapter(
     mass.command_handlers = {handler.command: handler}
     user = user or MagicMock(user_id="u1", enabled=True, role="admin")
     mass.webserver.auth.get_user = AsyncMock(return_value=user)
+    mass.webserver.auth.authenticate_with_token = AsyncMock(return_value=user)
     token = AccessToken(token="secret", client_id="u1", scopes=[])
     return DynamicAPIAdapter(
         mass,
@@ -501,7 +502,11 @@ async def test_required_confirmation_rejects_missing_context() -> None:
 async def test_required_confirmation_rejects_unsupported_elicitation(error: Exception) -> None:
     """Mandatory confirmation cannot silently skip unsupported client elicitation."""
     with pytest.raises(ToolError, match="confirmation is required"):
-        await confirm_or_raise(_UnsupportedElicitationContext(error), "Confirm", required=True)
+        await confirm_or_raise(
+            cast("Context", _UnsupportedElicitationContext(error)),
+            "Confirm",
+            required=True,
+        )
 
 
 @pytest.mark.parametrize(
@@ -514,7 +519,11 @@ async def test_required_confirmation_rejects_unsupported_elicitation(error: Exce
 )
 async def test_configured_confirmation_skips_unsupported_elicitation(error: Exception) -> None:
     """Configured prompts retain compatibility with clients without elicitation."""
-    await confirm_or_raise(_UnsupportedElicitationContext(error), "Confirm", required=False)
+    await confirm_or_raise(
+        cast("Context", _UnsupportedElicitationContext(error)),
+        "Confirm",
+        required=False,
+    )
 
 
 async def test_configured_confirmation_skips_missing_context() -> None:
@@ -1413,6 +1422,9 @@ async def test_fresh_authentication_rejects_removed_or_disabled_user_after_confi
         user=initial_user,
     )
     adapter.mass.webserver.auth.get_user = AsyncMock(side_effect=lambda _user_id: current_user)
+    adapter.mass.webserver.auth.authenticate_with_token = AsyncMock(
+        side_effect=lambda _token: current_user
+    )
 
     async def change_user(*_args: Any, **_kwargs: Any) -> None:
         nonlocal current_user
@@ -1426,6 +1438,103 @@ async def test_fresh_authentication_rejects_removed_or_disabled_user_after_confi
         "provider.dynamic_api.confirm_or_raise",
         AsyncMock(side_effect=change_user),
     )
+
+    with pytest.raises(ToolError, match="Authentication is required"):
+        await adapter.call(
+            "ma_api:config/providers/reload",
+            {},
+            response_mode="compact",
+            fields=None,
+            max_items=None,
+            ctx=MagicMock(),
+        )
+    assert called is False
+
+
+async def test_revoked_bearer_token_after_confirmation_prevents_execution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Post-confirm authorization rejects a token that MA no longer accepts."""
+    _bypass_ma_argument_parser(monkeypatch)
+    called = False
+
+    async def reload_provider() -> None:
+        nonlocal called
+        called = True
+
+    adapter = _real_adapter(
+        _handler("config/providers/reload", reload_provider, "config.providers.write"),
+        policy=DynamicPolicy(write=True),
+        allowed_tags={str(Tag.CONFIG_WRITE_PROVIDER)},
+    )
+    adapter.mass.webserver.auth.authenticate_with_token = AsyncMock(return_value=None)
+    monkeypatch.setattr("provider.dynamic_api.confirm_or_raise", AsyncMock())
+
+    with pytest.raises(ToolError, match="Authentication is required"):
+        await adapter.call(
+            "ma_api:config/providers/reload",
+            {},
+            response_mode="compact",
+            fields=None,
+            max_items=None,
+            ctx=MagicMock(),
+        )
+    adapter.mass.webserver.auth.authenticate_with_token.assert_awaited_once_with("secret")
+    assert called is False
+
+
+async def test_valid_bearer_revalidation_uses_the_fresh_user_after_confirmation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Post-confirm execution uses the user returned by MA token validation."""
+    _bypass_ma_argument_parser(monkeypatch)
+    called = False
+    fresh_user = SimpleNamespace(user_id="u1", enabled=True, role="admin")
+
+    async def reload_provider() -> None:
+        nonlocal called
+        called = True
+
+    adapter = _real_adapter(
+        _handler("config/providers/reload", reload_provider, "config.providers.write"),
+        policy=DynamicPolicy(write=True),
+        allowed_tags={str(Tag.CONFIG_WRITE_PROVIDER)},
+    )
+    adapter.mass.webserver.auth.authenticate_with_token = AsyncMock(return_value=fresh_user)
+    monkeypatch.setattr("provider.dynamic_api.confirm_or_raise", AsyncMock())
+
+    await adapter.call(
+        "ma_api:config/providers/reload",
+        {},
+        response_mode="compact",
+        fields=None,
+        max_items=None,
+        ctx=MagicMock(),
+    )
+    adapter.mass.webserver.auth.authenticate_with_token.assert_awaited_once_with("secret")
+    assert called is True
+
+
+async def test_post_confirmation_revalidation_rejects_a_different_user(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A bearer token cannot switch the adapter to another MA user identity."""
+    _bypass_ma_argument_parser(monkeypatch)
+    called = False
+
+    async def reload_provider() -> None:
+        nonlocal called
+        called = True
+
+    adapter = _real_adapter(
+        _handler("config/providers/reload", reload_provider, "config.providers.write"),
+        policy=DynamicPolicy(write=True),
+        allowed_tags={str(Tag.CONFIG_WRITE_PROVIDER)},
+    )
+    adapter.mass.webserver.auth.authenticate_with_token = AsyncMock(
+        return_value=SimpleNamespace(user_id="other-user", enabled=True, role="admin")
+    )
+    monkeypatch.setattr("provider.dynamic_api.confirm_or_raise", AsyncMock())
 
     with pytest.raises(ToolError, match="Authentication is required"):
         await adapter.call(
@@ -1465,6 +1574,9 @@ async def test_target_filter_revoked_during_confirmation_prevents_execution(
         user=current_user,
     )
     adapter.mass.webserver.auth.get_user = AsyncMock(side_effect=lambda _user_id: current_user)
+    adapter.mass.webserver.auth.authenticate_with_token = AsyncMock(
+        side_effect=lambda _token: current_user
+    )
 
     async def revoke_filter(*_args: Any, **_kwargs: Any) -> None:
         nonlocal current_user

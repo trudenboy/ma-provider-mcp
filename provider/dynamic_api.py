@@ -267,7 +267,7 @@ class DynamicAPIAdapter:
             impersonated=impersonated,
         )
         await self._confirm(entry, ctx, impersonating=impersonating)
-        auth = await self._authentication()
+        auth = await self._authentication(revalidate=True)
         if auth is None and self._auth_required_provider():
             raise ToolError("Authentication is required")
         entry, impersonated_user = await self._authorize_call(
@@ -369,14 +369,26 @@ class DynamicAPIAdapter:
             last_error=diagnostics.last_error,
         )
 
-    async def _authentication(self) -> tuple[AccessToken, Any] | None:
+    async def _authentication(
+        self,
+        *,
+        revalidate: bool = False,
+    ) -> tuple[AccessToken, Any] | None:
         """Resolve the MCP access token to an enabled MA user."""
         token = self._token_provider()
         if token is None:
             return None
-        user = self.mass.webserver.auth.get_user(token.client_id)
-        if inspect.isawaitable(user):
-            user = await user
+        if revalidate:
+            try:
+                user = await self.mass.webserver.auth.authenticate_with_token(token.token)
+            except Exception:
+                return None
+            if getattr(user, "user_id", None) != token.client_id:
+                return None
+        else:
+            user = self.mass.webserver.auth.get_user(token.client_id)
+            if inspect.isawaitable(user):
+                user = await user
         if user is None or getattr(user, "enabled", True) is False:
             return None
         return token, user
