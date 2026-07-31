@@ -11,7 +11,9 @@ feature_id:
 > **Superseded in part.** The permanent three-meta-tool discovery model remains,
 > but the `mcp_api:*` recipe design below is historical. Provider extensions are
 > now ordinary MA registry handlers as specified in
-> `docs/superpowers/specs/2026-07-30-native-ma-command-catalog-design.md`.
+> `docs/superpowers/specs/2026-07-30-native-ma-command-catalog-design.md`. The
+> historical five-result array contract is replaced by the paginated page contract
+> in `docs/superpowers/specs/2026-07-31-paginated-command-catalog-design.md`.
 
 ## Problem Statement
 

@@ -42,6 +42,15 @@ def _live_settings() -> tuple[str, str]:
     return url, token
 
 
+def _restricted_live_settings() -> tuple[str, str]:
+    """Require a separately scoped token for cursor-isolation coverage."""
+    url = os.getenv("MA_MCP_URL")
+    token = os.getenv("MA_MCP_RESTRICTED_TOKEN")
+    if not url or not token:
+        pytest.skip("set MA_MCP_URL and MA_MCP_RESTRICTED_TOKEN for restricted catalog tests")
+    return url, token
+
+
 @pytest.fixture
 async def live_client() -> AsyncIterator[LiveClient]:
     """Yield a live authenticated client only when credentials were supplied."""
@@ -49,6 +58,61 @@ async def live_client() -> AsyncIterator[LiveClient]:
     transport = StreamableHttpTransport(url, auth=token)
     async with Client(transport, elicitation_handler=_accept_elicitation) as client:
         yield client
+
+
+@pytest.fixture
+async def restricted_live_client() -> AsyncIterator[LiveClient]:
+    """Yield an explicitly restricted MA user for visibility-isolation coverage."""
+    url, token = _restricted_live_settings()
+    transport = StreamableHttpTransport(url, auth=token)
+    async with Client(transport, elicitation_handler=_accept_elicitation) as client:
+        yield client
+
+
+async def collect_tool_catalog(client: LiveClient) -> tuple[list[str], str]:
+    """Traverse every alphabetical command page through the discovery tool."""
+    names: list[str] = []
+    cursor: str | None = None
+    revision: str | None = None
+    total: int | None = None
+    while True:
+        arguments: dict[str, Any] = {"limit": 50}
+        if cursor is None:
+            arguments["query"] = ""
+        else:
+            arguments["cursor"] = cursor
+        result = await client.call_tool("search_tools", arguments)
+        assert not result.is_error, result.content
+        page = result.data
+        assert page["mode"] == "catalog"
+        revision = revision or str(page["catalog_revision"])
+        total = int(page["total"]) if total is None else total
+        assert page["catalog_revision"] == revision
+        assert page["total"] == total
+        names.extend(str(item["name"]) for item in page["items"])
+        cursor = page["next_cursor"]
+        if cursor is None:
+            assert len(names) == total
+            return names, cast("str", revision)
+
+
+async def collect_resource_catalog(client: LiveClient) -> tuple[list[str], str]:
+    """Traverse the same alphabetical catalog through its resource pages."""
+    names: list[str] = []
+    uri: str | None = "catalog://commands?limit=50"
+    revision: str | None = None
+    total: int | None = None
+    while uri is not None:
+        contents = await client.read_resource(uri)
+        page = json.loads(next(item.text for item in contents if hasattr(item, "text")))
+        revision = revision or str(page["catalog_revision"])
+        total = int(page["total"]) if total is None else total
+        assert page["catalog_revision"] == revision
+        assert page["total"] == total
+        names.extend(str(item["name"]) for item in page["items"])
+        uri = page["next_uri"]
+    assert len(names) == total
+    return names, cast("str", revision)
 
 
 async def call_ma(client: LiveClient, command: str, arguments: Mapping[str, Any]) -> Any:
@@ -152,6 +216,46 @@ async def test_live_meta_surface_and_discovery_latency(live_client: LiveClient) 
     print(f"discovery cold={cold_elapsed:.3f}s warm={warm_elapsed:.3f}s")  # noqa: T201
     assert cold_elapsed < 5.0
     assert warm_elapsed < 1.0
+
+
+@pytest.mark.integration
+async def test_live_paginated_catalog_tool_resource_parity(live_client: LiveClient) -> None:
+    """Tool and resource traversal enumerate one stable visible MA catalog."""
+    templates = {str(item.uriTemplate) for item in await live_client.list_resource_templates()}
+    assert "catalog://commands{?cursor,limit}" in templates
+    tool_names, tool_revision = await collect_tool_catalog(live_client)
+    resource_names, resource_revision = await collect_resource_catalog(live_client)
+    assert tool_names == sorted(tool_names)
+    assert len(tool_names) == len(set(tool_names))
+    assert resource_names == tool_names
+    assert resource_revision == tool_revision
+    for name in (
+        "ma_api:music/search",
+        "ma_api:music/albums/library_items",
+        "ma_api:providers",
+        "ma_api:players/all",
+        "ma_api:player_queues/items",
+        "ma_api:config/providers",
+        "ma_api:fastmcp/debug/health",
+    ):
+        assert name in tool_names
+        schema = await live_client.call_tool("get_tool_schema", {"tool_name": name})
+        assert schema.data["name"] == name
+
+
+@pytest.mark.integration
+async def test_live_restricted_catalog_isolated_from_broader_cursor(
+    live_client: LiveClient, restricted_live_client: LiveClient
+) -> None:
+    """A cursor issued to a broader user never crosses the restricted view."""
+    broad_first = await live_client.call_tool("search_tools", {"query": "", "limit": 1})
+    restricted_names, _revision = await collect_tool_catalog(restricted_live_client)
+    broad_names, _revision = await collect_tool_catalog(live_client)
+    assert set(restricted_names) < set(broad_names)
+    with pytest.raises(ToolError, match="catalog_changed"):
+        await restricted_live_client.call_tool(
+            "search_tools", {"cursor": broad_first.data["next_cursor"]}
+        )
 
 
 @pytest.mark.integration

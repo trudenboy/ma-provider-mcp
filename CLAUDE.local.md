@@ -14,6 +14,8 @@ Provider repo for the Music Assistant `mcp_server` plugin. Synced into the
 - `provider/dynamic_api.py::DynamicAPIAdapter` exposes native `ma_api` commands from
   MA's live command-handler registry. Eight registered provider-extension handlers
   remain available through that catalog rather than a sub-server tool surface.
+- `provider/catalog_pagination.py` compiles stable paginated catalog pages and
+  `provider/catalog_resource.py` exposes the matching `catalog://commands` resource.
 - Resources and prompts are registered directly on the root `FastMCP`.
 - The runtime applies custom `TagFilterMiddleware` and mounts the streamable-HTTP ASGI app
   under MA's webserver via `http_bridge.py`.
@@ -28,7 +30,8 @@ Provider repo for the Music Assistant `mcp_server` plugin. Synced into the
 - Stdlib `dataclass` for response shapes (FastMCP auto-generates JSON schema).
 - Reuse `music_assistant_models` types in resource responses; use `*Brief` dataclasses
   in tool responses to keep payloads small for LLM context.
-- Tool decorators always include `tags={Tag.…}` — never untagged.
+- Domain-component tool decorators always include `tags={Tag.…}`. The catalog
+  resource is intentionally untagged infrastructure and applies visibility per entry.
 
 ## AI assistants — commit attribution
 

@@ -44,6 +44,13 @@ items`, inspect the selected `ma_api:*` command with `get_tool_schema`, then inv
 it through `call_tool`. Schemas are loaded one at a time, and runtime changes to
 Music Assistant's command registry become discoverable without adding MCP wrappers.
 
+`search_tools(query="album tracks")` returns a ranked page with descriptions. For a
+complete alphabetical browse, call `search_tools(query="", limit=25)` and follow
+with `search_tools(cursor="...")` until `next_cursor` is null. Resource-aware clients
+can traverse the same catalog through `catalog://commands{?cursor,limit}` and follow
+`next_uri`. Catalog pages contain command names only; descriptions belong to ranked
+search pages, and command schemas always remain on-demand through `get_tool_schema`.
+
 The provider registers eight ordinary MA extension commands under `fastmcp/*`: one
 server-side safe queue batch-removal command and seven bounded diagnostics commands.
 They are discovered and called as `ma_api:fastmcp/*`; there is no separate recipe

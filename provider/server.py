@@ -187,10 +187,11 @@ class MCPServerRuntime:
         mcp = FastMCP(
             name="music-assistant",
             instructions=(
-                "Music Assistant MCP server with on-demand discovery. Use search_tools, "
-                "then get_tool_schema for one canonical ma_api:* command, "
-                "then execute it through call_tool. Responses default to compact mode. "
-                "Resources expose library://, player:// and queue:// views."
+                "Music Assistant MCP server with on-demand discovery. Use search_tools with a short "
+                "query, then get_tool_schema for one canonical ma_api:* command, then execute it "
+                "through call_tool. Use an empty search_tools query or catalog://commands for "
+                "paginated alphabetical browsing. Follow next_cursor/next_uri; responses default "
+                "to compact mode. Resources also expose library://, player:// and queue:// views."
             ),
             auth=verifier,
         )
