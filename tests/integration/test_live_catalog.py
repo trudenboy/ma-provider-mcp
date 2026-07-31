@@ -99,7 +99,8 @@ async def collect_tool_catalog(client: LiveClient) -> tuple[list[str], str]:
         cursor = page["next_cursor"]
         if cursor is None:
             assert len(names) == total
-            return names, cast("str", revision)
+            assert revision is not None
+            return names, revision
 
 
 async def collect_resource_catalog(client: LiveClient) -> tuple[list[str], str]:
@@ -120,6 +121,7 @@ async def collect_resource_catalog(client: LiveClient) -> tuple[list[str], str]:
         names.extend(str(item["name"]) for item in page["items"])
         uri = page["next_uri"]
     assert len(names) == total
+    assert revision is not None
     return names, revision
 
 
