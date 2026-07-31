@@ -5,8 +5,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from ..resource_helpers import to_resource_text
 from ..tags import Tag
-from ..tools._common import to_resource_text
 
 if TYPE_CHECKING:
     from music_assistant.mass import MusicAssistant

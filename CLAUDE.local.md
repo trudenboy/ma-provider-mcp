@@ -9,12 +9,19 @@ Provider repo for the Music Assistant `mcp_server` plugin. Synced into the
 ## Architecture
 
 - `provider/` — runtime code; `manifest.json` declares `type=plugin`, `domain=mcp_server`.
-- `provider/server.py::MCPServerRuntime` builds a root `FastMCP`, mounts 8 sub-servers
-  by namespace, registers resources/prompts, applies `restrict_tag` middleware, and
-  mounts the streamable-HTTP ASGI app under MA's webserver via `http_bridge.py`.
+- `provider/server.py::MCPServerRuntime` builds one root `FastMCP` with exactly three
+  permanent meta-tools: `search_tools`, `get_tool_schema`, and `call_tool`.
+- `provider/dynamic_api.py::DynamicAPIAdapter` exposes native `ma_api` commands from
+  MA's live command-handler registry. Eight registered provider-extension handlers
+  remain available through that catalog rather than a sub-server tool surface.
+- `provider/catalog_pagination.py` compiles stable paginated catalog pages and
+  `provider/catalog_resource.py` exposes the matching `catalog://commands` resource.
+- Resources and prompts are registered directly on the root `FastMCP`.
+- The runtime applies custom `TagFilterMiddleware` and mounts the streamable-HTTP ASGI app
+  under MA's webserver via `http_bridge.py`.
 - `provider/auth.py::MASTokenVerifier` is the only auth code — delegates to
   `mass.webserver.auth.authenticate_with_token`.
-- `provider/tags.py` maps the 16 permission `ConfigEntry` booleans to FastMCP tags.
+- `provider/tags.py` maps the 25 permission `ConfigEntry` booleans to FastMCP tags.
 
 ## Conventions
 
@@ -23,7 +30,8 @@ Provider repo for the Music Assistant `mcp_server` plugin. Synced into the
 - Stdlib `dataclass` for response shapes (FastMCP auto-generates JSON schema).
 - Reuse `music_assistant_models` types in resource responses; use `*Brief` dataclasses
   in tool responses to keep payloads small for LLM context.
-- Tool decorators always include `tags={Tag.…}` — never untagged.
+- Domain-component tool decorators always include `tags={Tag.…}`. The catalog
+  resource is intentionally untagged infrastructure and applies visibility per entry.
 
 ## AI assistants — commit attribution
 
@@ -56,8 +64,9 @@ duplicate it with a second line from a different agent.
 
 ## Testing
 
-In-memory FastMCP `Client` transport (no HTTP). Reuse the canonical `mass` fixture
-from MA's `tests/conftest.py` rather than mocking `mass.music`.
+Run tests through the project's `uv` virtual environment. Use the canonical fresh-MA
+fixture and source slice (including MA's `tests/conftest.py` `mass` fixture) for
+integration behavior; keep focused unit tests isolated from unrelated MA services.
 
 ## Auto-generated files
 

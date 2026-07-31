@@ -15,7 +15,6 @@ from provider.constants import (
     CONF_DEBUG_INSPECT,
     CONF_DEBUG_LOGS,
     CONF_DEBUG_PROVIDERS,
-    CONF_DEBUG_RELOAD,
     CONF_DELETE_FAVORITES,
     CONF_QUERY_LIBRARY,
     PERMISSION_KEYS,
@@ -27,12 +26,12 @@ if TYPE_CHECKING:
 
 
 def test_config_to_tag_is_total() -> None:
-    """Core permission keys have unique tags in CONFIG_TO_TAG (16 core + 5 debug + 5 config)."""
+    """Permission keys have unique tags (16 core + 4 debug + 5 config)."""
     assert set(PERMISSION_KEYS).issubset(set(CONFIG_TO_TAG))
     assert (
         len({v for k, v in CONFIG_TO_TAG.items() if k in PERMISSION_KEYS})
         == len(PERMISSION_KEYS)
-        == 26
+        == 25
     )
 
 
@@ -92,7 +91,6 @@ def test_debug_tags_present_in_enum() -> None:
     assert Tag.DEBUG_LOGS.value == "debug:logs"
     assert Tag.DEBUG_EVENTS.value == "debug:events"
     assert Tag.DEBUG_PROVIDERS.value == "debug:providers"
-    assert Tag.DEBUG_RELOAD.value == "debug:reload"
 
 
 def test_debug_config_keys_map_to_tags() -> None:
@@ -101,7 +99,6 @@ def test_debug_config_keys_map_to_tags() -> None:
     assert CONFIG_TO_TAG[CONF_DEBUG_LOGS] is Tag.DEBUG_LOGS
     assert CONFIG_TO_TAG[CONF_DEBUG_EVENTS] is Tag.DEBUG_EVENTS
     assert CONFIG_TO_TAG[CONF_DEBUG_PROVIDERS] is Tag.DEBUG_PROVIDERS
-    assert CONFIG_TO_TAG[CONF_DEBUG_RELOAD] is Tag.DEBUG_RELOAD
 
 
 def test_enabled_tags_excludes_debug_when_off(mock_config: MagicMock) -> None:
@@ -111,7 +108,6 @@ def test_enabled_tags_excludes_debug_when_off(mock_config: MagicMock) -> None:
     assert Tag.DEBUG_LOGS not in tags
     assert Tag.DEBUG_EVENTS not in tags
     assert Tag.DEBUG_PROVIDERS not in tags
-    assert Tag.DEBUG_RELOAD not in tags
 
 
 def test_config_tags_present_in_enum() -> None:

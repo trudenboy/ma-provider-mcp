@@ -23,7 +23,6 @@ from .constants import (
     CONF_DEBUG_INSPECT,
     CONF_DEBUG_LOGS,
     CONF_DEBUG_PROVIDERS,
-    CONF_DEBUG_RELOAD,
     CONF_DELETE_FAVORITES,
     CONF_DELETE_LIBRARY,
     CONF_DELETE_PLAYLISTS,
@@ -38,7 +37,6 @@ from .constants import (
     CONF_EDIT_QUEUE,
     CONF_ENFORCE_AUDIENCE,
     CONF_EXTRA_ALLOWED_ORIGINS,
-    CONF_LEAN_ADMIN_SCHEMA,
     CONF_MOUNT_PATH,
     CONF_QUERY_LIBRARY,
     CONF_QUERY_METADATA,
@@ -145,14 +143,6 @@ def build_config_entries(
             required=False,
         ),
         ConfigEntry(
-            key=CONF_LEAN_ADMIN_SCHEMA,
-            type=ConfigEntryType.BOOLEAN,
-            default_value=False,
-            category="server",
-            advanced=True,
-            required=False,
-        ),
-        ConfigEntry(
             key=CONF_TRUST_FORWARDED_PROTO,
             type=ConfigEntryType.BOOLEAN,
             default_value=False,
@@ -195,7 +185,6 @@ def build_config_entries(
         _bool(CONF_DEBUG_LOGS, False, "debug"),
         _bool(CONF_DEBUG_EVENTS, False, "debug"),
         _bool(CONF_DEBUG_PROVIDERS, False, "debug"),
-        _bool(CONF_DEBUG_RELOAD, False, "debug"),
         ConfigEntry(
             key=CONF_DEBUG_EVENT_BUFFER_CAPACITY,
             type=ConfigEntryType.INTEGER,

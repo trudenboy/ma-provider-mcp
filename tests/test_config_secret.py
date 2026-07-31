@@ -1,13 +1,10 @@
 """Unit tests for the SECURE_STRING write gate."""
-# ruff: noqa: PLC0415
 #   Fixtures import provider modules lazily (inside the test body). A file-level
 #   suppression is used instead of per-line directives so the intent survives the
 #   upstream import-path rewrite, which lengthens ``from provider.X`` lines and
 #   reflows them — detaching any trailing per-line directive.
 
 from __future__ import annotations
-
-from typing import Any
 
 import pytest
 from fastmcp.exceptions import ToolError
@@ -53,59 +50,3 @@ def test_is_secret_key() -> None:
     assert is_secret_key(_entries(), "token") is True
     assert is_secret_key(_entries(), "log_level") is False
     assert is_secret_key(_entries(), "missing") is False
-
-
-async def test_secret_write_blocked_without_secret_tag_e2e(
-    mounted_config_no_secret: Any, mock_config_targets: Any
-) -> None:
-    """E2e: set_provider_value rejects SECURE_STRING write when secret tag is off."""
-    from fastmcp import Client
-
-    async with Client(mounted_config_no_secret) as client:
-        with pytest.raises(ToolError, match="config:write:secret"):
-            await client.call_tool(
-                "config_set_provider_value",
-                {"instance_id": "yandex_music", "key": "token", "value": "x"},
-            )
-    mock_config_targets.config.save_provider_config.assert_not_called()
-
-
-async def test_secret_gate_reevaluated_per_request_via_callable(
-    mock_config_targets: Any,
-) -> None:
-    """
-    The secret gate must read a live callable so a hot-swapped toggle takes effect without a restart.
-
-    Regression for PR #99 review finding A.
-    """
-    from fastmcp import Client, FastMCP
-
-    from provider.tools.config import build_config_server
-
-    flag: dict[str, bool] = {"on": False}
-    sub = build_config_server(
-        mock_config_targets,
-        require_confirmation=False,
-        secret_writes_enabled=lambda: flag["on"],
-    )
-    root = FastMCP(name="test")
-    root.mount(sub, namespace="config")
-
-    # gate closed — secret write must be rejected
-    async with Client(root) as client:
-        with pytest.raises(ToolError, match="config:write:secret"):
-            await client.call_tool(
-                "config_set_provider_value",
-                {"instance_id": "yandex_music", "key": "token", "value": "x"},
-            )
-
-    # flip the live flag — no server rebuild
-    flag["on"] = True
-
-    # gate open — same server, secret write must now succeed
-    async with Client(root) as client:
-        result = await client.call_tool(
-            "config_set_provider_value",
-            {"instance_id": "yandex_music", "key": "token", "value": "x"},
-        )
-    assert result.data.applied is True

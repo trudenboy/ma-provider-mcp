@@ -23,6 +23,7 @@ permission set therefore cannot reach a now-disabled tool.
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Set as AbstractSet
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
 from fastmcp.exceptions import NotFoundError, PromptError, ResourceError, ToolError
@@ -36,7 +37,7 @@ ComponentKind = Literal["tool", "resource", "prompt"]
 TagsLookup = Callable[[ComponentKind, str], Awaitable[set[str] | None]]
 
 
-def tags_visible(tags: set[str] | None, allowed: set[str]) -> bool:
+def tags_visible(tags: AbstractSet[str] | None, allowed: AbstractSet[str]) -> bool:
     """
     Apply the shared visibility rule for a component's tag set.
 

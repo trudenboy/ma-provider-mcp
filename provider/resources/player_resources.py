@@ -5,13 +5,13 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from ..tags import Tag
-from ..tools._common import (
+from ..resource_helpers import (
     safe_active_queue,
     to_brief_player,
     to_brief_queue,
     to_resource_text,
 )
+from ..tags import Tag
 
 if TYPE_CHECKING:
     from music_assistant.mass import MusicAssistant

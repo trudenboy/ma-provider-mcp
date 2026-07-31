@@ -2,21 +2,17 @@
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import logging
 from typing import TYPE_CHECKING, Any
 
 from .constants import (
-    CONF_DEBUG_EVENT_BUFFER_CAPACITY,
-    CONF_DEBUG_EVENTS,
     CONF_DYNAMIC_API_CONTROL,
     CONF_DYNAMIC_API_READ,
     CONF_DYNAMIC_API_SYSTEM,
     CONF_DYNAMIC_API_WRITE,
     CONF_ENFORCE_AUDIENCE,
     CONF_EXTRA_ALLOWED_ORIGINS,
-    CONF_LEAN_ADMIN_SCHEMA,
     CONF_MOUNT_PATH,
     CONF_REQUIRE_AUTH,
     CONF_REQUIRE_CONFIRMATION,
@@ -41,10 +37,9 @@ class MCPServerRuntime:
 
     The lifecycle is intentionally simple:
 
-    * :meth:`start` builds the FastMCP root, mounts namespaced sub-servers
-      for each tool category, registers resources and prompts, applies the
-      tag-filter middleware, and exposes the streamable-HTTP ASGI app on
-      MA's webserver under :pyattr:`mount_path`.
+    * :meth:`start` builds the FastMCP root, registers resources, prompts, and
+      the three meta-tools, applies tag filtering, and exposes the
+      streamable-HTTP ASGI app on MA's webserver under :pyattr:`mount_path`.
     * :meth:`stop` unregisters the dynamic route.
     * :meth:`apply_permission_change` rebuilds the runtime in place when
       only permission flags / resource toggles changed (no port collision
@@ -76,8 +71,6 @@ class MCPServerRuntime:
         # Mutable so apply_permission_change can hot-swap the allowed-tag set
         # without re-instantiating the TagFilterMiddleware closure.
         self._allowed_tags: set[str] = set()
-        self._event_buffer: Any = None  # provider.debug.event_buffer.EventBuffer | None
-        self._reload_lock: asyncio.Lock = asyncio.Lock()
         self._dynamic_adapter: Any = None
 
     @property
@@ -98,17 +91,12 @@ class MCPServerRuntime:
         try:
             await self._start_impl()
         except BaseException:
-            with contextlib.suppress(Exception):
+            with contextlib.suppress(BaseException):
                 await self.stop()
             raise
 
     async def stop(self) -> None:
         """Unregister the HTTP route and drop references."""
-        if self._event_buffer is not None:
-            try:
-                self._event_buffer.stop()
-            finally:
-                self._event_buffer = None
         if self._unmount is not None:
             try:
                 await self._unmount()
@@ -166,6 +154,12 @@ class MCPServerRuntime:
         await self.stop()
         await self.start()
 
+    def dynamic_diagnostics(self) -> dict[str, Any]:
+        """Return a public snapshot of dynamic-command health without exposing its adapter."""
+        if self._dynamic_adapter is None:
+            return {"available": False, "last_error": "catalog not initialized"}
+        return dict(self._dynamic_adapter.diagnostics())
+
     async def _start_impl(self) -> None:
         """Mount the runtime; see :meth:`start` for the public-facing wrapper."""
         from fastmcp import FastMCP  # noqa: PLC0415
@@ -174,16 +168,6 @@ class MCPServerRuntime:
         from .http_bridge import mount_into_mass  # noqa: PLC0415
         from .prompts import register_prompts  # noqa: PLC0415
         from .resources import register_resources  # noqa: PLC0415
-        from .tools import (  # noqa: PLC0415
-            build_library_server,
-            build_media_server,
-            build_metadata_server,
-            build_playback_server,
-            build_players_server,
-            build_playlists_server,
-            build_queue_server,
-            build_volume_server,
-        )
 
         require_auth = bool(self._config.get_value(CONF_REQUIRE_AUTH))
         base_url = str(self._mass.webserver.base_url or "").rstrip("/")
@@ -203,74 +187,13 @@ class MCPServerRuntime:
         mcp = FastMCP(
             name="music-assistant",
             instructions=(
-                "Music Assistant MCP server with on-demand discovery. Use search_tools, "
-                "then get_tool_schema for one canonical ma_api:* or mcp_api:* command, "
-                "then execute it through call_tool. Responses default to compact mode. "
-                "Resources expose library://, player:// and queue:// views."
+                "Music Assistant MCP server with on-demand discovery. Use search_tools with a short "
+                "query, then get_tool_schema for one canonical ma_api:* command, then execute it "
+                "through call_tool. Use an empty search_tools query or catalog://commands for "
+                "paginated alphabetical browsing. Follow next_cursor/next_uri; responses default "
+                "to compact mode. Resources also expose library://, player:// and queue:// views."
             ),
             auth=verifier,
-        )
-
-        require_confirmation = bool(self._config.get_value(CONF_REQUIRE_CONFIRMATION) or False)
-        lean_admin_schema = bool(self._config.get_value(CONF_LEAN_ADMIN_SCHEMA) or False)
-        from .tags import Tag  # noqa: PLC0415
-
-        mcp.mount(build_library_server(self._mass), namespace="library")
-        mcp.mount(
-            build_queue_server(
-                self._mass,
-                require_confirmation=require_confirmation,
-                delete_queue_enabled=Tag.DELETE_QUEUE in enabled_tags(self._config),
-            ),
-            namespace="queue",
-        )
-        mcp.mount(build_playback_server(self._mass), namespace="playback")
-        mcp.mount(build_players_server(self._mass), namespace="players")
-        mcp.mount(
-            build_playlists_server(self._mass, require_confirmation=require_confirmation),
-            namespace="playlists",
-        )
-        mcp.mount(build_volume_server(self._mass), namespace="volume")
-        mcp.mount(
-            build_media_server(self._mass, require_confirmation=require_confirmation),
-            namespace="media",
-        )
-        mcp.mount(build_metadata_server(self._mass), namespace="metadata")
-
-        from .tools import build_debug_server  # noqa: PLC0415
-
-        self._maybe_start_event_buffer()
-
-        mcp.mount(
-            build_debug_server(
-                self._mass,
-                require_confirmation=require_confirmation,
-                event_buffer=self._event_buffer,
-                logs_enabled=Tag.DEBUG_LOGS in enabled_tags(self._config),
-                reload_lock=self._reload_lock,
-                lean_schema=lean_admin_schema,
-                dynamic_diagnostics_provider=lambda: (
-                    self._dynamic_adapter.diagnostics()
-                    if self._dynamic_adapter is not None
-                    else {"available": False, "last_error": "catalog not initialized"}
-                ),
-            ),
-            namespace="debug",
-        )
-
-        from .constants import CONF_CONFIG_WRITE_SECRET  # noqa: PLC0415
-        from .tools import build_config_server  # noqa: PLC0415
-
-        mcp.mount(
-            build_config_server(
-                self._mass,
-                require_confirmation=require_confirmation,
-                secret_writes_enabled=lambda: bool(
-                    self._config.get_value(CONF_CONFIG_WRITE_SECRET)
-                ),
-                lean_schema=lean_admin_schema,
-            ),
-            namespace="config",
         )
 
         register_resources(mcp, self._mass, self._config)
@@ -325,22 +248,12 @@ class MCPServerRuntime:
             len(enabled_tags(self._config)),
         )
 
-    def _maybe_start_event_buffer(self) -> None:
-        """Start the debug event buffer when the ``debug_events`` flag is on."""
-        from .debug.event_buffer import EventBuffer  # noqa: PLC0415
-
-        if not bool(self._config.get_value(CONF_DEBUG_EVENTS)):
-            return
-        cap_value = self._config.get_value(CONF_DEBUG_EVENT_BUFFER_CAPACITY)
-        capacity = int(cap_value) if isinstance(cap_value, int | float | str) else 500
-        self._event_buffer = EventBuffer(self._mass, capacity=capacity)
-        self._event_buffer.start()
-
     def _register_meta_discovery(self, mcp: Any) -> None:
         """Install the permanent dynamic command discovery layer."""
         from fastmcp.server.dependencies import get_access_token  # noqa: PLC0415
 
-        from .dynamic_api import DynamicAPIAdapter, DynamicPolicy  # noqa: PLC0415
+        from .command_policy import DynamicPolicy  # noqa: PLC0415
+        from .dynamic_api import DynamicAPIAdapter  # noqa: PLC0415
         from .meta_discovery import register_meta_discovery  # noqa: PLC0415
 
         def config_bool(key: str, *, default: bool = False) -> bool:
