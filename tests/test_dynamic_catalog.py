@@ -168,6 +168,15 @@ async def test_search_tool_rejects_invalid_limit_with_stable_code() -> None:
             await client.call_tool("search_tools", {"query": "music", "limit": 0})
 
 
+@pytest.mark.parametrize("limit", ["2", 2.0, True])
+async def test_search_tool_rejects_non_integer_limits_with_stable_code(limit: object) -> None:
+    """The MCP boundary must not coerce non-integer page sizes."""
+    mcp, _adapter = _server()
+    async with Client(mcp) as client:
+        with pytest.raises(ToolError, match="invalid_limit"):
+            await client.call_tool("search_tools", {"query": "music", "limit": limit})
+
+
 async def test_search_tool_rejects_malformed_cursor_with_stable_code() -> None:
     """The wire contract exposes malformed cursor errors with a stable code."""
     mcp, _adapter = _server()

@@ -10,11 +10,12 @@ from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Annotated, Any, Protocol
 
 from fastmcp import Context  # noqa: TC002  -- FastMCP resolves injected annotations at runtime.
 from fastmcp.exceptions import NotFoundError, ToolError
 from mcp.types import ToolAnnotations
+from pydantic import WithJsonSchema
 
 from .catalog_pagination import (
     CURSOR_VERSION,
@@ -314,7 +315,7 @@ def register_meta_discovery(
     async def search_tools(
         query: str | None = None,
         cursor: str | None = None,
-        limit: int | None = None,
+        limit: Annotated[Any, WithJsonSchema({"type": "integer"})] = None,
     ) -> DiscoveryPage:
         """
         Search visible commands or browse the catalog.
