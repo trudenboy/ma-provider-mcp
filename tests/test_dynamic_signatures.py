@@ -65,7 +65,9 @@ def _adapter(handler: Any) -> DynamicAPIAdapter:
     """Build an authenticated adapter around one command handler."""
     mass = MagicMock()
     mass.command_handlers = {handler.command: handler}
-    mass.webserver.auth.get_user = AsyncMock(return_value=MagicMock(enabled=True))
+    user = SimpleNamespace(user_id="u1", enabled=True, role="admin")
+    mass.webserver.auth.get_user = AsyncMock(return_value=user)
+    mass.webserver.auth.authenticate_with_token = AsyncMock(return_value=user)
     return DynamicAPIAdapter(
         mass,
         policy_provider=DynamicPolicy,
