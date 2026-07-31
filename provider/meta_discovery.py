@@ -30,6 +30,7 @@ from .catalog_pagination import (
     normalize_query,
     resolve_limit,
 )
+from .catalog_resource import register_catalog_resource
 from .dynamic_api import (
     LEGACY_MIGRATIONS,
     CatalogFingerprint,
@@ -301,6 +302,7 @@ def register_meta_discovery(
     # These parameters remain for compatibility with existing runtime wiring.
     del allowed_tags_provider, lookup_component_tags, enabled
     service = MetaDiscoveryService(dynamic_adapter)
+    register_catalog_resource(mcp, service)
 
     @mcp.tool(
         name=SEARCH_TOOL_NAME,

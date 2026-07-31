@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlencode
 
+import pytest
 from fastmcp import Client, FastMCP
+from mcp.shared.exceptions import McpError
 
 from provider import meta_discovery
 from provider.command_policy import DynamicRisk
@@ -20,6 +24,7 @@ from provider.constants import (
 )
 from provider.dynamic_api import CatalogSnapshot, CatalogView, DynamicEntry
 from provider.meta_discovery import register_meta_discovery
+from provider.middleware import TagFilterMiddleware
 from provider.server import build_tag_lookup
 
 
@@ -78,6 +83,121 @@ async def test_registers_exactly_three_real_tools() -> None:
     async with Client(mcp) as client:
         names = {tool.name for tool in await client.list_tools()}
     assert names == {"search_tools", "call_tool", "get_tool_schema"}
+
+
+async def test_catalog_resource_template_is_discoverable_and_matches_tool_browse() -> None:
+    """The catalog resource exposes the same first page as empty tool browse."""
+    mcp: FastMCP = FastMCP(name="test")
+    register_meta_discovery(
+        mcp,
+        allowed_tags_provider=set,
+        lookup_component_tags=build_tag_lookup(mcp),
+        dynamic_adapter=_Adapter(),
+    )
+    async with Client(mcp) as client:
+        templates = {str(item.uriTemplate) for item in await client.list_resource_templates()}
+        tool_page = await client.call_tool("search_tools", {"query": "", "limit": 25})
+        contents = await client.read_resource("catalog://commands?limit=25")
+    payload = json.loads(next(item.text for item in contents if hasattr(item, "text")))
+    assert "catalog://commands{?cursor,limit}" in templates
+    assert tool_page.structured_content is not None
+    assert payload["items"] == tool_page.structured_content["items"]
+    assert payload["total"] == tool_page.structured_content["total"]
+    assert payload["catalog_revision"] == tool_page.structured_content["catalog_revision"]
+    assert payload["next_uri"] is None
+    assert set(payload) == {
+        "items",
+        "total",
+        "next_cursor",
+        "next_uri",
+        "catalog_revision",
+    }
+
+
+class _CatalogAdapter(_Adapter):
+    """Expose a fixed multi-entry catalog for resource paging tests."""
+
+    def __init__(self, entry_count: int) -> None:
+        entries = tuple(
+            DynamicEntry(
+                name=f"ma_api:music/command_{index:02d}",
+                command=f"music/command_{index:02d}",
+                description=f"Music command {index}",
+                input_schema={"type": "object", "properties": {}},
+                risk=DynamicRisk.READ,
+                required_scope=None,
+                allow_impersonation=False,
+                handler=object(),
+            )
+            for index in range(entry_count)
+        )
+        self._snapshot = CatalogSnapshot(
+            (
+                1,
+                "catalog",
+                tuple((entry.command, index + 1) for index, entry in enumerate(entries)),
+            ),
+            entries,
+        )
+
+    async def visible_catalog(self) -> CatalogView:
+        """Make every catalog fixture entry visible."""
+        return CatalogView(self._snapshot.fingerprint, self._snapshot.entries)
+
+
+def _catalog_server(entry_count: int, *, middleware: bool = False) -> FastMCP:
+    """Build a resource-enabled catalog server, optionally with empty permissions."""
+    mcp: FastMCP = FastMCP(name="catalog-test")
+    register_meta_discovery(
+        mcp,
+        allowed_tags_provider=set,
+        lookup_component_tags=build_tag_lookup(mcp),
+        dynamic_adapter=_CatalogAdapter(entry_count),
+    )
+    if middleware:
+        mcp.add_middleware(TagFilterMiddleware(lambda: set(), build_tag_lookup(mcp)))
+    return mcp
+
+
+async def test_catalog_resource_next_uri_reads_the_next_page() -> None:
+    """The advertised resource URI resumes the alphabetical catalog page."""
+    mcp = _catalog_server(entry_count=3)
+    async with Client(mcp) as client:
+        first_contents = await client.read_resource("catalog://commands?limit=2")
+        first = json.loads(next(item.text for item in first_contents if hasattr(item, "text")))
+        second_contents = await client.read_resource(first["next_uri"])
+    second = json.loads(next(item.text for item in second_contents if hasattr(item, "text")))
+    assert len(first["items"]) == 2
+    assert len(second["items"]) == 1
+    assert second["next_cursor"] is None
+    assert second["next_uri"] is None
+    assert [item["name"] for item in first["items"] + second["items"]] == sorted(
+        item["name"] for item in first["items"] + second["items"]
+    )
+
+
+async def test_catalog_resource_rejects_search_cursor() -> None:
+    """Search continuations cannot be replayed through the catalog resource."""
+    mcp = _catalog_server(entry_count=3)
+    async with Client(mcp) as client:
+        search = await client.call_tool("search_tools", {"query": "music", "limit": 1})
+        assert search.structured_content is not None
+        with pytest.raises(McpError, match="invalid_cursor"):
+            await client.read_resource(
+                f"catalog://commands?{urlencode({'cursor': search.structured_content['next_cursor']})}"
+            )
+
+
+async def test_untagged_catalog_resource_survives_empty_tag_middleware() -> None:
+    """The catalog resource remains visible as untagged infrastructure."""
+    mcp = _catalog_server(entry_count=0, middleware=True)
+    async with Client(mcp) as client:
+        templates = {str(item.uriTemplate) for item in await client.list_resource_templates()}
+        contents = await client.read_resource("catalog://commands")
+    page = json.loads(next(item.text for item in contents if hasattr(item, "text")))
+    assert "catalog://commands{?cursor,limit}" in templates
+    assert page["items"] == []
+    assert page["total"] == 0
 
 
 def test_meta_discovery_service_is_a_direct_index_owner() -> None:
