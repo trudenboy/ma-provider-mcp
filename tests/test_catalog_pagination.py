@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 from dataclasses import replace
+from typing import cast
 
 import pytest
 
@@ -62,7 +63,7 @@ def test_resolve_limit_uses_mode_defaults_and_bounds() -> None:
 def test_resolve_limit_rejects_non_strict_or_out_of_range_values(value: object) -> None:
     """Reject non-integer and out-of-range requested page sizes."""
     with pytest.raises(PaginationError) as exc_info:
-        resolve_limit("search", value)  # type: ignore[arg-type]
+        resolve_limit("search", cast("int | None", value))
     assert exc_info.value.code == "invalid_limit"
     assert "1 through 50" in str(exc_info.value)
 

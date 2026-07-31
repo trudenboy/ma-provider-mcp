@@ -465,9 +465,10 @@ def test_search_index_does_not_expose_mutable_token_counters() -> None:
     )
     index = meta_discovery._build_search_index(snapshot)
     with pytest.raises(TypeError):
-        index.documents["ma_api:other"] = ()  # type: ignore[index]
+        cast("dict[str, tuple[str, ...]]", index.documents)["ma_api:other"] = ()
+    frequencies = cast("dict[str, dict[str, int]]", index.frequencies)
     with pytest.raises(TypeError):
-        index.frequencies["ma_api:music/search"]["search"] = 99  # type: ignore[index]
+        frequencies["ma_api:music/search"]["search"] = 99
 
 
 async def test_parallel_search_builds_one_index() -> None:
