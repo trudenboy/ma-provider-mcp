@@ -637,6 +637,42 @@ async def test_failed_snapshot_build_does_not_poison_future_reads(
     assert attempts == 2
 
 
+async def test_cancelled_snapshot_builder_and_waiter_leave_later_reads_usable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cancellation never leaves the catalog lock held or poisons its next reader."""
+
+    async def search(search_query: str) -> list[str]:
+        return [search_query]
+
+    adapter = _real_adapter(_handler("music/search", search))
+    compile_snapshot = adapter._compile_snapshot
+    attempts = 0
+
+    def cancel_once(fingerprint: Any) -> Any:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise asyncio.CancelledError()
+        return compile_snapshot(fingerprint)
+
+    monkeypatch.setattr(adapter, "_compile_snapshot", cancel_once)
+    with pytest.raises(asyncio.CancelledError):
+        await adapter.base_snapshot()
+
+    await adapter._snapshot_lock.acquire()
+    waiter = asyncio.create_task(adapter.base_snapshot())
+    await asyncio.sleep(0)
+    waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiter
+    adapter._snapshot_lock.release()
+
+    snapshot = await adapter.base_snapshot()
+    assert snapshot.entries[0].name == "ma_api:music/search"
+    assert attempts == 2
+
+
 async def test_adapter_skips_structurally_incompatible_handlers() -> None:
     """One malformed registry entry cannot disable the MCP endpoint."""
     adapter = _real_adapter(SimpleNamespace(command="broken", target=lambda: None))

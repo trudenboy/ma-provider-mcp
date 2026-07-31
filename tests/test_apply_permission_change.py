@@ -199,3 +199,20 @@ async def test_start_rollback_swallows_stop_failure(
         await runtime.start()
 
     runtime.stop.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_start_rollback_preserves_primary_error_when_stop_raises_base_exception(
+    mock_mass: MagicMock, mock_config: MagicMock
+) -> None:
+    """Interrupting teardown cannot replace the original mount failure."""
+    from provider.server import MCPServerRuntime  # noqa: PLC0415
+
+    runtime = MCPServerRuntime(mock_mass, mock_config, logging.getLogger("t"))
+    runtime._start_impl = AsyncMock(side_effect=RuntimeError("primary failure"))
+    runtime.stop = AsyncMock(side_effect=KeyboardInterrupt("rollback interrupted"))
+
+    with pytest.raises(RuntimeError, match="primary failure"):
+        await runtime.start()
+
+    runtime.stop.assert_awaited_once()

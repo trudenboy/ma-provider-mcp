@@ -91,7 +91,7 @@ class MCPServerRuntime:
         try:
             await self._start_impl()
         except BaseException:
-            with contextlib.suppress(Exception):
+            with contextlib.suppress(BaseException):
                 await self.stop()
             raise
 

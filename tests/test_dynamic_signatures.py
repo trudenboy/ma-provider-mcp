@@ -134,6 +134,24 @@ def test_var_positional_handler_is_incompatible() -> None:
         _compile(inspect.signature(invalid), get_type_hints(invalid))
 
 
+def test_allow_extra_kwargs_retains_unknown_values_for_extension_handlers() -> None:
+    """Profiles that opt in preserve extension keys without publishing ``kwargs``."""
+
+    def extension(limit: int = 10, **kwargs: Any) -> None:
+        del limit, kwargs
+
+    compiled = compile_signature(
+        inspect.signature(extension), get_type_hints(extension), allow_extra_kwargs=True
+    )
+
+    assert compiled.input_schema["additionalProperties"] is True
+    assert "kwargs" not in compiled.input_schema["properties"]
+    assert compiled.parse({"limit": 2, "upstream_extension": "enabled"}) == {
+        "limit": 2,
+        "upstream_extension": "enabled",
+    }
+
+
 def test_list_track_output_schema_is_not_a_string() -> None:
     """Track collection outputs never masquerade as scalar strings."""
     compiled = _compile(inspect.signature(library_items), get_type_hints(library_items))
