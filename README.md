@@ -115,7 +115,10 @@ use the persisted development instance in `.ma-data/`. Start Docker, mint a
 dedicated MA user token, and supply it only through your shell:
 
 ```bash
+MA_SERVER_ROOT=/Users/renso/Projects/ma-server \
 docker compose -f docker-compose.dev.yml up -d --build
+docker compose -f docker-compose.dev.yml exec -T ma \
+  /app/venv/bin/python -c 'import music_assistant; import music_assistant.providers.fastmcp_server as p; print(music_assistant.__file__); print(p.__file__)'
 docker compose -f docker-compose.dev.yml exec -T ma \
   /app/venv/bin/uv pip install --quiet --python /app/venv/bin/python \
   pytest==9.0.3 pytest-asyncio==1.3.0
@@ -129,9 +132,12 @@ docker compose -f docker-compose.dev.yml exec -T \
 
 Set `MA_DATA_DIR=/absolute/path/to/.ma-data` on `docker compose` when a worktree
 should reuse an already configured development instance without copying its data.
-The implementation suite mounts the authoritative fresh MA `dev` source tree from
-`/Users/renso/Projects/ma-server`; `.superpowers/sdd/2026-07-30-native-ma-command-catalog/run-ma-tests.sh`
-runs it in the same complete Linux MA virtual environment.
+`MA_SERVER_ROOT` defaults to `/Users/renso/Projects/ma-server`; Compose mounts that
+checkout at `/ma-server`, overlays this provider inside it, and refuses startup unless
+the imported MA package and `fastmcp_server` provider paths both begin with
+`/ma-server/`.
+`.superpowers/sdd/2026-07-30-native-ma-command-catalog/run-ma-tests.sh` runs the
+implementation suite in the same complete Linux MA virtual environment.
 
 `MA_TEST_PLAYER_ID` is optional, but required for the one reversible queue mutation
 test. Choose a dedicated player with an active queue; the test refuses unsafe rows

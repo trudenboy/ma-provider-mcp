@@ -79,8 +79,8 @@ async def queue_items(client: Client, queue_id: str) -> list[dict[str, Any]]:
     return await call_ma(client, "player_queues/items", {"queue_id": queue_id, "limit": 500})
 
 
-async def find_test_track_uri(client: Client) -> str:
-    """Find one provider-backed item suitable for a queue lifecycle smoke test."""
+async def find_test_track_uri(client: Client, *, purpose: str) -> str:
+    """Find one provider-backed item, or explicitly skip unavailable live coverage."""
     search = await call_ma(
         client,
         "music/search",
@@ -92,21 +92,38 @@ async def find_test_track_uri(client: Client) -> str:
         },
     )
     if not (tracks := search.get("tracks", [])):
-        pytest.skip("configured providers returned no track for the queue smoke test")
-    return str(tracks[0]["uri"])
+        pytest.skip(f"configured providers returned no track for {purpose}")
+    for track in tracks:
+        uri = str(track.get("uri", ""))
+        provider = str(track.get("provider", ""))
+        if uri.startswith("yandex_music") and provider.startswith("yandex_music"):
+            return uri
+    pytest.skip(f"configured provider search returned no provider-backed track URI for {purpose}")
 
 
-async def wait_for_added_item(
-    client: Client, queue_id: str, before_ids: set[str]
+async def wait_for_own_added_item(
+    client: Client, queue_id: str, before_ids: set[str], track_uri: str
 ) -> dict[str, Any]:
-    """Wait briefly for MA's queue controller to expose the new item."""
+    """Find only this test's one new URI, never a concurrent caller's row."""
     for _attempt in range(20):
-        if added := [
-            item for item in await queue_items(client, queue_id) if item_id(item) not in before_ids
-        ]:
-            return added[-1]
+        added = [item for item in await queue_items(client, queue_id) if item_id(item) not in before_ids]
+        owned = [item for item in added if str(item.get("uri", "")) == track_uri]
+        if len(owned) == 1:
+            return owned[0]
+        if len(owned) > 1:
+            raise AssertionError("concurrent queue update made the test-added item ambiguous")
         await asyncio.sleep(0.25)
-    raise AssertionError("added queue item did not appear within five seconds")
+    raise AssertionError("test-added queue item did not appear within five seconds")
+
+
+async def remove_added_item(client: Client, queue_id: str, added_id: str) -> None:
+    """Remove the exact queue item ID established from this test's unique diff."""
+    removed = await call_ma(
+        client,
+        "fastmcp/queue/remove_items_safe",
+        {"queue_id": queue_id, "item_ids": [added_id]},
+    )
+    assert removed["removed"] == [added_id]
 
 
 @pytest.mark.integration
@@ -138,31 +155,32 @@ async def test_live_track_album_and_player_calls_are_json_serializable(live_clie
         provider.get("domain") == "yandex_music" and provider.get("available") is True
         for provider in providers
     )
-    track_uri = await find_test_track_uri(live_client)
+    track_uri = await find_test_track_uri(live_client, purpose="track/album serialization")
     track = await call_ma(live_client, "music/item_by_uri", {"uri": track_uri})
     assert track["uri"] == track_uri
     album = track.get("album")
-    if isinstance(album, Mapping) and (album_uri := album.get("uri")):
-        album_details = await call_ma(live_client, "music/item_by_uri", {"uri": album_uri})
-        await call_ma(
-            live_client,
-            "music/albums/album_tracks",
-            {
-                "item_id": str(album_details["item_id"]),
-                "provider_instance_id_or_domain": str(album_details["provider"]),
-            },
-        )
+    if not isinstance(album, Mapping) or not (album_uri := album.get("uri")):
+        pytest.skip("provider-backed track did not include an album URI")
+    album_details = await call_ma(live_client, "music/item_by_uri", {"uri": album_uri})
+    await call_ma(
+        live_client,
+        "music/albums/album_tracks",
+        {
+            "item_id": str(album_details["item_id"]),
+            "provider_instance_id_or_domain": str(album_details["provider"]),
+        },
+    )
     players = await call_ma(live_client, "players/all", {})
-    if players:
-        player_id = str(players[0]["player_id"])
-        await call_ma(live_client, "players/get", {"player_id": player_id})
-        active_queue = await call_ma(
-            live_client, "player_queues/get_active_queue", {"player_id": player_id}
-        )
-        if active_queue:
-            queue_id = str(active_queue["queue_id"])
-            await call_ma(live_client, "player_queues/get", {"queue_id": queue_id})
-            await call_ma(live_client, "player_queues/items", {"queue_id": queue_id, "limit": 2})
+    if not players:
+        pytest.skip("configured MA instance has no player for players/get regression")
+    player_id = str(players[0]["player_id"])
+    await call_ma(live_client, "players/get", {"player_id": player_id})
+    active_queue = await call_ma(live_client, "player_queues/get_active_queue", {"player_id": player_id})
+    if not active_queue:
+        pytest.skip("configured player has no active queue for queue read regression")
+    queue_id = str(active_queue["queue_id"])
+    await call_ma(live_client, "player_queues/get", {"queue_id": queue_id})
+    await call_ma(live_client, "player_queues/items", {"queue_id": queue_id, "limit": 2})
 
 
 @pytest.mark.integration
@@ -193,18 +211,26 @@ async def test_live_reversible_queue_cycle(live_client: Client) -> None:
     if not before or queue.get("current_index") is None:
         pytest.skip("queue test requires a dedicated player with an active non-empty queue")
     before_ids = {item_id(item) for item in before}
+    track_uri = await find_test_track_uri(live_client, purpose="queue mutation")
+    if any(str(item.get("uri", "")) == track_uri for item in before):
+        pytest.skip("dedicated queue already contains the selected test track URI")
     added_id: str | None = None
+    add_attempted = False
+    cleaned_up = False
     try:
+        # The transport might fail after MA accepted this request, so recovery starts
+        # before the request is made and never relies on its response arriving.
+        add_attempted = True
         await call_ma(
             live_client,
             "player_queues/play_media",
             {
                 "queue_id": queue_id,
-                "media": await find_test_track_uri(live_client),
+                "media": track_uri,
                 "option": "add",
             },
         )
-        added = await wait_for_added_item(live_client, queue_id, before_ids)
+        added = await wait_for_own_added_item(live_client, queue_id, before_ids, track_uri)
         added_id = item_id(added)
         assert added.get("played", False) is False
         refreshed = await call_ma(live_client, "player_queues/get", {"queue_id": queue_id})
@@ -220,20 +246,20 @@ async def test_live_reversible_queue_cycle(live_client: Client) -> None:
             "player_queues/move_item_end",
             {"queue_id": queue_id, "queue_item_id": added_id},
         )
-        removed = await call_ma(
-            live_client,
-            "fastmcp/queue/remove_items_safe",
-            {"queue_id": queue_id, "item_ids": [added_id]},
-        )
-        assert removed["removed"] == [added_id]
+        await remove_added_item(live_client, queue_id, added_id)
         added_id = None
+        cleaned_up = True
     finally:
-        if added_id is not None:
-            await call_ma(
-                live_client,
-                "fastmcp/queue/remove_items_safe",
-                {"queue_id": queue_id, "item_ids": [added_id]},
-            )
+        if add_attempted and not cleaned_up:
+            if added_id is None:
+                # Recover the exact test-owned row if the first visibility poll
+                # timed out or its response was interrupted. Ambiguous concurrent
+                # rows are rejected by wait_for_own_added_item rather than removed.
+                added = await wait_for_own_added_item(
+                    live_client, queue_id, before_ids, track_uri
+                )
+                added_id = item_id(added)
+            await remove_added_item(live_client, queue_id, added_id)
     assert [item_id(item) for item in await queue_items(live_client, queue_id)] == [
         item_id(item) for item in before
     ]

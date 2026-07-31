@@ -10,6 +10,7 @@
 # UI: http://localhost:8095
 # MCP integration endpoint: http://localhost:8095/mcp/v1
 # Live integration tests require MA_MCP_URL and MA_MCP_TOKEN from an MA user token.
+# Runtime MA source: ${MA_SERVER_ROOT:-/Users/renso/Projects/ma-server}
 # Note: add .ma-data/ to your .gitignore
 
 services:
@@ -24,7 +25,8 @@ services:
     restart: "no"
     volumes:
       - ${MA_DATA_DIR:-./.ma-data}:/data
-      - ./provider/:/tmp/provider:ro
+      - ${MA_SERVER_ROOT:-/Users/renso/Projects/ma-server}:/ma-server:ro
+      - ./provider/:/ma-server/music_assistant/providers/fastmcp_server:ro
       - ./tests/:/tmp/provider-tests:ro
       - ./pyproject.toml:/tmp/pyproject.toml:ro
       - ./scripts/docker-init.sh:/init.sh:ro
