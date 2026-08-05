@@ -12,6 +12,7 @@ from fastmcp import Client, Context, FastMCP
 from fastmcp.exceptions import ToolError
 from fastmcp.server.auth import AccessToken
 from mcp.shared.exceptions import McpError
+from music_assistant_models.auth import Scope
 from music_assistant_models.config_entries import ConfigEntry
 from music_assistant_models.enums import ConfigEntryType
 
@@ -745,6 +746,111 @@ async def test_final_auth_user_after_impersonation_lookup_is_used_for_execution(
     )
     assert resolutions == 3
     assert execution_user is fresh_user
+
+
+@pytest.mark.parametrize(
+    ("target_user_id", "final_impersonate_scope", "permitted"),
+    [
+        ("target", False, False),
+        ("same-user", False, True),
+        ("", True, False),
+    ],
+)
+async def test_final_impersonation_authority_uses_final_caller_and_target_identity(
+    target_user_id: str,
+    final_impersonate_scope: bool,
+    permitted: bool,
+) -> None:
+    """Only identified same-user or final-scope-authorized cross-user calls execute."""
+    called = False
+    caller = SimpleNamespace(
+        user_id="same-user",
+        enabled=True,
+        role="user",
+        player_filter=[],
+        provider_filter=[],
+    )
+
+    async def save(
+        provider_domain: str,
+        values: dict[str, Any],
+        instance_id: str | None = None,
+    ) -> None:
+        nonlocal called
+        del provider_domain, values, instance_id
+        called = True
+
+    token = AccessToken(token="config", client_id="id-config", scopes=[])
+    adapter = _adapter(
+        [
+            _handler(
+                "config/providers/save",
+                save,
+                "config.providers.write",
+                allow_impersonation=True,
+            )
+        ],
+        current_token=[token],
+        policies={
+            "config": _custom(
+                config__write__provider=PolicyMode.ALLOW,
+                config__write__secret=PolicyMode.ALLOW,
+            )
+        },
+        user=caller,
+    )
+    adapter.mass.config.get_provider_config_entries = AsyncMock(
+        return_value=[ConfigEntry(key="token", type=ConfigEntryType.SECURE_STRING, label="Token")]
+    )
+    target = SimpleNamespace(
+        user_id=target_user_id,
+        enabled=True,
+        role="user",
+        player_filter=[],
+        provider_filter=[],
+    )
+    resolutions = 0
+    impersonate_scope = True
+
+    def check_final_scope(_user: Any, scope: Scope) -> bool:
+        if scope is Scope.USERS_IMPERSONATE:
+            return impersonate_scope
+        return True
+
+    adapter._scope_checker = check_final_scope
+
+    async def resolve_and_change_scope(_auth: Any, _requested: str) -> Any:
+        nonlocal resolutions, impersonate_scope
+        resolutions += 1
+        if resolutions == 3:
+            impersonate_scope = final_impersonate_scope
+        return target
+
+    cast("Any", adapter)._resolve_impersonated_user = resolve_and_change_scope
+    ctx = SimpleNamespace(
+        elicit=AsyncMock(return_value=SimpleNamespace(action="accept", data=True))
+    )
+    call = adapter.call(
+        "ma_api:config/providers/save",
+        {
+            "provider_domain": "demo",
+            "instance_id": "demo--1",
+            "values": {"token": "new-secret"},
+            "user": target_user_id or "unknown-target",
+        },
+        response_mode="compact",
+        fields=None,
+        max_items=None,
+        ctx=cast("Context", ctx),
+    )
+
+    if permitted:
+        await call
+    else:
+        with pytest.raises(ToolError, match="Unable to impersonate requested user"):
+            await call
+    assert resolutions == 3
+    assert called is permitted
 
 
 async def test_final_revalidation_cannot_reuse_confirmation_for_a_new_capability() -> None:

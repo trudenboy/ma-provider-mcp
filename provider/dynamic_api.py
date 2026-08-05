@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 from fastmcp.exceptions import ToolError
 from mcp.shared.exceptions import McpError
 from mcp.types import INVALID_REQUEST, METHOD_NOT_FOUND
+from music_assistant_models.auth import Scope
 
 from .auth import LEGACY_TOKEN_CLIENT_ID, LOOKUP_FAILURE_CLIENT_ID
 from .command_policy import (
@@ -808,6 +809,20 @@ class DynamicAPIAdapter:
         policy = self._request_policy(auth)
         entry = self._reauthorize_entry(invocation.entry, auth, policy)
         if impersonated_user is not None:
+            caller = auth[1] if auth is not None else None
+            caller_id = getattr(caller, "user_id", None)
+            target_id = getattr(impersonated_user, "user_id", None)
+            if (
+                not isinstance(caller_id, str)
+                or not caller_id
+                or not isinstance(target_id, str)
+                or not target_id
+                or (
+                    caller_id != target_id
+                    and not self._scope_is_allowed(caller, Scope.USERS_IMPERSONATE)
+                )
+            ):
+                raise ToolError("Unable to impersonate requested user")
             if getattr(impersonated_user, "enabled", True) is False:
                 raise ToolError("Unable to impersonate requested user")
             self._enforce_target_filters(impersonated_user, invocation.arguments)
