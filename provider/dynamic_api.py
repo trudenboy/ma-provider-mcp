@@ -36,7 +36,7 @@ from .command_profiles import (
     aliases_by_command,
 )
 from .commands.authorization import normalize_scope
-from .dynamic_serialization import json_value
+from .dynamic_serialization import bounded_json_value
 from .dynamic_signatures import (
     CompiledSignature,
     UnsupportedSignatureError,
@@ -809,23 +809,40 @@ class DynamicAPIAdapter:
             item_cap = max(1, min(item_cap, int(max_items)))
         byte_cap = _COMPACT_BYTES if compact else _FULL_BYTES
         string_cap = _COMPACT_STRING if compact else _FULL_STRING
-        raw = json_value(result)
-        total_count = len(raw) if isinstance(raw, list) else None
+        normalized = bounded_json_value(
+            result,
+            item_cap=item_cap,
+            string_cap=string_cap,
+            max_depth=6 if compact else 12,
+        )
+        raw = normalized.value
+        total_count = normalized.total_count
         if compact and profile is not None:
             raw = profile.project_compact(raw)
-        data = cls._project_fields(raw, fields)
-        data, truncated = cls._limit_nested_items(data, item_cap)
-        data, value_truncated = cls._truncate_value(data, string_cap, depth=6 if compact else 12)
-        truncated |= value_truncated
+        field_string_cap = max(
+            [string_cap, *(len(field) for field in fields or [] if isinstance(field, str))]
+        )
+        normalized_fields = bounded_json_value(
+            fields or [],
+            item_cap=len(fields) if fields else 1,
+            string_cap=field_string_cap,
+            max_depth=1,
+        ).value
+        safe_fields = (
+            [field for field in normalized_fields if isinstance(field, str)]
+            if isinstance(normalized_fields, list)
+            else []
+        )
+        data = cls._project_fields(raw, safe_fields)
         envelope: dict[str, Any] = {
             "command": name,
             "data": data,
-            "truncated": truncated,
+            "truncated": normalized.truncated,
             "returned_count": len(data) if isinstance(data, list) else (0 if data is None else 1),
             "bytes": 0,
             "applied": {
                 "mode": response_mode,
-                "fields": fields or [],
+                "fields": safe_fields,
                 "max_items": item_cap,
             },
         }
@@ -837,25 +854,6 @@ class DynamicAPIAdapter:
             mode = str(envelope["applied"]["mode"])
             raise ToolError(f"Response exceeds the {mode} byte budget")
         return envelope
-
-    @classmethod
-    def _limit_nested_items(cls, value: Any, item_cap: int) -> tuple[Any, bool]:
-        """Apply the mode item cap to every nested list, not only the root."""
-        if isinstance(value, list):
-            kept = value[:item_cap]
-            list_nested = [cls._limit_nested_items(item, item_cap) for item in kept]
-            return [item for item, _changed in list_nested], len(value) > item_cap or any(
-                changed for _item, changed in list_nested
-            )
-        if isinstance(value, dict):
-            dict_nested = {
-                key: cls._limit_nested_items(item, item_cap) for key, item in value.items()
-            }
-            return (
-                {key: item for key, (item, _changed) in dict_nested.items()},
-                any(changed for _item, changed in dict_nested.values()),
-            )
-        return value, False
 
     @staticmethod
     def _project_fields(value: Any, fields: list[str] | None) -> Any:
@@ -873,29 +871,6 @@ class DynamicAPIAdapter:
                 for row in value
             ]
         return value
-
-    @classmethod
-    def _truncate_value(cls, value: Any, string_cap: int, *, depth: int) -> tuple[Any, bool]:
-        """Bound nested depth and leaf strings while preserving JSON shape."""
-        if depth <= 0 and isinstance(value, dict | list):
-            return "[truncated]", True
-        if isinstance(value, str) and len(value) > string_cap:
-            return value[:string_cap] + "…", True
-        if isinstance(value, list):
-            list_items = [cls._truncate_value(item, string_cap, depth=depth - 1) for item in value]
-            return [item for item, _changed in list_items], any(
-                changed for _item, changed in list_items
-            )
-        if isinstance(value, dict):
-            dict_items = {
-                key: cls._truncate_value(item, string_cap, depth=depth - 1)
-                for key, item in value.items()
-            }
-            return (
-                {key: item for key, (item, _changed) in dict_items.items()},
-                any(changed for _item, changed in dict_items.values()),
-            )
-        return value, False
 
     @classmethod
     def _fit_bytes(cls, envelope: dict[str, Any], byte_cap: int) -> None:
@@ -1041,7 +1016,14 @@ class DynamicAPIAdapter:
     @staticmethod
     def _encoded_size(value: Any) -> int:
         """Measure the compact UTF-8 JSON representation."""
-        return len(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode())
+        return len(
+            json.dumps(
+                value,
+                ensure_ascii=False,
+                allow_nan=False,
+                separators=(",", ":"),
+            ).encode()
+        )
 
     @classmethod
     def _set_measured_bytes(cls, envelope: dict[str, Any]) -> None:

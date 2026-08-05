@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Unknown Music Assistant scopes now fail closed, while hidden authentication
   handlers no longer affect catalog diagnostics, revisions, or cursors.
 
+### Fixed
+- Dynamic responses are normalized inside their depth, item, string, and strict
+  JSON limits before byte fitting, preventing recursive or oversized payloads
+  from bypassing the configured response bounds.
+
 ## [1.0.1] - 2026-08-05
 
 ### Changed

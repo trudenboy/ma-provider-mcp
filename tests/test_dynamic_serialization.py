@@ -6,9 +6,11 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from enum import Enum
 from pathlib import Path
+from random import Random
+from typing import Any
 from uuid import UUID
 
-from provider.dynamic_serialization import json_value
+from provider.dynamic_serialization import bounded_json_value, json_value
 
 
 @dataclass(frozen=True)
@@ -131,3 +133,52 @@ def test_cyclic_dataclass_uses_a_stable_cycle_marker() -> None:
     node.child = node
 
     assert json_value(node) == {"child": f"<{Node.__module__}.{Node.__qualname__}:cycle>"}
+
+
+def test_bounded_json_value_matches_seeded_reference_policy() -> None:
+    """Bounded normalization preserves deterministic list, depth, and string policy."""
+    random = Random(20260805)
+
+    def payload(depth: int) -> Any:
+        if depth == 0:
+            return random.choice([None, True, random.randint(-20, 20), "x" * random.randint(0, 12)])
+        kind = random.choice(["leaf", "list", "dict"])
+        if kind == "leaf":
+            return payload(0)
+        if kind == "list":
+            return [payload(depth - 1) for _index in range(random.randint(0, 6))]
+        return {f"key-{index}": payload(depth - 1) for index in range(random.randint(0, 4))}
+
+    def reference(value: Any, depth: int) -> tuple[Any, bool]:
+        if isinstance(value, str):
+            return (value[:8] + "…", True) if len(value) > 8 else (value, False)
+        if isinstance(value, list | dict) and depth <= 0:
+            return "[truncated]", True
+        if isinstance(value, list):
+            list_children = [reference(child, depth - 1) for child in value[:3]]
+            return (
+                [child for child, _changed in list_children],
+                len(value) > 3 or any(changed for _child, changed in list_children),
+            )
+        if isinstance(value, dict):
+            dict_children = {key: reference(child, depth - 1) for key, child in value.items()}
+            return (
+                {key: child for key, (child, _changed) in dict_children.items()},
+                any(changed for _child, changed in dict_children.values()),
+            )
+        return value, False
+
+    for _case in range(200):
+        value = payload(4)
+        expected_value, expected_truncated = reference(value, 4)
+        normalized = bounded_json_value(value, item_cap=3, string_cap=8, max_depth=4)
+        assert normalized.value == expected_value
+        assert normalized.truncated is expected_truncated
+
+
+def test_bounded_json_value_truncates_long_strings_at_the_prefix() -> None:
+    """Long strings retain only their bounded prefix and an omission marker."""
+    normalized = bounded_json_value("abcdefgh", item_cap=3, string_cap=4, max_depth=1)
+
+    assert normalized.value == "abcd…"
+    assert normalized.truncated is True
