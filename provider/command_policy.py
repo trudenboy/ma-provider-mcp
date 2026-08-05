@@ -424,16 +424,7 @@ async def _config_value_projector(
         raise ToolError("Unable to classify config value")
     try:
         if isinstance(instance_id := arguments.get("instance_id"), str) and instance_id:
-            provider_config = mass.config.get_provider_config(instance_id)
-            if inspect.isawaitable(provider_config):
-                provider_config = await provider_config
-            provider_domain = getattr(provider_config, "domain", None)
-            if not isinstance(provider_domain, str) or not provider_domain:
-                raise ValueError("Provider config has no domain")
-            entries = mass.config.get_provider_config_entries(
-                provider_domain,
-                instance_id=instance_id,
-            )
+            entries = mass.config.get_provider_config_entries(instance_id)
         elif isinstance(domain := arguments.get("domain"), str) and domain:
             entries = mass.config.get_core_config_entries(domain)
         elif isinstance(player_id := arguments.get("player_id"), str) and player_id:

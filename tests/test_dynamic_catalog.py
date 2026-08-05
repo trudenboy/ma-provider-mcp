@@ -11,7 +11,7 @@ from dataclasses import dataclass, replace
 from enum import StrEnum
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
 from fastmcp import Client, Context, FastMCP
@@ -1904,29 +1904,79 @@ async def test_secret_tag_revoked_during_confirmation_prevents_config_execution(
     assert called is False
 
 
-async def test_secure_config_value_is_masked_before_response_serialization(
+@pytest.mark.parametrize(
+    ("command", "arguments", "getter_name", "getter_arguments"),
+    [
+        (
+            "config/providers/get_value",
+            {"instance_id": "demo--1", "key": "token"},
+            "get_provider_config_entries",
+            ("demo--1",),
+        ),
+        (
+            "config/core/get_value",
+            {"domain": "webserver", "key": "token"},
+            "get_core_config_entries",
+            ("webserver",),
+        ),
+        (
+            "config/players/get_value",
+            {"player_id": "kitchen", "key": "token"},
+            "get_player_config_entries",
+            ("kitchen",),
+        ),
+    ],
+)
+async def test_secure_config_value_is_reclassified_after_confirmation_before_serialization(
+    command: str,
+    arguments: dict[str, str],
+    getter_name: str,
+    getter_arguments: tuple[str, ...],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A native get_value result cannot expose an encrypted secure value."""
+    """The refreshed config schema controls whether a native result is serialized masked."""
     _bypass_ma_argument_parser(monkeypatch)
     raw_secret = "super-secret-encrypted-token"
+    confirmed = False
 
-    async def get_provider_value(instance_id: str, key: str) -> str:
-        assert (instance_id, key) == ("demo--1", "token")
+    async def get_value(
+        key: str,
+        instance_id: str | None = None,
+        domain: str | None = None,
+        player_id: str | None = None,
+    ) -> str:
+        assert {"instance_id": instance_id, "domain": domain, "player_id": player_id} == {
+            "instance_id": arguments.get("instance_id"),
+            "domain": arguments.get("domain"),
+            "player_id": arguments.get("player_id"),
+        }
+        assert key == "token"
         return raw_secret
 
     adapter = _real_adapter(
-        _handler("config/providers/get_value", get_provider_value, "config.providers.read"),
+        _handler(command, get_value, "config.read"),
         allowed_tags={str(Tag.CONFIG_READ)},
     )
-    adapter.mass.config.get_provider_config = AsyncMock(return_value=SimpleNamespace(domain="demo"))
-    adapter.mass.config.get_provider_config_entries = AsyncMock(
-        return_value=[ConfigEntry(key="token", type=ConfigEntryType.SECURE_STRING, label="Token")]
+    schema_getter = AsyncMock(
+        side_effect=lambda *_args: [
+            ConfigEntry(
+                key="token",
+                type=(ConfigEntryType.SECURE_STRING if confirmed else ConfigEntryType.STRING),
+                label="Token",
+            )
+        ]
     )
+    setattr(adapter.mass.config, getter_name, schema_getter)
+
+    async def confirm(*_args: Any, **_kwargs: Any) -> None:
+        nonlocal confirmed
+        confirmed = True
+
+    monkeypatch.setattr(adapter, "_confirm", AsyncMock(side_effect=confirm))
 
     result = await adapter.call(
-        "ma_api:config/providers/get_value",
-        {"instance_id": "demo--1", "key": "token"},
+        f"ma_api:{command}",
+        arguments,
         response_mode="full",
         fields=None,
         max_items=None,
@@ -1935,6 +1985,8 @@ async def test_secure_config_value_is_masked_before_response_serialization(
 
     assert result["data"] == "this_value_is_encrypted"
     assert raw_secret not in json.dumps(result)
+    assert schema_getter.await_count == 2
+    schema_getter.assert_has_awaits([call(*getter_arguments), call(*getter_arguments)])
 
 
 async def test_flow_category_revoked_during_confirmation_prevents_execution(
