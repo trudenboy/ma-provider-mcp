@@ -1192,6 +1192,59 @@ async def test_disabled_user_and_transport_commands_are_hidden() -> None:
     assert await transport.visible_entries() == []
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        "auth/token/create",
+        "auth/token/revoke",
+        "auth/tokens",
+        "auth/user/create",
+        "auth/join_codes",
+        "auth/future_dangerous_command",
+    ],
+)
+async def test_auth_command_prefix_is_never_discoverable(command: str) -> None:
+    """System access cannot expose current or future authentication commands."""
+
+    async def operation() -> None:
+        return None
+
+    handler = _handler(command, operation, scope="admin")
+    adapter = _real_adapter(handler, policy=DynamicPolicy(system=True))
+
+    assert await adapter.visible_entries() == []
+    assert await adapter.get_visible_entry(f"ma_api:{command}") is None
+
+
+async def test_denied_auth_command_cannot_be_called_directly() -> None:
+    """A cached auth command name cannot bypass catalog compilation."""
+    called = False
+
+    async def mint_token() -> str:
+        nonlocal called
+        called = True
+        return "full-scope-token"
+
+    adapter = _real_adapter(
+        _handler("auth/token/create", mint_token, scope="admin"),
+        policy=DynamicPolicy(system=True),
+    )
+    ctx = SimpleNamespace(
+        elicit=AsyncMock(return_value=SimpleNamespace(action="accept", data=True))
+    )
+
+    with pytest.raises(ToolError, match="not found or not permitted"):
+        await adapter.call(
+            "ma_api:auth/token/create",
+            {},
+            response_mode="compact",
+            fields=None,
+            max_items=None,
+            ctx=cast("Context", ctx),
+        )
+    assert called is False
+
+
 async def test_native_command_requires_its_live_permission_tag() -> None:
     """Native handlers cannot bypass the provider's existing permission toggles."""
 
