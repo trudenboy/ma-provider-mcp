@@ -393,6 +393,77 @@ async def test_search_retries_when_registry_changes_between_catalog_reads() -> N
     ]
 
 
+async def test_persistent_catalog_churn_stops_after_three_attempts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Discovery yields between retries and fails instead of spinning forever."""
+
+    class _ChurningAdapter(_SnapshotAdapter):
+        visible_calls = 0
+        snapshot_calls = 0
+
+        async def visible_catalog(self) -> CatalogView:
+            self.visible_calls += 1
+            fingerprint = (1, "visible", (("music/search", self.visible_calls),))
+            return CatalogView(fingerprint, ())
+
+        async def base_snapshot(self) -> CatalogSnapshot:
+            self.snapshot_calls += 1
+            fingerprint = (1, "snapshot", (("music/search", self.snapshot_calls),))
+            return CatalogSnapshot(fingerprint, ())
+
+    adapter = _ChurningAdapter(_catalog_snapshot())
+    service = _meta_service(adapter)
+    sleep = AsyncMock()
+    monkeypatch.setattr("provider.meta_discovery.asyncio.sleep", sleep)
+
+    with pytest.raises(PaginationError) as exc_info:
+        await service.discover()
+
+    assert exc_info.value.code == "catalog_changed"
+    assert str(exc_info.value) == "catalog changed during discovery; retry without a cursor"
+    assert adapter.visible_calls == adapter.snapshot_calls == 3
+    assert sleep.await_args_list == [call(0), call(0)]
+
+
+async def test_persistent_catalog_churn_has_consistent_tool_and_resource_guidance() -> None:
+    """Both public discovery routes tell clients to restart after live catalog churn."""
+
+    class _ChurningAdapter(_SnapshotAdapter):
+        def __init__(self) -> None:
+            super().__init__(_catalog_snapshot())
+            self.calls = 0
+
+        async def visible_catalog(self) -> CatalogView:
+            """Expose a catalog generation that changes before its snapshot is read."""
+            self.calls += 1
+            fingerprint = (1, "visible", (("music/search", self.calls),))
+            return CatalogView(fingerprint, self.snapshot.entries)
+
+        async def base_snapshot(self) -> CatalogSnapshot:
+            """Expose the next generation, modelling persistent registry churn."""
+            fingerprint = (1, "snapshot", (("music/search", self.calls),))
+            return CatalogSnapshot(fingerprint, self.snapshot.entries)
+
+    mcp: FastMCP = FastMCP(name="catalog-churn-test")
+    register_meta_discovery(
+        mcp,
+        allowed_tags_provider=set,
+        lookup_component_tags=build_tag_lookup(mcp),
+        dynamic_adapter=_ChurningAdapter(),
+    )
+
+    async with Client(mcp) as client:
+        with pytest.raises(ToolError) as tool_error:
+            await client.call_tool("search_tools", {"query": "music"})
+        with pytest.raises(McpError) as resource_error:
+            await client.read_resource("catalog://commands?limit=2")
+
+    for error in (tool_error.value, resource_error.value):
+        assert "catalog_changed" in str(error)
+        assert "retry without a cursor" in str(error)
+
+
 async def test_parallel_searches_contend_for_one_awaitable_index_build(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
