@@ -44,7 +44,8 @@ if TYPE_CHECKING:
 
 _ALIASES_BY_COMMAND = aliases_by_command()
 
-_DENIED_TRANSPORT_COMMANDS = frozenset({"dashboard/register", "dashboard/unregister"})
+_DENIED_COMMANDS = frozenset({"dashboard/register", "dashboard/unregister"})
+_DENIED_COMMAND_PREFIXES = ("auth/",)
 _COMPACT_ITEMS = 25
 _FULL_ITEMS = 200
 _COMPACT_BYTES = 12_288
@@ -329,6 +330,8 @@ class DynamicAPIAdapter:
         entries: list[DynamicEntry] = []
         incompatible: list[str] = []
         for command, handler in sorted(handlers.items()):
+            if self._command_is_denied(command):
+                continue
             if not self._handler_is_discoverable(command, handler):
                 incompatible.append(str(command))
                 continue
@@ -394,10 +397,15 @@ class DynamicAPIAdapter:
         return token, user
 
     @staticmethod
-    def _handler_is_discoverable(command: str, handler: Any) -> bool:
-        """Reject aliases, unauthenticated endpoints and transport internals."""
+    def _command_is_denied(command: str) -> bool:
+        """Return whether a command crosses an intentionally hidden boundary."""
+        return command in _DENIED_COMMANDS or command.startswith(_DENIED_COMMAND_PREFIXES)
+
+    @classmethod
+    def _handler_is_discoverable(cls, command: str, handler: Any) -> bool:
+        """Reject aliases, auth boundaries, and transport internals."""
         return bool(
-            command not in _DENIED_TRANSPORT_COMMANDS
+            not cls._command_is_denied(command)
             and getattr(handler, "authenticated", True)
             and not getattr(handler, "alias", False)
             and callable(getattr(handler, "target", None))
