@@ -17,11 +17,11 @@ from fastmcp.exceptions import ToolError
 from mcp.shared.exceptions import McpError
 from mcp.types import INVALID_REQUEST, METHOD_NOT_FOUND
 
+from .auth import LEGACY_TOKEN_CLIENT_ID, LOOKUP_FAILURE_CLIENT_ID
 from .command_policy import (
     CommandDecision,
     CommandPreflight,
     command_is_hard_denied,
-    command_tags_visible,
     postflight_command,
     preflight_command,
     resolve_command_policy,
@@ -40,10 +40,14 @@ from .dynamic_signatures import (
     UnsupportedSignatureError,
     compile_signature,
 )
+from .policy import PolicyMode, PolicyProfile, PolicySnapshot, policy_snapshot
+from .tags import Tag
 
 if TYPE_CHECKING:
     from fastmcp import Context
     from fastmcp.server.auth import AccessToken
+
+    from .token_identity import TokenIdentity
 
 _ALIASES_BY_COMMAND = aliases_by_command()
 
@@ -104,6 +108,7 @@ class DynamicEntry:
     profile: CommandProfile | None = None
     compiled_signature: CompiledSignature | None = None
     decision: CommandDecision | None = None
+    policy_mode: PolicyMode = PolicyMode.CONFIRM
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,6 +120,7 @@ class AuthorizedInvocation:
     auth: tuple[AccessToken, Any] | None
     impersonated_user: Any | None
     preflight: CommandPreflight
+    policy: PolicySnapshot
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,6 +194,8 @@ class DynamicAPIAdapter:
         token_provider: Callable[[], AccessToken | None],
         scope_checker: Callable[[Any, Any], bool] | None = None,
         allowed_tags_provider: Callable[[], set[str]] | None = None,
+        policy_provider: Callable[[str], PolicySnapshot] | None = None,
+        identity_provider: Callable[[str], TokenIdentity | None] | None = None,
     ) -> None:
         """Initialise the adapter with request-aware policy providers."""
         self.mass = mass
@@ -195,6 +203,8 @@ class DynamicAPIAdapter:
         self._token_provider = token_provider
         self._scope_checker = scope_checker or self._default_scope_checker
         self._allowed_tags_provider = allowed_tags_provider or (lambda: set())
+        self._policy_provider = policy_provider
+        self._identity_provider = identity_provider
         self._snapshot: CatalogSnapshot | None = None
         self._snapshot_diagnostics: _SnapshotDiagnostics | None = None
         self._snapshot_lock = asyncio.Lock()
@@ -226,16 +236,16 @@ class DynamicAPIAdapter:
             return CatalogView(snapshot.fingerprint, ())
 
         user = auth[1]
-        allowed_tags = self._allowed_tags_provider()
+        policy = self._policy(auth[0])
         entries = [
-            entry
+            dataclasses.replace(entry, policy_mode=self._catalog_mode(entry, policy))
             for entry in snapshot.entries
             if (
                 entry.required_scope is None
                 or self._scope_is_allowed(user, getattr(entry.handler, "required_scope", None))
             )
             and entry.decision is not None
-            and command_tags_visible(entry.decision, allowed_tags)
+            and entry.decision.effective_mode(policy) is not PolicyMode.DENY
         ]
         visible = tuple(sorted(entries, key=lambda entry: entry.name))
         return CatalogView(snapshot.fingerprint, visible)
@@ -292,7 +302,7 @@ class DynamicAPIAdapter:
             parsed,
             impersonated=impersonated,
         )
-        await self._confirm(initial_invocation.entry, ctx, impersonating=impersonating)
+        await self._confirm(initial_invocation, ctx, impersonating=impersonating)
         auth = await self._authentication(revalidate=True)
         if auth is None and self._auth_required_provider():
             raise ToolError("Authentication is required")
@@ -426,6 +436,37 @@ class DynamicAPIAdapter:
         token = self._token_provider()
         if token is None:
             return None
+        if self._identity_provider is not None:
+            try:
+                user = await self.mass.webserver.auth.authenticate_with_token(token.token)
+            except Exception:
+                return None
+            if user is None or getattr(user, "enabled", True) is False:
+                return None
+            identity = self._identity_provider(token.token)
+            if identity is not None:
+                if str(getattr(user, "user_id", "")) != identity.user_id:
+                    return None
+                expected_client_id = identity.token_id or LEGACY_TOKEN_CLIENT_ID
+                if token.client_id != expected_client_id:
+                    return None
+                try:
+                    live_token_id = await self.mass.webserver.auth.get_token_id_from_token(
+                        token.token
+                    )
+                except Exception:
+                    return None
+                if live_token_id != identity.token_id:
+                    return None
+            elif token.client_id == LOOKUP_FAILURE_CLIENT_ID:
+                try:
+                    await self.mass.webserver.auth.get_token_id_from_token(token.token)
+                except Exception:
+                    return token, user
+                return None
+            else:
+                return None
+            return token, user
         if revalidate:
             try:
                 user = await self.mass.webserver.auth.authenticate_with_token(token.token)
@@ -541,14 +582,18 @@ class DynamicAPIAdapter:
 
     async def _confirm(
         self,
-        entry: DynamicEntry,
+        invocation: AuthorizedInvocation,
         ctx: Context,
         *,
         impersonating: bool = False,
     ) -> None:
-        """Apply the unconditional impersonation confirmation guard."""
-        if impersonating:
-            await confirm_or_raise(ctx, f"Run {entry.name} as another user?", required=True)
+        """Confirm each invocation whose effective request policy requires it."""
+        mode = self._invocation_mode(invocation, impersonating=impersonating)
+        if mode is PolicyMode.ALLOW:
+            return
+        capability = self._confirmation_capability(invocation)
+        prompt = f"Run {invocation.entry.name} using capability {capability}?"
+        await self._confirm_capability(ctx, prompt, capability)
 
     async def _execute(
         self,
@@ -581,6 +626,7 @@ class DynamicAPIAdapter:
         self,
         entry: DynamicEntry,
         auth: tuple[AccessToken, Any] | None,
+        policy: PolicySnapshot | None = None,
     ) -> DynamicEntry:
         """Repeat live handler, scope, policy and tag checks before execution."""
         handlers = getattr(self.mass, "command_handlers", {})
@@ -591,12 +637,16 @@ class DynamicAPIAdapter:
             raise ToolError(f"Tool {entry.name!r} not found or not permitted")
         if auth is None:
             raise ToolError("Authentication is required")
+        if getattr(auth[1], "enabled", True) is False:
+            raise ToolError("Authentication is required")
+        if policy is None:
+            policy = self._policy(auth[0])
         scope = getattr(handler, "required_scope", None)
         if scope is not None and not self._scope_is_allowed(auth[1], scope):
             raise ToolError(f"Tool {entry.name!r} not found or not permitted")
         profile = COMMAND_PROFILES.get(entry.command)
         decision = resolve_command_policy(entry.command, scope, profile)
-        if not command_tags_visible(decision, self._allowed_tags_provider()):
+        if decision.effective_mode(policy) is PolicyMode.DENY:
             raise ToolError(f"Tool {entry.name!r} not found or not permitted")
         return dataclasses.replace(
             entry,
@@ -650,7 +700,10 @@ class DynamicAPIAdapter:
         impersonated: Any,
     ) -> AuthorizedInvocation:
         """Refresh authorization, impersonation, target filters and request preflight."""
-        entry = self._reauthorize_entry(entry, auth)
+        policy = (
+            self._policy(auth[0]) if auth is not None else policy_snapshot(PolicyProfile.CUSTOM)
+        )
+        entry = self._reauthorize_entry(entry, auth, policy)
         impersonated_user = (
             await self._resolve_impersonated_user(auth, str(impersonated)) if impersonated else None
         )
@@ -662,13 +715,139 @@ class DynamicAPIAdapter:
         if decision is None:
             decision = resolve_command_policy(entry.command, entry.required_scope, entry.profile)
         preflight = await self._preflight(decision, arguments, auth)
+        policy = self._policy(auth[0]) if auth is not None else policy
+        entry = self._reauthorize_entry(entry, auth, policy)
+        if impersonated_user is not None:
+            if getattr(impersonated_user, "enabled", True) is False:
+                raise ToolError("Unable to impersonate requested user")
+            self._enforce_target_filters(impersonated_user, arguments)
+        elif auth is not None:
+            self._enforce_target_filters(auth[1], arguments)
+        decision = entry.decision or decision
+        if decision.effective_mode(policy, preflight.additional_required) is PolicyMode.DENY:
+            denied = self._denied_capability(decision, preflight, policy)
+            suffix = f" (requires {denied})" if denied is not None else ""
+            raise ToolError(f"Tool {entry.name!r} not found or not permitted{suffix}")
         return AuthorizedInvocation(
             entry=entry,
             arguments=dict(arguments),
             auth=auth,
             impersonated_user=impersonated_user,
             preflight=preflight,
+            policy=policy,
         )
+
+    def _policy(self, token: AccessToken) -> PolicySnapshot:
+        """Resolve the immutable policy for the exact current bearer."""
+        if self._policy_provider is not None:
+            return self._policy_provider(token.token)
+        allowed = self._allowed_tags_provider()
+        return policy_snapshot(
+            PolicyProfile.CUSTOM,
+            {
+                str(capability): (
+                    PolicyMode.ALLOW if str(capability) in allowed else PolicyMode.DENY
+                )
+                for capability in Tag
+            },
+        )
+
+    @staticmethod
+    def _catalog_mode(entry: DynamicEntry, policy: PolicySnapshot) -> PolicyMode:
+        """Return a conservative prompt requirement for every executable path."""
+        decision = entry.decision
+        if decision is None:
+            return PolicyMode.CONFIRM
+        mode = decision.effective_mode(policy)
+        if entry.allow_impersonation and mode is PolicyMode.ALLOW:
+            return PolicyMode.CONFIRM
+        if mode is PolicyMode.ALLOW and any(
+            policy.mode(capability) is PolicyMode.CONFIRM
+            for capability in decision.alternative_capabilities
+        ):
+            return PolicyMode.CONFIRM
+        if (
+            decision.secret_capability is not None
+            and policy.mode(decision.secret_capability) is PolicyMode.CONFIRM
+            and mode is PolicyMode.ALLOW
+        ):
+            return PolicyMode.CONFIRM
+        return mode
+
+    @staticmethod
+    def _invocation_mode(
+        invocation: AuthorizedInvocation,
+        *,
+        impersonating: bool,
+    ) -> PolicyMode:
+        """Resolve fixed, preflight, and impersonation policy for one invocation."""
+        decision = invocation.entry.decision
+        if decision is None:
+            return PolicyMode.DENY
+        mode = decision.effective_mode(
+            invocation.policy,
+            invocation.preflight.additional_required,
+        )
+        if impersonating and mode is PolicyMode.ALLOW:
+            return PolicyMode.CONFIRM
+        return mode
+
+    @staticmethod
+    def _confirmation_capability(invocation: AuthorizedInvocation) -> str:
+        """Name the capability responsible for an invocation confirmation."""
+        decision = invocation.entry.decision
+        if decision is None:
+            return "unknown"
+        required = decision.required_capabilities | invocation.preflight.additional_required
+        for capability in sorted(required):
+            if invocation.policy.mode(capability) is PolicyMode.CONFIRM:
+                return capability
+        alternatives = sorted(decision.alternative_capabilities)
+        if not any(
+            invocation.policy.mode(capability) is PolicyMode.ALLOW for capability in alternatives
+        ):
+            for capability in alternatives:
+                if invocation.policy.mode(capability) is PolicyMode.CONFIRM:
+                    return capability
+        return next(iter(sorted(required)), "impersonation")
+
+    @staticmethod
+    def _denied_capability(
+        decision: CommandDecision,
+        preflight: CommandPreflight,
+        policy: PolicySnapshot,
+    ) -> str | None:
+        """Name one denied capability that blocked request-specific authorization."""
+        required = decision.required_capabilities | preflight.additional_required
+        for capability in sorted(required):
+            if policy.mode(capability) is PolicyMode.DENY:
+                return capability
+        if decision.alternative_capabilities and all(
+            policy.mode(capability) is PolicyMode.DENY
+            for capability in decision.alternative_capabilities
+        ):
+            return next(iter(sorted(decision.alternative_capabilities)))
+        return None
+
+    @staticmethod
+    async def _confirm_capability(ctx: Context, prompt: str, capability: str) -> None:
+        """Elicit one non-persistent confirmation with actionable unsupported errors."""
+        try:
+            result = await ctx.elicit(prompt, response_type=bool)  # type: ignore[arg-type, unused-ignore]
+        except NotImplementedError:
+            raise ToolError(
+                f"Capability {capability!r} requires confirmation; set it to Allow or use an "
+                "elicitation-capable client"
+            ) from None
+        except McpError as exc:
+            if exc.error.code in (INVALID_REQUEST, METHOD_NOT_FOUND):
+                raise ToolError(
+                    f"Capability {capability!r} requires confirmation; set it to Allow or use an "
+                    "elicitation-capable client"
+                ) from exc
+            raise
+        if getattr(result, "action", None) != "accept" or not getattr(result, "data", None):
+            raise ToolError("Operation cancelled by user")
 
     async def _resolve_impersonated_user(
         self,

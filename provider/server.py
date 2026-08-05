@@ -16,7 +16,7 @@ from .constants import (
     DEFAULT_MOUNT_PATH,
     is_policy_key,
 )
-from .tags import enabled_tags
+from .tags import Tag, enabled_tags
 from .token_identity import AuthenticatedPolicyResolver, TokenIdentityRegistry
 
 if TYPE_CHECKING:
@@ -236,7 +236,7 @@ class MCPServerRuntime:
                 # Lazy provider so hot-swapped permissions update the
                 # advertised `scopes_supported` immediately, without
                 # rebuilding the runtime.
-                scopes_supported=lambda: [str(t) for t in enabled_tags(self._config)],
+                scopes_supported=lambda: [str(capability) for capability in Tag],
                 resource_name="Music Assistant MCP",
             )
 
@@ -278,7 +278,8 @@ class MCPServerRuntime:
             self._mass,
             auth_required_provider=lambda: config_bool(CONF_REQUIRE_AUTH, default=True),
             token_provider=get_access_token,
-            allowed_tags_provider=lambda: self._allowed_tags,
+            policy_provider=self.resolve_policy,
+            identity_provider=self._token_identities.lookup,
         )
         self._dynamic_adapter = adapter
         register_meta_discovery(
@@ -290,13 +291,28 @@ class MCPServerRuntime:
 
     def _apply_tag_filter(self, mcp: Any, allowed: set[Any]) -> None:
         """Install the tag-filter middleware on the given FastMCP server."""
+        from fastmcp.server.dependencies import get_access_token  # noqa: PLC0415
+
         from .middleware import TagFilterMiddleware  # noqa: PLC0415
 
         # Snapshot tags into the closure-captured set declared in __init__.
         # apply_permission_change mutates the same set later, so the
         # middleware sees the new permissions without rebuilding FastMCP.
         self._allowed_tags = {str(t) for t in allowed}
-        mcp.add_middleware(TagFilterMiddleware(lambda: self._allowed_tags, build_tag_lookup(mcp)))
+
+        def request_policy() -> PolicySnapshot:
+            token = get_access_token()
+            if token is None:
+                return self.policy_resolver.resolve(None)
+            return self.resolve_policy(token.token)
+
+        mcp.add_middleware(
+            TagFilterMiddleware(
+                lambda: self._allowed_tags,
+                build_tag_lookup(mcp),
+                policy_provider=request_policy,
+            )
+        )
 
     def _refresh_policy_resolver(self) -> None:
         """Compile and atomically install a resolver for known and manual token IDs."""

@@ -295,13 +295,13 @@ async def test_secure_config_preflight_requires_independent_secret_tag() -> None
         "instance_id": "demo--1",
         "values": {"token": "secret"},
     }
-    with pytest.raises(ToolError, match="config:write:secret"):
-        await preflight_command(
-            mass,
-            decision,
-            arguments,
-            {str(Tag.CONFIG_WRITE_PROVIDER)},
-        )
+    preflight = await preflight_command(
+        mass,
+        decision,
+        arguments,
+        {str(Tag.CONFIG_WRITE_PROVIDER)},
+    )
+    assert preflight.additional_required == frozenset({str(Tag.CONFIG_WRITE_SECRET)})
 
 
 async def test_nonsecret_config_preflight_needs_no_secret_tag() -> None:
@@ -495,13 +495,15 @@ async def test_provider_setup_flow_secret_requires_secret_tag() -> None:
     )
     decision = resolve_command_policy("config/flows/submit", None, None)
 
-    with pytest.raises(ToolError, match="config:write:secret"):
-        await preflight_command(
-            mass,
-            decision,
-            {"flow_id": "provider-flow", "values": {"token": "secret"}},
-            {str(Tag.CONFIG_WRITE_PROVIDER)},
-        )
+    preflight = await preflight_command(
+        mass,
+        decision,
+        {"flow_id": "provider-flow", "values": {"token": "secret"}},
+        {str(Tag.CONFIG_WRITE_PROVIDER)},
+    )
+    assert preflight.additional_required == frozenset(
+        {str(Tag.CONFIG_WRITE_PROVIDER), str(Tag.CONFIG_WRITE_SECRET)}
+    )
 
 
 async def test_provider_setup_flow_secret_accepts_provider_and_secret_tags() -> None:
@@ -544,13 +546,13 @@ async def test_setup_flow_rejects_the_wrong_config_category() -> None:
     )
     decision = resolve_command_policy("config/flows/submit", None, None)
 
-    with pytest.raises(ToolError, match="config:write:provider"):
-        await preflight_command(
-            mass,
-            decision,
-            {"flow_id": "provider-flow", "values": {"name": "Kitchen"}},
-            {str(Tag.CONFIG_WRITE_PLAYER)},
-        )
+    preflight = await preflight_command(
+        mass,
+        decision,
+        {"flow_id": "provider-flow", "values": {"name": "Kitchen"}},
+        {str(Tag.CONFIG_WRITE_PLAYER)},
+    )
+    assert preflight.additional_required == frozenset({str(Tag.CONFIG_WRITE_PROVIDER)})
 
 
 async def test_unknown_setup_flow_fails_closed() -> None:

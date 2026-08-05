@@ -24,11 +24,13 @@ from ..models import (
     RouteList,
 )
 from ..tags import Tag, enabled_tags
-from . import debug, queue
+from . import authorization, debug, queue
 from .authorization import authorize_extension
 
 if TYPE_CHECKING:
     from music_assistant_models.config_entries import ProviderConfig
+
+    from ..policy import PolicySnapshot
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,6 +69,7 @@ class ProviderCommandSet:
         mass: Any,
         config_provider: Callable[[], ProviderConfig] | ProviderConfig,
         diagnostics_provider: Callable[[], Mapping[str, Any]] | None = None,
+        policy_provider: Callable[[str], PolicySnapshot] | None = None,
     ) -> None:
         """Bind MA state and lazy providers for configuration and diagnostics."""
         self._mass = mass
@@ -79,6 +82,7 @@ class ProviderCommandSet:
         self._current_config: ProviderConfig | None = None
         self._active_policy_token_ids: frozenset[str] = frozenset()
         self._diagnostics_provider = diagnostics_provider
+        self._policy_provider = policy_provider
         self._buffer: EventBuffer | None = EventBuffer(
             self._mass, capacity=self._event_buffer_capacity(self._config())
         )
@@ -101,6 +105,10 @@ class ProviderCommandSet:
             self._active_policy_token_ids = frozenset(active_token_ids)
         if self._unregister:
             self._configure_event_buffer(config)
+
+    def set_policy_provider(self, provider: Callable[[str], PolicySnapshot]) -> None:
+        """Install the exact-bearer policy resolver used by registered handlers."""
+        self._policy_provider = provider
 
     def start(self) -> None:
         """Register each command, restoring the previous state on partial failure."""
@@ -174,6 +182,18 @@ class ProviderCommandSet:
             self._config(),
             required_scope=scope,
             required_tag=str(tag),
+            policy_provider=self._policy_provider,
+        )
+
+    def _capability_allowed(self, tag: Tag) -> bool:
+        """Return whether the current request may read optional debug detail."""
+        if self._policy_provider is None:
+            return tag in enabled_tags(self._config())
+        from ..policy import PolicyMode  # noqa: PLC0415
+
+        bearer = authorization.current_bearer_token()
+        return bool(
+            bearer is not None and self._policy_provider(bearer).mode(tag) is PolicyMode.ALLOW
         )
 
     def _definitions(self) -> tuple[ProviderCommand, ...]:
@@ -233,7 +253,7 @@ class ProviderCommandSet:
             return await debug.health(
                 self._mass,
                 buffer=self._buffer,
-                logs_enabled=Tag.DEBUG_LOGS in enabled_tags(self._config()),
+                logs_enabled=self._capability_allowed(Tag.DEBUG_LOGS),
                 dynamic_diagnostics_provider=self._diagnostics_provider,
             )
 

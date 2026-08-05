@@ -31,6 +31,7 @@ from provider.models import (
     RemoveFromQueueResult,
     RouteList,
 )
+from provider.policy import PolicyMode, PolicyProfile, policy_snapshot
 from provider.tags import Tag
 
 COMMAND_ORDER = (
@@ -346,21 +347,34 @@ def test_subscription_failure_rolls_back_commands_and_allows_retry() -> None:
     assert mass.subscribed == 2
 
 
-async def test_stop_is_idempotent_and_update_config_is_live(
+async def test_provider_debug_guard_uses_exact_request_policy_not_global_config(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Handlers see updated config and repeated stop never double-unregisters."""
+    """Provider debug handlers resolve the current bearer instead of global tags."""
     mass = CommandRegistry()
-    command_set = ProviderCommandSet(mass, _config())
+    policies = {
+        "deny": policy_snapshot(PolicyProfile.READ_ONLY),
+        "allow": policy_snapshot(
+            PolicyProfile.CUSTOM,
+            {Tag.DEBUG_PROVIDERS: PolicyMode.ALLOW},
+        ),
+    }
+    current = ["deny"]
+    command_set = ProviderCommandSet(
+        mass,
+        _config(Tag.DEBUG_PROVIDERS),
+        policy_provider=lambda bearer: policies[bearer],
+    )
     command_set.start()
     monkeypatch.setattr(authorization, "get_current_user", lambda: _user())
+    monkeypatch.setattr(authorization, "get_current_token", lambda: current[0])
     packages_handler = mass.handlers["fastmcp/debug/packages"]
 
     with pytest.raises(InsufficientPermissions, match="debug:providers"):
         awaitable = packages_handler()
         await awaitable
 
-    command_set.update_config(_config(Tag.DEBUG_PROVIDERS))
+    current[0] = "allow"
     awaitable = packages_handler()
     result = await awaitable
     assert "fastmcp" in result.packages
@@ -369,6 +383,32 @@ async def test_stop_is_idempotent_and_update_config_is_live(
     command_set.stop()
     assert mass.handlers == {}
     assert len(mass.removed) == 8
+
+
+async def test_debug_health_uses_request_policy_for_optional_log_diagnostics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Global debug-log allowance cannot leak log diagnostics to a denied token."""
+    mass = CommandRegistry()
+    policy = policy_snapshot(
+        PolicyProfile.CUSTOM,
+        {Tag.DEBUG_PROVIDERS: PolicyMode.ALLOW},
+    )
+    command_set = ProviderCommandSet(
+        mass,
+        _config(Tag.DEBUG_PROVIDERS, Tag.DEBUG_LOGS),
+        policy_provider=lambda _bearer: policy,
+    )
+    command_set.start()
+    monkeypatch.setattr(authorization, "get_current_user", lambda: _user())
+    monkeypatch.setattr(authorization, "get_current_token", lambda: "request-token")
+    health = AsyncMock(return_value=MagicMock(spec=HealthSummary))
+    monkeypatch.setattr(debug_commands, "health", health)
+
+    await mass.handlers["fastmcp/debug/health"]()
+
+    assert health.await_args is not None
+    assert health.await_args.kwargs["logs_enabled"] is False
 
 
 def test_event_buffer_survives_event_hot_toggles_and_resizes_before_restart() -> None:

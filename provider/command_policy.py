@@ -11,7 +11,7 @@ from fastmcp.exceptions import ToolError
 from music_assistant_models.constants import SECURE_STRING_SUBSTITUTE
 from music_assistant_models.enums import ConfigEntryType
 
-from .config_io.secret_handler import gate_secret_writes
+from .config_io.secret_handler import is_secret_key
 from .known_commands import KNOWN_AUTHENTICATED_COMMANDS
 from .policy import PolicyMode, PolicySnapshot, combine_policy_modes
 from .tags import Tag
@@ -58,6 +58,7 @@ class CommandPreflight:
     """State retained between command authorization and result sanitization."""
 
     secure_config_value: bool | None = None
+    additional_required: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True, slots=True)
@@ -413,6 +414,7 @@ async def preflight_command(
     :param arguments: Strictly parsed command arguments.
     :param allowed_tags: Current provider permission tags.
     """
+    del allowed_tags
     if decision.preflight == "config_secret_read":
         return CommandPreflight(secure_config_value=await _config_value_is_secure(mass, arguments))
     if decision.preflight == "config_secret_write":
@@ -423,13 +425,10 @@ async def preflight_command(
         entries = getattr(mass.config, getter_name)(target)
         if inspect.isawaitable(entries):
             entries = await entries
-        gate_secret_writes(
-            entries,
-            values,
-            secret_tag_enabled=str(Tag.CONFIG_WRITE_SECRET) in allowed_tags,
-        )
+        if any(is_secret_key(entries, str(key)) for key in values):
+            return CommandPreflight(additional_required=frozenset({str(Tag.CONFIG_WRITE_SECRET)}))
     elif decision.preflight == "config_flow_submit":
-        await _preflight_setup_flow_submit(mass, arguments, allowed_tags)
+        return await _preflight_setup_flow_submit(mass, arguments)
     return CommandPreflight()
 
 
@@ -580,8 +579,7 @@ async def _config_value_is_secure(
 async def _preflight_setup_flow_submit(
     mass: Any,
     arguments: Mapping[str, Any],
-    allowed_tags: set[str],
-) -> None:
+) -> CommandPreflight:
     """Authorize one live setup-flow submission and gate its secure fields."""
     flow_id = arguments.get("flow_id")
     values = arguments.get("values")
@@ -597,8 +595,6 @@ async def _preflight_setup_flow_submit(
     required_tag = _setup_flow_write_tag(scope)
     if required_tag is None:
         raise ToolError("Unknown setup flow or unsupported setup flow scope")
-    if str(required_tag) not in allowed_tags:
-        raise ToolError(f"Setup flow requires {required_tag} tag")
     try:
         step = get_flow(flow_id)
         if inspect.isawaitable(step):
@@ -608,11 +604,10 @@ async def _preflight_setup_flow_submit(
     entries = getattr(step, "entries", None)
     if not isinstance(entries, list | tuple):
         raise ToolError("Malformed setup flow step")
-    gate_secret_writes(
-        entries,
-        values,
-        secret_tag_enabled=str(Tag.CONFIG_WRITE_SECRET) in allowed_tags,
-    )
+    required = {str(required_tag)}
+    if any(is_secret_key(entries, str(key)) for key in values):
+        required.add(str(Tag.CONFIG_WRITE_SECRET))
+    return CommandPreflight(additional_required=frozenset(required))
 
 
 def _setup_flow_write_tag(scope: Any) -> Tag | None:

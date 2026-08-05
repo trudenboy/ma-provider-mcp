@@ -27,6 +27,7 @@ class DiscoveryItem(TypedDict):
 
     name: str
     description: NotRequired[str]
+    policy_mode: Literal["allow", "confirm"]
 
 
 class DiscoveryPage(TypedDict):
@@ -82,7 +83,10 @@ def catalog_revision(
     payload = [
         CURSOR_VERSION,
         fingerprint,
-        [[entry.name, entry.description, list(entry.search_aliases)] for entry in entries],
+        [
+            [entry.name, entry.description, list(entry.search_aliases), entry.policy_mode]
+            for entry in entries
+        ],
     ]
     encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()[:24]

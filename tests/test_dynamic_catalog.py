@@ -42,6 +42,7 @@ from provider.dynamic_api import (
     confirm_or_raise,
 )
 from provider.meta_discovery import DynamicAdapter, register_meta_discovery
+from provider.policy import PolicyMode
 from provider.server import build_tag_lookup
 from provider.tags import Tag
 
@@ -153,6 +154,7 @@ async def test_search_uses_alias_but_returns_canonical_ma_name() -> None:
         {
             "name": "ma_api:players/cmd/play",
             "description": "Start playback on a player.",
+            "policy_mode": "confirm",
         }
     ]
     assert result.structured_content["total"] == 1
@@ -289,7 +291,11 @@ async def test_empty_query_browses_alphabetical_catalog_without_descriptions() -
     assert [item["name"] for page in (first, second, third) for item in page["items"]] == [
         f"ma_api:music/command_{index:02d}" for index in range(7)
     ]
-    assert all(set(item) == {"name"} for page in (first, second, third) for item in page["items"])
+    assert all(
+        set(item) == {"name", "policy_mode"}
+        for page in (first, second, third)
+        for item in page["items"]
+    )
     assert third["next_cursor"] is None
 
 
@@ -387,7 +393,11 @@ async def test_search_retries_when_registry_changes_between_catalog_reads() -> N
 
     service = _meta_service(_ChangingAdapter())
     assert (await service.discover("replacement"))["items"] == [
-        {"name": "ma_api:music/replacement", "description": "Replacement collection."}
+        {
+            "name": "ma_api:music/replacement",
+            "description": "Replacement collection.",
+            "policy_mode": "confirm",
+        }
     ]
 
 
@@ -522,7 +532,13 @@ async def test_failed_index_build_releases_waiters_and_retries(
     first, second = outcomes
     assert isinstance(first, RuntimeError)
     assert not isinstance(second, BaseException)
-    assert second["items"] == [{"name": "ma_api:music/search", "description": "Search music."}]
+    assert second["items"] == [
+        {
+            "name": "ma_api:music/search",
+            "description": "Search music.",
+            "policy_mode": "confirm",
+        }
+    ]
     assert await service.discover("search") == second
     assert attempts == 2
 
@@ -887,8 +903,11 @@ async def test_cached_snapshot_keeps_visibility_request_specific() -> None:
     allowed_view, denied_view = await asyncio.gather(catalog_for("allowed"), catalog_for("denied"))
     snapshot = await adapter.base_snapshot()
     assert allowed_view.fingerprint == denied_view.fingerprint == snapshot.fingerprint
-    assert allowed_view.entries == snapshot.entries
-    assert allowed_view.entries[0] is snapshot.entries[0]
+    assert [entry.name for entry in allowed_view.entries] == [
+        entry.name for entry in snapshot.entries
+    ]
+    assert allowed_view.entries[0].policy_mode is PolicyMode.ALLOW
+    assert allowed_view.entries[0].handler is snapshot.entries[0].handler
     assert denied_view.entries == ()
     base_diagnostics = adapter.diagnostics()
     assert base_diagnostics["handlers_visible"] == 1
@@ -1769,26 +1788,12 @@ async def test_sync_coroutine_and_generator_handlers_close_cleanly() -> None:
     assert closed is True
 
 
-async def test_only_impersonation_has_classifier_independent_confirmation(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The classifier adds no mandatory prompts; impersonation remains unconditional."""
-    confirmation = AsyncMock()
-    monkeypatch.setattr("provider.dynamic_api.confirm_or_raise", confirmation)
-    adapter = _real_adapter(_handler("music/read", lambda: None))
-    handler = object()
-    ctx = MagicMock()
-    read = DynamicEntry("ma_api:read", "read", "read", {}, None, False, handler)
-    write = DynamicEntry("ma_api:write", "write", "write", {}, None, False, handler)
-    system = DynamicEntry("ma_api:system", "system", "system", {}, None, False, handler)
-    await adapter._confirm(read, ctx)
-    await adapter._confirm(write, ctx)
-    await adapter._confirm(system, ctx)
-    await adapter._confirm(read, ctx, impersonating=True)
-    confirmation.assert_awaited_once()
-    await_args = confirmation.await_args
-    assert await_args is not None
-    assert await_args.kwargs["required"] is True
+async def test_impersonation_keeps_discovery_conservatively_confirm() -> None:
+    """An otherwise prompt-free command advertises confirmation when impersonation exists."""
+    handler = _handler("music/search", lambda: None)
+    handler.allow_impersonation = True
+    entry = (await _real_adapter(handler).visible_entries())[0]
+    assert entry.policy_mode is PolicyMode.CONFIRM
 
 
 async def test_queue_delete_has_no_classifier_owned_confirmation(
