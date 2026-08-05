@@ -1091,6 +1091,55 @@ async def test_registry_incompatibility_is_reported_without_breaking_catalog() -
     assert adapter.diagnostics()["last_error"] == "mass.command_handlers is not a mapping"
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        "auth/future_dangerous_command",
+        "dashboard/register",
+        "dashboard/unregister",
+    ],
+)
+async def test_denied_handlers_are_omitted_from_dynamic_health_diagnostics(command: str) -> None:
+    """Intentional denylist exclusions do not look like MA compatibility failures."""
+
+    async def operation() -> None:
+        return None
+
+    adapter = _real_adapter(_handler(command, operation, scope="admin"))
+    adapter.mass.command_handlers["broken"] = SimpleNamespace(target=None)
+
+    assert await adapter.visible_entries() == []
+    assert adapter.diagnostics()["incompatible_handlers"] == ("broken",)
+    assert adapter.diagnostics()["last_error"] == "1 incompatible handler(s) skipped"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "auth/future_dangerous_command",
+        "dashboard/register",
+        "dashboard/unregister",
+    ],
+)
+async def test_denied_handlers_stay_denied_when_reauthorized(command: str) -> None:
+    """A cached entry cannot make an intentionally denied handler executable."""
+
+    async def operation() -> None:
+        return None
+
+    adapter = _real_adapter(_handler("music/read", operation), policy=DynamicPolicy(system=True))
+    entry = (await adapter.visible_entries())[0]
+    handler = _handler(command, operation, scope="admin")
+    adapter.mass.command_handlers = {command: handler}
+    stale_entry = replace(entry, name=f"ma_api:{command}", command=command, handler=handler)
+
+    with pytest.raises(ToolError, match="not found or not permitted"):
+        adapter._reauthorize_entry(
+            stale_entry,
+            (AccessToken(token="secret", client_id="u1", scopes=[]), MagicMock()),
+        )
+
+
 async def test_execution_sets_and_restores_ma_auth_context(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

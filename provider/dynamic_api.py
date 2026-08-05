@@ -330,6 +330,8 @@ class DynamicAPIAdapter:
         entries: list[DynamicEntry] = []
         incompatible: list[str] = []
         for command, handler in sorted(handlers.items()):
+            if self._command_is_denied(command):
+                continue
             if not self._handler_is_discoverable(command, handler):
                 incompatible.append(str(command))
                 continue
@@ -395,11 +397,15 @@ class DynamicAPIAdapter:
         return token, user
 
     @staticmethod
-    def _handler_is_discoverable(command: str, handler: Any) -> bool:
+    def _command_is_denied(command: str) -> bool:
+        """Return whether a command crosses an intentionally hidden boundary."""
+        return command in _DENIED_COMMANDS or command.startswith(_DENIED_COMMAND_PREFIXES)
+
+    @classmethod
+    def _handler_is_discoverable(cls, command: str, handler: Any) -> bool:
         """Reject aliases, auth boundaries, and transport internals."""
         return bool(
-            command not in _DENIED_COMMANDS
-            and not command.startswith(_DENIED_COMMAND_PREFIXES)
+            not cls._command_is_denied(command)
             and getattr(handler, "authenticated", True)
             and not getattr(handler, "alias", False)
             and callable(getattr(handler, "target", None))
