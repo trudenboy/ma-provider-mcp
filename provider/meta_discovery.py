@@ -286,7 +286,6 @@ def _schema_result(entry: DynamicEntry) -> dict[str, Any]:
         "command": entry.command,
         "description": entry.description,
         "inputSchema": entry.input_schema,
-        "risk": entry.risk.value,
         "requiredScope": entry.required_scope,
         "allowImpersonation": entry.allow_impersonation,
         "annotations": entry.annotations,

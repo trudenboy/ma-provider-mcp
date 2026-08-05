@@ -7,15 +7,10 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from .constants import (
-    CONF_DYNAMIC_API_CONTROL,
-    CONF_DYNAMIC_API_READ,
-    CONF_DYNAMIC_API_SYSTEM,
-    CONF_DYNAMIC_API_WRITE,
     CONF_ENFORCE_AUDIENCE,
     CONF_EXTRA_ALLOWED_ORIGINS,
     CONF_MOUNT_PATH,
     CONF_REQUIRE_AUTH,
-    CONF_REQUIRE_CONFIRMATION,
     CONF_TRUST_FORWARDED_PROTO,
     DEFAULT_MOUNT_PATH,
 )
@@ -252,7 +247,6 @@ class MCPServerRuntime:
         """Install the permanent dynamic command discovery layer."""
         from fastmcp.server.dependencies import get_access_token  # noqa: PLC0415
 
-        from .command_policy import DynamicPolicy  # noqa: PLC0415
         from .dynamic_api import DynamicAPIAdapter  # noqa: PLC0415
         from .meta_discovery import register_meta_discovery  # noqa: PLC0415
 
@@ -263,14 +257,7 @@ class MCPServerRuntime:
 
         adapter = DynamicAPIAdapter(
             self._mass,
-            policy_provider=lambda: DynamicPolicy(
-                read=config_bool(CONF_DYNAMIC_API_READ, default=True),
-                control=config_bool(CONF_DYNAMIC_API_CONTROL),
-                write=config_bool(CONF_DYNAMIC_API_WRITE),
-                system=config_bool(CONF_DYNAMIC_API_SYSTEM),
-            ),
             auth_required_provider=lambda: config_bool(CONF_REQUIRE_AUTH, default=True),
-            confirmation_provider=lambda: config_bool(CONF_REQUIRE_CONFIRMATION, default=True),
             token_provider=get_access_token,
             allowed_tags_provider=lambda: self._allowed_tags,
         )

@@ -11,7 +11,6 @@ from typing import Any, cast
 
 import pytest
 from fastmcp import Client
-from fastmcp.client.elicitation import ElicitResult
 from fastmcp.client.transports import StreamableHttpTransport
 from fastmcp.exceptions import ToolError
 
@@ -387,7 +386,7 @@ async def test_live_reversible_queue_cycle(live_client: LiveClient) -> None:
 
 
 @pytest.mark.integration
-async def test_live_annotations_and_declined_queue_confirmation(
+async def test_live_annotations_remain_truthful(
     live_client: LiveClient,
 ) -> None:
     """Destructive queue schemas and read-only health annotations remain truthful."""
@@ -399,32 +398,8 @@ async def test_live_annotations_and_declined_queue_confirmation(
         result = await live_client.call_tool("get_tool_schema", {"tool_name": f"ma_api:{command}"})
         schema = structured_content(result)
         assert schema["annotations"]["destructiveHint"] is True
-        assert schema["risk"] == "write"
     health = await live_client.call_tool(
         "get_tool_schema", {"tool_name": "ma_api:fastmcp/debug/health"}
     )
     health_schema = structured_content(health)
     assert health_schema["annotations"]["readOnlyHint"] is True
-    assert health_schema["risk"] == "system"
-    declines = 0
-
-    async def decline_elicitation(
-        message: str, response_type: Any, params: Any, context: Any
-    ) -> ElicitResult[Any]:
-        nonlocal declines
-        del message, response_type, params, context
-        declines += 1
-        return ElicitResult(action="decline")
-
-    url, token = _live_settings()
-    transport = StreamableHttpTransport(url, auth=token)
-    async with Client(transport, elicitation_handler=decline_elicitation) as client:
-        with pytest.raises(ToolError, match="Operation cancelled by user"):
-            await client.call_tool(
-                "call_tool",
-                {
-                    "name": "ma_api:fastmcp/queue/remove_items_safe",
-                    "arguments": {"queue_id": "stale", "item_ids": ["stale"]},
-                },
-            )
-    assert declines == 1

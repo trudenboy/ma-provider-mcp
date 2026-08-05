@@ -40,7 +40,7 @@ def test_tag_enum_values_are_namespaced() -> None:
     for tag in Tag:
         assert ":" in tag.value
         verb, _, _ = tag.value.partition(":")
-        assert verb in {"query", "control", "edit", "delete", "debug", "config"}
+        assert verb in {"query", "control", "edit", "delete", "debug", "config", "system"}
 
 
 def test_enabled_tags_defaults(mock_config: MagicMock) -> None:

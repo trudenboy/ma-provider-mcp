@@ -2,9 +2,16 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
+from music_assistant import MusicAssistant
+from music_assistant.controllers.config import ConfigController
+from music_assistant.controllers.discovery import DiscoveryController
+from provider.command_policy import resolve_command_policy
 from provider.command_profiles import (
+    COMMAND_PROFILES,
     CURATED_PROFILE_MAPPINGS,
     LEGACY_COMMAND_MAPPINGS,
     LegacyMigration,
@@ -165,3 +172,39 @@ def test_frozen_baseline_maps_every_former_source_exactly_once() -> None:
         migration.command is None or not migration.command.startswith("mcp_api:")
         for migration in LEGACY_COMMAND_MAPPINGS.values()
     )
+
+
+async def test_current_ma_registry_is_capability_classified_or_explicitly_denied(
+    tmp_path: Path,
+) -> None:
+    """Every authenticated handler in MA's real core registry has a v2 classification."""
+    mass = MusicAssistant(str(tmp_path), str(tmp_path))
+    mass.config = ConfigController(mass)
+    mass.config.initialized = True
+    mass.discovery = DiscoveryController(mass)
+    await mass._load_core_controllers()
+    mass._register_api_commands()
+
+    unclassified: list[str] = []
+    unexpectedly_denied: list[str] = []
+    for command, handler in mass.command_handlers.items():
+        if not handler.authenticated:
+            continue
+        decision = resolve_command_policy(
+            command,
+            handler.required_scope,
+            COMMAND_PROFILES.get(command),
+        )
+        if not (
+            decision.hard_denied
+            or decision.required_capabilities
+            or decision.alternative_capabilities
+        ):
+            unclassified.append(command)
+        if decision.hard_denied and not (
+            command.startswith("auth/") or command in {"dashboard/register", "dashboard/unregister"}
+        ):
+            unexpectedly_denied.append(command)
+
+    assert unclassified == []
+    assert unexpectedly_denied == []

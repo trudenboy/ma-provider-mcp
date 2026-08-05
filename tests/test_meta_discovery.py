@@ -12,7 +12,6 @@ from fastmcp import Client, FastMCP
 from mcp.shared.exceptions import McpError
 
 from provider import meta_discovery
-from provider.command_policy import DynamicRisk
 from provider.config import build_config_entries
 from provider.constants import (
     CONF_DYNAMIC_API_CONTROL,
@@ -124,7 +123,6 @@ class _CatalogAdapter(_Adapter):
                 command=f"music/command_{index:02d}",
                 description=f"Music command {index}",
                 input_schema={"type": "object", "properties": {}},
-                risk=DynamicRisk.READ,
                 required_scope=None,
                 allow_impersonation=False,
                 handler=object(),
@@ -221,6 +219,6 @@ def test_dynamic_config_entries_replace_meta_toggle(mock_mass: Any) -> None:
     assert keys <= HOT_SWAPPABLE_KEYS
 
 
-def test_dynamic_entry_type_still_carries_risk() -> None:
-    """Keep the imported risk model visible to static consumers."""
-    assert DynamicRisk.READ.value == "read"
+def test_dynamic_entry_type_carries_no_classifier_risk_gate() -> None:
+    """Discovery descriptors do not expose the removed v1 risk class."""
+    assert "risk" not in DynamicEntry.__dataclass_fields__

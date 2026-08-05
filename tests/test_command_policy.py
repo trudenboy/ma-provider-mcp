@@ -16,13 +16,11 @@ from music_assistant_models.enums import ConfigEntryType
 import music_assistant
 from provider.command_policy import (
     CommandDecision,
-    Confirmation,
-    DynamicRisk,
-    command_tags_visible,
     preflight_command,
     resolve_command_policy,
 )
 from provider.command_profiles import CommandProfile
+from provider.policy import PolicyMode, PolicyProfile, policy_snapshot
 from provider.tags import Tag
 
 
@@ -58,11 +56,10 @@ def _current_ma_provider_entries_autospec() -> Any:
 
 
 @pytest.mark.parametrize("command", ["player_queues/delete_item", "player_queues/clear"])
-def test_direct_queue_deletes_are_confirmed_destructive_writes(command: str) -> None:
-    """Direct queue deletion cannot inherit the queue-control policy."""
+def test_direct_queue_deletes_require_only_the_delete_capability(command: str) -> None:
+    """Queue deletion classification has no independent risk or confirmation gate."""
     decision = resolve_command_policy(command, "queues.control", profile=None)
-    assert decision.risk is DynamicRisk.WRITE
-    assert decision.confirmation is Confirmation.ALWAYS
+    assert decision.required_capabilities == frozenset({str(Tag.DELETE_QUEUE)})
     assert decision.annotations == {
         "readOnlyHint": False,
         "destructiveHint": True,
@@ -71,40 +68,46 @@ def test_direct_queue_deletes_are_confirmed_destructive_writes(command: str) -> 
     }
 
 
-def test_system_health_is_still_read_only() -> None:
-    """System sensitivity does not make diagnostic behavior destructive."""
+def test_system_health_keeps_annotations_separate_from_capability() -> None:
+    """Read-only behavior hints do not weaken a debug capability requirement."""
     decision = resolve_command_policy("fastmcp/debug/health", "system.read", profile=None)
-    assert decision.risk is DynamicRisk.SYSTEM
+    assert decision.required_capabilities == frozenset({str(Tag.DEBUG_PROVIDERS)})
     assert decision.annotations["readOnlyHint"] is True
     assert decision.annotations["destructiveHint"] is False
     assert decision.annotations["idempotentHint"] is True
 
 
-def test_unknown_command_fails_into_system_gate() -> None:
-    """Unknown unscoped commands fail closed behind the system gate."""
-    decision = resolve_command_policy("future/new_command", None, None)
-    assert decision.risk is DynamicRisk.SYSTEM
+@pytest.mark.parametrize("scope", [None, "library.read", "system.read"])
+def test_unknown_command_fails_closed_instead_of_inheriting_scope(scope: str | None) -> None:
+    """Upstream scope metadata alone cannot classify an unknown command family."""
+    decision = resolve_command_policy("future/new_command", scope, None)
+    assert decision.hard_denied is True
+    assert decision.required_capabilities == frozenset()
+
+
+@pytest.mark.parametrize("command", ["providers_elevated", "config/core_backup/read"])
+def test_family_prefix_near_matches_fail_closed(command: str) -> None:
+    """A command must match a complete family path segment, not only its text prefix."""
+    decision = resolve_command_policy(command, "config.core.read", None)
+    assert decision.hard_denied is True
 
 
 def test_exact_policy_precedes_profile_and_family_policy() -> None:
-    """An ergonomic profile cannot weaken an exact destructive override."""
+    """An ergonomic profile cannot weaken an exact destructive capability."""
     profile = CommandProfile(
         command="player_queues/clear",
-        risk_override="control",
+        operation_override="control",
         annotations={"destructiveHint": False},
     )
     decision = resolve_command_policy("player_queues/clear", "queues.control", profile)
-    assert decision.risk is DynamicRisk.WRITE
-    assert decision.required_tags == frozenset({str(Tag.DELETE_QUEUE)})
-    assert decision.confirmation is Confirmation.ALWAYS
+    assert decision.required_capabilities == frozenset({str(Tag.DELETE_QUEUE)})
+    assert decision.annotations["destructiveHint"] is True
 
 
-def test_safe_queue_extension_keeps_always_destructive_policy() -> None:
-    """The deferred safe-removal extension already has its mandatory policy."""
+def test_safe_queue_extension_keeps_destructive_annotation_and_capability() -> None:
+    """The safe-removal extension is controlled only by delete:queue mode."""
     decision = resolve_command_policy("fastmcp/queue/remove_items_safe", "queues.control", None)
-    assert decision.risk is DynamicRisk.WRITE
-    assert decision.confirmation is Confirmation.ALWAYS
-    assert decision.required_tags == frozenset({str(Tag.DELETE_QUEUE)})
+    assert decision.required_capabilities == frozenset({str(Tag.DELETE_QUEUE)})
     assert decision.annotations["destructiveHint"] is True
 
 
@@ -112,33 +115,35 @@ def test_player_queue_write_operations_require_edit_queue_permission() -> None:
     """Saving a queue is an edit, not an untagged write-scope escape hatch."""
     decision = resolve_command_policy("player_queues/save_as_playlist", "library.write", None)
 
-    assert decision.required_tags == frozenset({str(Tag.EDIT_QUEUE)})
+    assert decision.required_capabilities == frozenset({str(Tag.EDIT_QUEUE)})
 
 
-def test_fixed_tags_and_alternative_tags_use_distinct_permission_semantics() -> None:
-    """Fixed requirements are conjunctive while setup-flow categories are any-of."""
+def test_required_and_alternative_capabilities_have_distinct_mode_semantics() -> None:
+    """Required capabilities combine while an any-of path picks its least restrictive mode."""
     decision = CommandDecision(
-        DynamicRisk.WRITE,
-        {},
-        frozenset({"fixed:first", "fixed:second"}),
-        alternative_tags=frozenset({"category:provider", "category:player"}),
+        annotations={},
+        required_capabilities=frozenset({str(Tag.QUERY_LIBRARY), str(Tag.CONFIG_READ)}),
+        alternative_capabilities=frozenset(
+            {str(Tag.CONFIG_WRITE_PROVIDER), str(Tag.CONFIG_WRITE_PLAYER)}
+        ),
     )
-
-    assert command_tags_visible(
-        decision,
-        {"fixed:first", "fixed:second", "category:player"},
+    snapshot = policy_snapshot(
+        PolicyProfile.CUSTOM,
+        {
+            Tag.QUERY_LIBRARY: PolicyMode.ALLOW,
+            Tag.CONFIG_READ: PolicyMode.CONFIRM,
+            Tag.CONFIG_WRITE_PROVIDER: PolicyMode.DENY,
+            Tag.CONFIG_WRITE_PLAYER: PolicyMode.ALLOW,
+        },
     )
-    assert not command_tags_visible(decision, {"fixed:first", "category:player"})
-    assert not command_tags_visible(decision, {"fixed:first", "fixed:second"})
+    assert decision.effective_mode(snapshot) is PolicyMode.CONFIRM
 
 
-def test_provider_reload_is_confirmed_destructive_config_write() -> None:
-    """Native provider reload cannot bypass the provider-write permission or confirmation."""
+def test_provider_reload_uses_config_mode_without_mandatory_confirmation() -> None:
+    """Native provider reload has no classifier-owned confirmation behavior."""
     decision = resolve_command_policy("config/providers/reload", "config.providers.write", None)
 
-    assert decision.risk is DynamicRisk.WRITE
-    assert decision.required_tags == frozenset({str(Tag.CONFIG_WRITE_PROVIDER)})
-    assert decision.confirmation is Confirmation.ALWAYS
+    assert decision.required_capabilities == frozenset({str(Tag.CONFIG_WRITE_PROVIDER)})
     assert decision.annotations == {
         "readOnlyHint": False,
         "destructiveHint": True,
@@ -148,19 +153,34 @@ def test_provider_reload_is_confirmed_destructive_config_write() -> None:
 
 
 @pytest.mark.parametrize(
-    ("command", "scope", "risk"),
+    "command",
     [
-        ("future/read", "library.read", DynamicRisk.READ),
-        ("future/control", "players.control", DynamicRisk.CONTROL),
-        ("future/write", "library.write", DynamicRisk.WRITE),
-        ("future/system", "system.read", DynamicRisk.SYSTEM),
+        "auth/token/create",
+        "auth/future_command",
+        "dashboard/register",
+        "dashboard/unregister",
     ],
 )
-def test_ma_scope_is_used_when_no_command_policy_matches(
-    command: str, scope: str, risk: DynamicRisk
-) -> None:
-    """Current MA scope metadata remains the fallback classifier."""
-    assert resolve_command_policy(command, scope, None).risk is risk
+def test_auth_and_dashboard_families_are_explicitly_hard_denied(command: str) -> None:
+    """Credential and dashboard transport families remain unavailable under every policy."""
+    decision = resolve_command_policy(command, "system.all", None)
+    assert decision.hard_denied is True
+    assert decision.required_capabilities == frozenset()
+
+
+def test_nonregistration_dashboard_commands_require_system_admin() -> None:
+    """Dashboard operations outside registration remain system-admin classified."""
+    decision = resolve_command_policy("dashboard/show", "users.invite", None)
+    assert decision.hard_denied is False
+    assert decision.required_capabilities == frozenset({str(Tag.SYSTEM_ADMIN)})
+
+
+@pytest.mark.parametrize("command", ["audio_analysis/run", "logging/set_level", "tasks/list"])
+def test_system_command_families_require_system_admin(command: str) -> None:
+    """System commands are decided solely by the system:admin capability mode."""
+    decision = resolve_command_policy(command, "system.read", None)
+    assert decision.hard_denied is False
+    assert decision.required_capabilities == frozenset({str(Tag.SYSTEM_ADMIN)})
 
 
 @pytest.mark.parametrize(
@@ -178,12 +198,23 @@ def test_ma_scope_is_used_when_no_command_policy_matches(
         ("config/core/save", "config.core.write", Tag.CONFIG_WRITE_CORE),
     ],
 )
-def test_longest_family_policy_assigns_required_permission_tag(
+def test_longest_family_policy_assigns_required_capability(
     command: str, scope: str, tag: Tag
 ) -> None:
-    """Family policy selects the narrow permission toggle for each operation."""
+    """Family policy selects the narrow stable capability for each operation."""
     decision = resolve_command_policy(command, scope, None)
-    assert decision.required_tags == frozenset({str(tag)})
+    assert decision.required_capabilities == frozenset({str(tag)})
+
+
+def test_config_preflight_metadata_represents_alternatives_and_secret_escalation() -> None:
+    """Task 3 can resolve setup-flow alternatives and secret writes per request."""
+    flow = resolve_command_policy("config/flows/submit", None, None)
+    save = resolve_command_policy("config/providers/save", "config.providers.write", None)
+    assert flow.alternative_capabilities == frozenset(
+        {str(Tag.CONFIG_WRITE_PROVIDER), str(Tag.CONFIG_WRITE_PLAYER)}
+    )
+    assert flow.secret_capability == str(Tag.CONFIG_WRITE_SECRET)
+    assert save.secret_capability == str(Tag.CONFIG_WRITE_SECRET)
 
 
 def _config_mass() -> SimpleNamespace:

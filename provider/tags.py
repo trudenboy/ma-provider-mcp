@@ -65,6 +65,7 @@ class Tag(StrEnum):
     CONFIG_WRITE_CORE = "config:write:core"
     CONFIG_WRITE_PLAYER = "config:write:player"
     CONFIG_WRITE_SECRET = "config:write:secret"
+    SYSTEM_ADMIN = "system:admin"
 
 
 CONFIG_TO_TAG: dict[str, Tag] = {

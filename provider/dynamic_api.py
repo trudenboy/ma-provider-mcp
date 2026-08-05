@@ -20,9 +20,7 @@ from mcp.types import INVALID_REQUEST, METHOD_NOT_FOUND
 from .command_policy import (
     CommandDecision,
     CommandPreflight,
-    Confirmation,
-    DynamicPolicy,
-    DynamicRisk,
+    command_is_hard_denied,
     command_tags_visible,
     postflight_command,
     preflight_command,
@@ -49,8 +47,6 @@ if TYPE_CHECKING:
 
 _ALIASES_BY_COMMAND = aliases_by_command()
 
-_DENIED_COMMANDS = frozenset({"dashboard/register", "dashboard/unregister"})
-_DENIED_COMMAND_PREFIXES = ("auth/",)
 _COMPACT_ITEMS = 25
 _FULL_ITEMS = 200
 _COMPACT_BYTES = 12_288
@@ -99,7 +95,6 @@ class DynamicEntry:
     command: str
     description: str
     input_schema: dict[str, Any]
-    risk: DynamicRisk
     required_scope: str | None
     allow_impersonation: bool
     handler: Any
@@ -189,18 +184,14 @@ class DynamicAPIAdapter:
         self,
         mass: Any,
         *,
-        policy_provider: Callable[[], DynamicPolicy],
         auth_required_provider: Callable[[], bool],
-        confirmation_provider: Callable[[], bool],
         token_provider: Callable[[], AccessToken | None],
         scope_checker: Callable[[Any, Any], bool] | None = None,
         allowed_tags_provider: Callable[[], set[str]] | None = None,
     ) -> None:
         """Initialise the adapter with request-aware policy providers."""
         self.mass = mass
-        self._policy_provider = policy_provider
         self._auth_required_provider = auth_required_provider
-        self._confirmation_provider = confirmation_provider
         self._token_provider = token_provider
         self._scope_checker = scope_checker or self._default_scope_checker
         self._allowed_tags_provider = allowed_tags_provider or (lambda: set())
@@ -235,7 +226,6 @@ class DynamicAPIAdapter:
             return CatalogView(snapshot.fingerprint, ())
 
         user = auth[1]
-        policy = self._policy_provider()
         allowed_tags = self._allowed_tags_provider()
         entries = [
             entry
@@ -244,7 +234,6 @@ class DynamicAPIAdapter:
                 entry.required_scope is None
                 or self._scope_is_allowed(user, getattr(entry.handler, "required_scope", None))
             )
-            and policy.allows(entry.risk)
             and entry.decision is not None
             and command_tags_visible(entry.decision, allowed_tags)
         ]
@@ -392,6 +381,8 @@ class DynamicAPIAdapter:
             scope = getattr(handler, "required_scope", None)
             profile = COMMAND_PROFILES.get(command)
             decision = resolve_command_policy(command, scope, profile)
+            if decision.hard_denied:
+                continue
             try:
                 entries.append(self._compile_entry(command, handler, decision))
             except UnsupportedSignatureError:
@@ -453,7 +444,7 @@ class DynamicAPIAdapter:
     @staticmethod
     def _command_is_denied(command: str) -> bool:
         """Return whether a command crosses an intentionally hidden boundary."""
-        return command in _DENIED_COMMANDS or command.startswith(_DENIED_COMMAND_PREFIXES)
+        return command_is_hard_denied(command)
 
     @classmethod
     def _handler_is_discoverable(cls, command: str, handler: Any) -> bool:
@@ -486,7 +477,6 @@ class DynamicAPIAdapter:
                 profile,
                 allow_impersonation=bool(getattr(handler, "allow_impersonation", False)),
             ),
-            risk=decision.risk,
             required_scope=str(getattr(scope, "value", scope)) if scope is not None else None,
             allow_impersonation=bool(getattr(handler, "allow_impersonation", False)),
             handler=handler,
@@ -555,24 +545,10 @@ class DynamicAPIAdapter:
         ctx: Context,
         *,
         impersonating: bool = False,
-        confirmation: Confirmation | None = None,
     ) -> None:
-        """Apply the resolved confirmation mode and impersonation guard."""
-        confirmation = confirmation or (
-            entry.decision.confirmation
-            if entry.decision is not None
-            else Confirmation.ALWAYS
-            if entry.risk is DynamicRisk.SYSTEM
-            else Confirmation.CONFIGURED
-            if entry.risk is DynamicRisk.WRITE
-            else Confirmation.NEVER
-        )
-        required = impersonating or confirmation is Confirmation.ALWAYS
-        optional = confirmation is Confirmation.CONFIGURED and self._confirmation_provider()
-        if required:
-            await confirm_or_raise(ctx, f"Run {entry.name} ({entry.risk.value})?", required=True)
-        elif optional:
-            await confirm_or_raise(ctx, f"Run {entry.name} ({entry.risk.value})?", required=False)
+        """Apply the unconditional impersonation confirmation guard."""
+        if impersonating:
+            await confirm_or_raise(ctx, f"Run {entry.name} as another user?", required=True)
 
     async def _execute(
         self,
@@ -620,13 +596,10 @@ class DynamicAPIAdapter:
             raise ToolError(f"Tool {entry.name!r} not found or not permitted")
         profile = COMMAND_PROFILES.get(entry.command)
         decision = resolve_command_policy(entry.command, scope, profile)
-        if not self._policy_provider().allows(decision.risk) or not command_tags_visible(
-            decision, self._allowed_tags_provider()
-        ):
+        if not command_tags_visible(decision, self._allowed_tags_provider()):
             raise ToolError(f"Tool {entry.name!r} not found or not permitted")
         return dataclasses.replace(
             entry,
-            risk=decision.risk,
             annotations=dict(decision.annotations),
             decision=decision,
         )

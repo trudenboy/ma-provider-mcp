@@ -29,7 +29,6 @@ from provider.catalog_pagination import (
     decode_cursor,
     encode_cursor,
 )
-from provider.command_policy import Confirmation, DynamicPolicy, DynamicRisk
 from provider.command_profiles import (
     COMMAND_PROFILES,
     CURATED_PROFILE_MAPPINGS,
@@ -77,7 +76,6 @@ class _FakeAdapter:
                     "required": ["player_id"],
                     "additionalProperties": False,
                 },
-                risk=DynamicRisk.CONTROL,
                 required_scope="players.control",
                 allow_impersonation=False,
                 handler=object(),
@@ -233,7 +231,6 @@ def _catalog_entry(name: str, description: str) -> DynamicEntry:
         command=name.removeprefix("ma_api:"),
         description=description,
         input_schema={"type": "object", "properties": {}},
-        risk=DynamicRisk.READ,
         required_scope=None,
         allow_impersonation=False,
         handler=object(),
@@ -586,7 +583,7 @@ async def test_dynamic_schema_is_returned_on_demand() -> None:
     assert result.data["name"] == "ma_api:players/cmd/play"
     assert result.data["kind"] == "ma_api"
     assert result.data["inputSchema"]["required"] == ["player_id"]
-    assert result.data["risk"] == "control"
+    assert "risk" not in result.data
     assert result.data["outputSchema"] == {"type": "object"}
     assert result.data["annotations"]["readOnlyHint"] is False
 
@@ -655,7 +652,6 @@ def _handler(command: str, target: Any, scope: str = "library.read") -> Any:
 def _real_adapter(
     handler: Any,
     *,
-    policy: DynamicPolicy | None = None,
     scope_checker: Any = None,
     allowed_tags: set[str] | None = None,
     user: Any = None,
@@ -669,9 +665,7 @@ def _real_adapter(
     token = AccessToken(token="secret", client_id="u1", scopes=[])
     return DynamicAPIAdapter(
         mass,
-        policy_provider=lambda: policy or DynamicPolicy(),
         auth_required_provider=lambda: True,
-        confirmation_provider=lambda: True,
         token_provider=lambda: token,
         scope_checker=scope_checker or (lambda _user, _scope: True),
         allowed_tags_provider=lambda: (
@@ -756,21 +750,18 @@ async def test_adapter_discovers_handler_and_compiles_schema() -> None:
     adapter = _real_adapter(_handler("music/search", search))
     entries = await adapter.visible_entries()
     assert [entry.name for entry in entries] == ["ma_api:music/search"]
-    assert entries[0].risk is DynamicRisk.READ
     assert entries[0].input_schema["required"] == ["query"]
     assert entries[0].input_schema["properties"]["limit"]["default"] == 5
 
 
-async def test_adapter_hides_disabled_risk_class() -> None:
-    """Control commands remain absent until their independent flag is enabled."""
+async def test_adapter_has_no_dynamic_risk_gate() -> None:
+    """A classified command is not hidden behind the removed v1 risk switches."""
 
     async def play(player_id: str) -> None:
         del player_id
 
     handler = _handler("players/cmd/play", play, "players.control")
-    assert await _real_adapter(handler).visible_entries() == []
-    enabled = DynamicPolicy(control=True)
-    assert len(await _real_adapter(handler, policy=enabled).visible_entries()) == 1
+    assert len(await _real_adapter(handler).visible_entries()) == 1
 
 
 async def test_adapter_observes_registry_changes_without_restart() -> None:
@@ -880,9 +871,7 @@ async def test_cached_snapshot_keeps_visibility_request_specific() -> None:
     mass.webserver.auth.get_user = AsyncMock(side_effect=users.__getitem__)
     adapter = DynamicAPIAdapter(
         mass,
-        policy_provider=DynamicPolicy,
         auth_required_provider=lambda: True,
-        confirmation_provider=lambda: True,
         token_provider=current_token.get,
         scope_checker=lambda user, scope: scope in user.scopes,
         allowed_tags_provider=lambda: {str(tag) for tag in Tag},
@@ -1038,9 +1027,7 @@ async def test_adapter_hides_catalog_when_mcp_auth_is_disabled() -> None:
     mass = MagicMock(command_handlers={handler.command: handler})
     adapter = DynamicAPIAdapter(
         mass,
-        policy_provider=DynamicPolicy,
         auth_required_provider=lambda: False,
-        confirmation_provider=lambda: True,
         token_provider=lambda: None,
         scope_checker=lambda _user, _scope: True,
     )
@@ -1055,7 +1042,7 @@ def test_every_migrated_command_has_an_executable_profile() -> None:
         assert isinstance(profile, CommandProfile)
         assert legacy in profile.search_aliases
         assert profile.annotations
-        assert profile.risk_override in {"read", "control", "write", "system"}
+        assert profile.operation_override in {"read", "control", "write", "system"}
     assert COMMAND_PROFILES["providers"].compact_fields == (
         "instance_id",
         "domain",
@@ -1524,7 +1511,7 @@ async def test_denied_handlers_stay_denied_when_reauthorized(command: str) -> No
     async def operation() -> None:
         return None
 
-    adapter = _real_adapter(_handler("music/read", operation), policy=DynamicPolicy(system=True))
+    adapter = _real_adapter(_handler("music/read", operation))
     entry = (await adapter.visible_entries())[0]
     handler = _handler(command, operation, scope="admin")
     adapter.mass.command_handlers = {command: handler}
@@ -1590,41 +1577,6 @@ async def test_schema_covers_enum_union_collections_and_impersonation() -> None:
     assert entry.output_schema is not None
 
 
-@pytest.mark.parametrize(
-    ("command", "scope", "risk", "policy"),
-    [
-        ("music/read", "library.read", DynamicRisk.READ, DynamicPolicy()),
-        (
-            "players/cmd/play",
-            "players.control",
-            DynamicRisk.CONTROL,
-            DynamicPolicy(control=True),
-        ),
-        (
-            "music/add_item",
-            "library.write",
-            DynamicRisk.WRITE,
-            DynamicPolicy(write=True),
-        ),
-        ("config/read", "system.read", DynamicRisk.SYSTEM, DynamicPolicy(system=True)),
-    ],
-)
-async def test_all_risk_classes_require_their_independent_gate(
-    command: str, scope: str, risk: DynamicRisk, policy: DynamicPolicy
-) -> None:
-    """Read, control, write and system gates do not imply one another."""
-
-    async def operation() -> None:
-        return None
-
-    handler = _handler(command, operation, scope)
-    entries = await _real_adapter(handler, policy=policy).visible_entries()
-    assert len(entries) == 1
-    assert entries[0].risk is risk
-    blocked = DynamicPolicy(read=False)
-    assert await _real_adapter(handler, policy=blocked).visible_entries() == []
-
-
 async def test_disabled_user_and_transport_commands_are_hidden() -> None:
     """Authentication state and transport exclusions are fail-closed."""
 
@@ -1656,7 +1608,7 @@ async def test_auth_command_prefix_is_never_discoverable(command: str) -> None:
         return None
 
     handler = _handler(command, operation, scope="admin")
-    adapter = _real_adapter(handler, policy=DynamicPolicy(system=True))
+    adapter = _real_adapter(handler)
 
     assert await adapter.visible_entries() == []
     assert await adapter.get_visible_entry(f"ma_api:{command}") is None
@@ -1671,10 +1623,7 @@ async def test_denied_auth_command_cannot_be_called_directly() -> None:
         called = True
         return "full-scope-token"
 
-    adapter = _real_adapter(
-        _handler("auth/token/create", mint_token, scope="admin"),
-        policy=DynamicPolicy(system=True),
-    )
+    adapter = _real_adapter(_handler("auth/token/create", mint_token, scope="admin"))
     ctx = SimpleNamespace(
         elicit=AsyncMock(return_value=SimpleNamespace(action="accept", data=True))
     )
@@ -1735,11 +1684,7 @@ async def test_invocation_rejects_targets_outside_user_filters(
         role="user",
         **filters,
     )
-    adapter = _real_adapter(
-        handler,
-        policy=DynamicPolicy(read=True, system=True),
-        user=user,
-    )
+    adapter = _real_adapter(handler, user=user)
     with pytest.raises(ToolError, match="not permitted"):
         await adapter.call(
             f"ma_api:{command}",
@@ -1824,45 +1769,32 @@ async def test_sync_coroutine_and_generator_handlers_close_cleanly() -> None:
     assert closed is True
 
 
-async def test_confirmation_policy_is_mandatory_for_system_and_impersonation(
+async def test_only_impersonation_has_classifier_independent_confirmation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """System and impersonated calls elicit even when write confirmation is off."""
+    """The classifier adds no mandatory prompts; impersonation remains unconditional."""
     confirmation = AsyncMock()
     monkeypatch.setattr("provider.dynamic_api.confirm_or_raise", confirmation)
     adapter = _real_adapter(_handler("music/read", lambda: None))
     handler = object()
     ctx = MagicMock()
-    read = DynamicEntry("ma_api:read", "read", "read", {}, DynamicRisk.READ, None, False, handler)
-    write = DynamicEntry(
-        "ma_api:write", "write", "write", {}, DynamicRisk.WRITE, None, False, handler
-    )
-    system = DynamicEntry(
-        "ma_api:system",
-        "system",
-        "system",
-        {},
-        DynamicRisk.SYSTEM,
-        None,
-        False,
-        handler,
-    )
-    adapter._confirmation_provider = lambda: True
+    read = DynamicEntry("ma_api:read", "read", "read", {}, None, False, handler)
+    write = DynamicEntry("ma_api:write", "write", "write", {}, None, False, handler)
+    system = DynamicEntry("ma_api:system", "system", "system", {}, None, False, handler)
     await adapter._confirm(read, ctx)
     await adapter._confirm(write, ctx)
     await adapter._confirm(system, ctx)
     await adapter._confirm(read, ctx, impersonating=True)
-    assert [call.kwargs["required"] for call in confirmation.await_args_list] == [
-        False,
-        True,
-        True,
-    ]
+    confirmation.assert_awaited_once()
+    await_args = confirmation.await_args
+    assert await_args is not None
+    assert await_args.kwargs["required"] is True
 
 
-async def test_queue_delete_always_confirms_before_execution(
+async def test_queue_delete_has_no_classifier_owned_confirmation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Disabling configured write prompts cannot bypass destructive queue elicitation."""
+    """Delete execution is governed by its capability, not a mandatory classifier prompt."""
     confirmation = AsyncMock()
     monkeypatch.setattr("provider.dynamic_api.confirm_or_raise", confirmation)
     called = False
@@ -1874,14 +1806,11 @@ async def test_queue_delete_always_confirms_before_execution(
 
     adapter = _real_adapter(
         _handler("player_queues/clear", clear, "queues.control"),
-        policy=DynamicPolicy(write=True),
         allowed_tags={str(Tag.DELETE_QUEUE)},
     )
-    adapter._confirmation_provider = lambda: False
     entry = (await adapter.visible_entries())[0]
-    assert entry.risk is DynamicRisk.WRITE
     assert entry.decision is not None
-    assert entry.decision.confirmation is Confirmation.ALWAYS
+    assert entry.decision.required_capabilities == frozenset({str(Tag.DELETE_QUEUE)})
     await adapter.call(
         "ma_api:player_queues/clear",
         {"queue_id": "kitchen"},
@@ -1890,9 +1819,7 @@ async def test_queue_delete_always_confirms_before_execution(
         max_items=None,
         ctx=MagicMock(),
     )
-    await_args = confirmation.await_args
-    assert await_args is not None
-    assert await_args.kwargs["required"] is True
+    confirmation.assert_not_awaited()
     assert called is True
 
 
@@ -1923,7 +1850,6 @@ async def test_playlist_provider_alias_is_filtered_before_confirmation(
             create_playlist,
             "library.write",
         ),
-        policy=DynamicPolicy(write=True),
         allowed_tags={str(Tag.EDIT_PLAYLISTS)},
         user=user,
     )
@@ -1940,15 +1866,14 @@ async def test_playlist_provider_alias_is_filtered_before_confirmation(
     assert called is False
 
 
-@pytest.mark.parametrize("revoked", ["policy", "tag", "scope"])
+@pytest.mark.parametrize("revoked", ["tag", "scope"])
 async def test_native_live_authorization_revocation_prevents_elicitation(
     revoked: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Native live policy, tag and scope revocation all fail before elicitation."""
+    """Native live capability and scope revocation fail before execution."""
     confirmation = AsyncMock()
     monkeypatch.setattr("provider.dynamic_api.confirm_or_raise", confirmation)
     called = False
-    policy_checks = 0
     tag_checks = 0
     scope_checks = 0
 
@@ -1958,14 +1883,8 @@ async def test_native_live_authorization_revocation_prevents_elicitation(
 
     adapter = _real_adapter(
         _handler("music/write", write, "library.write"),
-        policy=DynamicPolicy(write=True),
         allowed_tags={str(Tag.EDIT_LIBRARY)},
     )
-
-    def policy_provider() -> DynamicPolicy:
-        nonlocal policy_checks
-        policy_checks += 1
-        return DynamicPolicy(write=revoked != "policy" or policy_checks == 1)
 
     def tags_provider() -> set[str]:
         nonlocal tag_checks
@@ -1977,7 +1896,6 @@ async def test_native_live_authorization_revocation_prevents_elicitation(
         scope_checks += 1
         return revoked != "scope" or scope_checks == 1
 
-    adapter._policy_provider = policy_provider
     adapter._allowed_tags_provider = tags_provider
     adapter._scope_checker = scope_checker
     with pytest.raises(ToolError, match="not permitted"):
@@ -1993,13 +1911,13 @@ async def test_native_live_authorization_revocation_prevents_elicitation(
     assert called is False
 
 
-@pytest.mark.parametrize("revoked", ["handler", "policy", "tag", "scope"])
-async def test_native_authorization_revoked_during_confirmation_prevents_execution(
+@pytest.mark.parametrize("revoked", ["handler", "tag", "scope"])
+async def test_native_authorization_revoked_between_checks_prevents_execution(
     revoked: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Authorization changes while eliciting are rechecked before invocation."""
+    """Authorization changes at the call boundary are rechecked before invocation."""
     called: list[str] = []
-    state = {"policy": True, "tag": True, "scope": True}
+    state = {"tag": True, "scope": True}
 
     async def write() -> None:
         called.append("stale")
@@ -2010,10 +1928,8 @@ async def test_native_authorization_revoked_during_confirmation_prevents_executi
     handler = _handler("music/write", write, "library.write")
     adapter = _real_adapter(
         handler,
-        policy=DynamicPolicy(write=True),
         allowed_tags={str(Tag.EDIT_LIBRARY)},
     )
-    adapter._policy_provider = lambda: DynamicPolicy(write=state["policy"])
     adapter._allowed_tags_provider = lambda: {str(Tag.EDIT_LIBRARY)} if state["tag"] else set()
     adapter._scope_checker = lambda _user, _scope: state["scope"]
 
@@ -2026,7 +1942,7 @@ async def test_native_authorization_revoked_during_confirmation_prevents_executi
             state[revoked] = False
 
     confirmation = AsyncMock(side_effect=revoke_during_confirmation)
-    monkeypatch.setattr("provider.dynamic_api.confirm_or_raise", confirmation)
+    monkeypatch.setattr(adapter, "_confirm", confirmation)
 
     with pytest.raises(ToolError, match="not permitted"):
         await adapter.call(
@@ -2058,7 +1974,6 @@ async def test_fresh_authentication_rejects_removed_or_disabled_user_after_confi
 
     adapter = _real_adapter(
         _handler("config/providers/reload", reload_provider, "config.providers.write"),
-        policy=DynamicPolicy(write=True),
         allowed_tags={str(Tag.CONFIG_WRITE_PROVIDER)},
         user=initial_user,
     )
@@ -2075,10 +1990,7 @@ async def test_fresh_authentication_rejects_removed_or_disabled_user_after_confi
             else SimpleNamespace(user_id="u1", enabled=False, role="admin")
         )
 
-    monkeypatch.setattr(
-        "provider.dynamic_api.confirm_or_raise",
-        AsyncMock(side_effect=change_user),
-    )
+    monkeypatch.setattr(adapter, "_confirm", AsyncMock(side_effect=change_user))
 
     with pytest.raises(ToolError, match="Authentication is required"):
         await adapter.call(
@@ -2105,7 +2017,6 @@ async def test_revoked_bearer_token_after_confirmation_prevents_execution(
 
     adapter = _real_adapter(
         _handler("config/providers/reload", reload_provider, "config.providers.write"),
-        policy=DynamicPolicy(write=True),
         allowed_tags={str(Tag.CONFIG_WRITE_PROVIDER)},
     )
     adapter.mass.webserver.auth.authenticate_with_token = AsyncMock(return_value=None)
@@ -2138,7 +2049,6 @@ async def test_valid_bearer_revalidation_uses_the_fresh_user_after_confirmation(
 
     adapter = _real_adapter(
         _handler("config/providers/reload", reload_provider, "config.providers.write"),
-        policy=DynamicPolicy(write=True),
         allowed_tags={str(Tag.CONFIG_WRITE_PROVIDER)},
     )
     adapter.mass.webserver.auth.authenticate_with_token = AsyncMock(return_value=fresh_user)
@@ -2169,7 +2079,6 @@ async def test_post_confirmation_revalidation_rejects_a_different_user(
 
     adapter = _real_adapter(
         _handler("config/providers/reload", reload_provider, "config.providers.write"),
-        policy=DynamicPolicy(write=True),
         allowed_tags={str(Tag.CONFIG_WRITE_PROVIDER)},
     )
     adapter.mass.webserver.auth.authenticate_with_token = AsyncMock(
@@ -2210,7 +2119,6 @@ async def test_target_filter_revoked_during_confirmation_prevents_execution(
 
     adapter = _real_adapter(
         _handler("player_queues/clear", clear, "queues.control"),
-        policy=DynamicPolicy(write=True),
         allowed_tags={str(Tag.DELETE_QUEUE)},
         user=current_user,
     )
@@ -2229,10 +2137,7 @@ async def test_target_filter_revoked_during_confirmation_prevents_execution(
             provider_filter=[],
         )
 
-    monkeypatch.setattr(
-        "provider.dynamic_api.confirm_or_raise",
-        AsyncMock(side_effect=revoke_filter),
-    )
+    monkeypatch.setattr(adapter, "_confirm", AsyncMock(side_effect=revoke_filter))
 
     with pytest.raises(ToolError, match="target is not permitted"):
         await adapter.call(
@@ -2265,7 +2170,6 @@ async def test_secret_tag_revoked_during_confirmation_prevents_config_execution(
 
     adapter = _real_adapter(
         _handler("config/providers/save", save_provider_config, "config.providers.write"),
-        policy=DynamicPolicy(write=True),
         allowed_tags=set(),
     )
     adapter._allowed_tags_provider = lambda: {
@@ -2279,10 +2183,7 @@ async def test_secret_tag_revoked_during_confirmation_prevents_config_execution(
     async def revoke_secret(*_args: Any, **_kwargs: Any) -> None:
         state["secret"] = False
 
-    monkeypatch.setattr(
-        "provider.dynamic_api.confirm_or_raise",
-        AsyncMock(side_effect=revoke_secret),
-    )
+    monkeypatch.setattr(adapter, "_confirm", AsyncMock(side_effect=revoke_secret))
 
     with pytest.raises(ToolError, match="config:write:secret"):
         await adapter.call(
@@ -2531,7 +2432,6 @@ async def test_flow_category_revoked_during_confirmation_prevents_execution(
 
     adapter = _real_adapter(
         _handler("config/flows/submit", submit_flow),
-        policy=DynamicPolicy(write=True),
         allowed_tags=set(),
     )
     adapter._allowed_tags_provider = lambda: {
@@ -2548,10 +2448,7 @@ async def test_flow_category_revoked_during_confirmation_prevents_execution(
     async def revoke_provider_category(*_args: Any, **_kwargs: Any) -> None:
         state["provider"] = False
 
-    monkeypatch.setattr(
-        "provider.dynamic_api.confirm_or_raise",
-        AsyncMock(side_effect=revoke_provider_category),
-    )
+    monkeypatch.setattr(adapter, "_confirm", AsyncMock(side_effect=revoke_provider_category))
 
     with pytest.raises(ToolError, match="config:write:provider"):
         await adapter.call(
@@ -2579,7 +2476,6 @@ async def test_player_only_tag_executes_a_player_setup_flow(
 
     adapter = _real_adapter(
         _handler("config/flows/submit", submit_flow),
-        policy=DynamicPolicy(write=True),
         allowed_tags={str(Tag.CONFIG_WRITE_PLAYER)},
     )
     adapter.mass.config.get_setup_flow_required_scope = lambda _flow_id: "config.players.write"
@@ -2613,7 +2509,6 @@ async def test_provider_setup_flow_rejects_player_only_tag_before_confirmation(
 
     adapter = _real_adapter(
         _handler("config/flows/submit", submit_flow),
-        policy=DynamicPolicy(write=True),
         allowed_tags={str(Tag.CONFIG_WRITE_PLAYER)},
     )
     adapter.mass.config.get_setup_flow_required_scope = lambda _flow_id: "config.providers.write"
@@ -2659,7 +2554,6 @@ async def test_native_config_secret_denial_precedes_confirmation_and_target(
             save_provider_config,
             "config.providers.write",
         ),
-        policy=DynamicPolicy(write=True),
         allowed_tags={str(Tag.CONFIG_WRITE_PROVIDER)},
     )
     adapter.mass.config.get_provider_config_entries = AsyncMock(

@@ -1,11 +1,10 @@
-"""Independent risk, permission, annotation and confirmation policy."""
+"""Capability classification, annotations, and request-dependent preflight."""
 
 from __future__ import annotations
 
 import inspect
 from collections.abc import Mapping
 from dataclasses import dataclass
-from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
 from fastmcp.exceptions import ToolError
@@ -13,53 +12,44 @@ from music_assistant_models.constants import SECURE_STRING_SUBSTITUTE
 from music_assistant_models.enums import ConfigEntryType
 
 from .config_io.secret_handler import gate_secret_writes
+from .policy import PolicyMode, PolicySnapshot, combine_policy_modes
 from .tags import Tag
 
 if TYPE_CHECKING:
     from .command_profiles import CommandProfile
 
 
-class DynamicRisk(StrEnum):
-    """Provider-side risk classes for dynamically discovered commands."""
-
-    READ = "read"
-    CONTROL = "control"
-    WRITE = "write"
-    SYSTEM = "system"
-
-
-@dataclass(frozen=True, slots=True)
-class DynamicPolicy:
-    """Independent exposure switches for the four dynamic risk classes."""
-
-    read: bool = True
-    control: bool = False
-    write: bool = False
-    system: bool = False
-
-    def allows(self, risk: DynamicRisk) -> bool:
-        """Return whether a risk class is enabled."""
-        return bool(getattr(self, risk.value))
-
-
-class Confirmation(StrEnum):
-    """Confirmation behavior applied immediately before command execution."""
-
-    NEVER = "never"
-    CONFIGURED = "configured"
-    ALWAYS = "always"
-
-
 @dataclass(frozen=True, slots=True)
 class CommandDecision:
-    """Resolved policy for one canonical command."""
+    """Capability and behavior classification for one canonical command."""
 
-    risk: DynamicRisk
     annotations: Mapping[str, bool]
-    required_tags: frozenset[str] = frozenset()
-    confirmation: Confirmation = Confirmation.NEVER
+    required_capabilities: frozenset[str] = frozenset()
     preflight: str | None = None
-    alternative_tags: frozenset[str] = frozenset()
+    alternative_capabilities: frozenset[str] = frozenset()
+    secret_capability: str | None = None
+    hard_denied: bool = False
+
+    def effective_mode(
+        self,
+        policy: PolicySnapshot,
+        additional_required: frozenset[str] = frozenset(),
+    ) -> PolicyMode:
+        """Resolve fixed, request-derived, and any-of capability modes."""
+        if self.hard_denied:
+            return PolicyMode.DENY
+        required = self.required_capabilities | additional_required
+        modes = [policy.mode(capability) for capability in required]
+        if self.alternative_capabilities:
+            alternatives = [policy.mode(capability) for capability in self.alternative_capabilities]
+            modes.append(
+                PolicyMode.ALLOW
+                if PolicyMode.ALLOW in alternatives
+                else PolicyMode.CONFIRM
+                if PolicyMode.CONFIRM in alternatives
+                else PolicyMode.DENY
+            )
+        return combine_policy_modes(modes)
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,11 +61,10 @@ class CommandPreflight:
 
 @dataclass(frozen=True, slots=True)
 class FamilyPolicy:
-    """Permission tags and optional risk behavior for a command prefix."""
+    """Capability columns and annotation behavior for a command prefix."""
 
     prefix: str
     tags: Mapping[str, Tag]
-    risk: DynamicRisk | None = None
     readonly: bool = False
 
 
@@ -104,8 +93,9 @@ _SYSTEM_ANNOTATIONS = {
     "openWorldHint": False,
 }
 _DESTRUCTIVE_VERBS = frozenset({"clear", "delete", "remove", "reset", "revoke"})
-_SAFE_UNSCOPED_COMMANDS = frozenset({"info", "translations/locales"})
-_SYSTEM_PREFIXES = frozenset({"audio_analysis", "auth", "dashboard", "logging", "tasks"})
+_SYSTEM_COMMAND_PREFIXES = ("audio_analysis/", "dashboard/", "logging/", "tasks/")
+_HARD_DENIED_COMMANDS = frozenset({"dashboard/register", "dashboard/unregister"})
+_HARD_DENIED_PREFIXES = ("auth/",)
 
 
 def _family(
@@ -115,7 +105,6 @@ def _family(
     control: Tag | None = None,
     write: Tag | None = None,
     delete: Tag | None = None,
-    risk: DynamicRisk | None = None,
     readonly: bool = False,
 ) -> FamilyPolicy:
     """Build one compact family-policy declaration."""
@@ -129,7 +118,7 @@ def _family(
         )
         if tag is not None
     }
-    return FamilyPolicy(prefix, tags, risk=risk, readonly=readonly)
+    return FamilyPolicy(prefix, tags, readonly=readonly)
 
 
 FAMILY_TAGS = (
@@ -152,8 +141,14 @@ FAMILY_TAGS = (
         write=Tag.EDIT_LIBRARY,
         delete=Tag.DELETE_LIBRARY,
     ),
-    _family("players/cmd/volume", control=Tag.CONTROL_VOLUME),
+    _family("players/cmd/volume_", control=Tag.CONTROL_VOLUME),
     _family("players/cmd/", control=Tag.CONTROL_PLAYERS),
+    _family(
+        "players/sleep_timer/",
+        read=Tag.QUERY_PLAYERS,
+        control=Tag.CONTROL_PLAYBACK,
+        delete=Tag.CONTROL_PLAYBACK,
+    ),
     _family("players/", read=Tag.QUERY_PLAYERS),
     _family(
         "player_queues/",
@@ -164,43 +159,53 @@ FAMILY_TAGS = (
     ),
     _family("metadata/", read=Tag.QUERY_METADATA),
     _family(
-        "config/providers/",
+        "config/providers",
         read=Tag.CONFIG_READ,
         write=Tag.CONFIG_WRITE_PROVIDER,
     ),
-    _family("config/core/", read=Tag.CONFIG_READ, write=Tag.CONFIG_WRITE_CORE),
+    _family("config/core", read=Tag.CONFIG_READ, write=Tag.CONFIG_WRITE_CORE),
     _family(
-        "config/players/",
+        "config/players",
+        read=Tag.CONFIG_READ,
+        write=Tag.CONFIG_WRITE_PLAYER,
+    ),
+    _family(
+        "config/player_queues",
+        read=Tag.CONFIG_READ,
+        write=Tag.CONFIG_WRITE_PLAYER,
+    ),
+    _family(
+        "config/dsp_presets/",
+        read=Tag.CONFIG_READ,
+        write=Tag.CONFIG_WRITE_PLAYER,
+    ),
+    _family(
+        "config/dsp_irs/",
         read=Tag.CONFIG_READ,
         write=Tag.CONFIG_WRITE_PLAYER,
     ),
     _family(
         "diagnostics/",
         read=Tag.DEBUG_INSPECT,
-        risk=DynamicRisk.SYSTEM,
         readonly=True,
     ),
     _family("providers", read=Tag.DEBUG_PROVIDERS),
 )
 
 
-def _readonly_system(tag: Tag) -> CommandDecision:
-    """Return a read-only command guarded by the system risk gate."""
+def _readonly_debug(tag: Tag) -> CommandDecision:
+    """Return a read-only command guarded by one debug capability."""
     return CommandDecision(
-        DynamicRisk.SYSTEM,
         _READ_ANNOTATIONS,
         frozenset({str(tag)}),
-        Confirmation.ALWAYS,
     )
 
 
 def _destructive_write(tag: Tag) -> CommandDecision:
-    """Return an always-confirmed destructive write decision."""
+    """Return a destructive annotation with one write capability."""
     return CommandDecision(
-        DynamicRisk.WRITE,
         _DESTRUCTIVE_ANNOTATIONS,
         frozenset({str(tag)}),
-        Confirmation.ALWAYS,
     )
 
 
@@ -210,20 +215,51 @@ EXACT_POLICIES: dict[str, CommandDecision] = {
     "fastmcp/queue/remove_items_safe": _destructive_write(Tag.DELETE_QUEUE),
     "config/providers/reload": _destructive_write(Tag.CONFIG_WRITE_PROVIDER),
     "config/flows/submit": CommandDecision(
-        DynamicRisk.WRITE,
         _CONTROL_ANNOTATIONS,
         frozenset(),
-        Confirmation.CONFIGURED,
         "config_flow_submit",
         frozenset({str(Tag.CONFIG_WRITE_PROVIDER), str(Tag.CONFIG_WRITE_PLAYER)}),
+        str(Tag.CONFIG_WRITE_SECRET),
     ),
-    "fastmcp/debug/tail_log": _readonly_system(Tag.DEBUG_LOGS),
-    "fastmcp/debug/log_stats": _readonly_system(Tag.DEBUG_LOGS),
-    "fastmcp/debug/recent_events": _readonly_system(Tag.DEBUG_EVENTS),
-    "fastmcp/debug/event_buffer_stats": _readonly_system(Tag.DEBUG_EVENTS),
-    "fastmcp/debug/health": _readonly_system(Tag.DEBUG_PROVIDERS),
-    "fastmcp/debug/routes": _readonly_system(Tag.DEBUG_PROVIDERS),
-    "fastmcp/debug/packages": _readonly_system(Tag.DEBUG_PROVIDERS),
+    "config/flows/get": CommandDecision(
+        _READ_ANNOTATIONS,
+        frozenset({str(Tag.CONFIG_READ)}),
+    ),
+    "config/flows/abort": CommandDecision(
+        _DESTRUCTIVE_ANNOTATIONS,
+        alternative_capabilities=frozenset(
+            {str(Tag.CONFIG_WRITE_PROVIDER), str(Tag.CONFIG_WRITE_PLAYER)}
+        ),
+    ),
+    "players/create_group_player": CommandDecision(
+        _CONTROL_ANNOTATIONS,
+        frozenset({str(Tag.CONFIG_WRITE_PLAYER)}),
+    ),
+    "players/remove_group_player": _destructive_write(Tag.CONFIG_WRITE_PLAYER),
+    "players/remove": _destructive_write(Tag.CONFIG_WRITE_PLAYER),
+    "players/add_currently_playing_to_favorites": CommandDecision(
+        _CONTROL_ANNOTATIONS,
+        frozenset({str(Tag.EDIT_FAVORITES)}),
+    ),
+    "metadata/set_default_preferred_language": CommandDecision(
+        _CONTROL_ANNOTATIONS,
+        frozenset({str(Tag.CONFIG_WRITE_CORE)}),
+    ),
+    "metadata/set_preferred_language": CommandDecision(
+        _CONTROL_ANNOTATIONS,
+        frozenset({str(Tag.EDIT_LIBRARY)}),
+    ),
+    "metadata/update_metadata": CommandDecision(
+        _CONTROL_ANNOTATIONS,
+        frozenset({str(Tag.EDIT_LIBRARY)}),
+    ),
+    "fastmcp/debug/tail_log": _readonly_debug(Tag.DEBUG_LOGS),
+    "fastmcp/debug/log_stats": _readonly_debug(Tag.DEBUG_LOGS),
+    "fastmcp/debug/recent_events": _readonly_debug(Tag.DEBUG_EVENTS),
+    "fastmcp/debug/event_buffer_stats": _readonly_debug(Tag.DEBUG_EVENTS),
+    "fastmcp/debug/health": _readonly_debug(Tag.DEBUG_PROVIDERS),
+    "fastmcp/debug/routes": _readonly_debug(Tag.DEBUG_PROVIDERS),
+    "fastmcp/debug/packages": _readonly_debug(Tag.DEBUG_PROVIDERS),
 }
 
 
@@ -231,34 +267,39 @@ def resolve_command_policy(
     command: str, scope: Any, profile: CommandProfile | None
 ) -> CommandDecision:
     """
-    Resolve risk, behavior hints and permission gates for a command.
+    Resolve behavior hints and capabilities for a command.
 
     :param command: Canonical Music Assistant command.
     :param scope: Live MA required-scope value or enum member.
     :param profile: Optional ergonomic command profile.
     """
+    if command_is_hard_denied(command):
+        return CommandDecision({}, hard_denied=True)
     if exact := EXACT_POLICIES.get(command):
         return exact
 
+    if command.startswith(_SYSTEM_COMMAND_PREFIXES) or command in {
+        "info",
+        "translations/locales",
+    }:
+        return CommandDecision(
+            _SYSTEM_ANNOTATIONS,
+            frozenset({str(Tag.SYSTEM_ADMIN)}),
+        )
+
     family = _matching_family(command)
+    if family is None:
+        return CommandDecision({}, hard_denied=True)
     operation = _operation(command, scope, profile, family)
-    risk = family.risk if family is not None and family.risk is not None else _risk(operation)
     destructive = operation == "delete"
     annotations = dict(
-        _READ_ANNOTATIONS
-        if family is not None and family.readonly
-        else _annotations(risk, destructive=destructive)
+        _READ_ANNOTATIONS if family.readonly else _annotations(operation, destructive=destructive)
     )
     if profile is not None:
         annotations.update(profile.annotations)
-    required_tags = _required_tags(family, operation)
-    confirmation = (
-        Confirmation.ALWAYS
-        if risk is DynamicRisk.SYSTEM
-        else Confirmation.CONFIGURED
-        if risk is DynamicRisk.WRITE
-        else Confirmation.NEVER
-    )
+    required_capabilities = _required_capabilities(family, operation)
+    if not required_capabilities:
+        return CommandDecision(annotations, hard_denied=True)
     preflight = (
         "config_secret_read"
         if command
@@ -277,12 +318,18 @@ def resolve_command_policy(
         else None
     )
     return CommandDecision(
-        risk,
         annotations,
-        required_tags,
-        confirmation,
+        required_capabilities,
         preflight,
+        secret_capability=(
+            str(Tag.CONFIG_WRITE_SECRET) if preflight == "config_secret_write" else None
+        ),
     )
+
+
+def command_is_hard_denied(command: str) -> bool:
+    """Return whether a command belongs to an unconditional deny family."""
+    return command in _HARD_DENIED_COMMANDS or command.startswith(_HARD_DENIED_PREFIXES)
 
 
 async def preflight_command(
@@ -336,17 +383,27 @@ async def postflight_command(
 
 
 def command_tags_visible(decision: CommandDecision, allowed_tags: set[str]) -> bool:
-    """Return whether a command's fixed and any-of tag requirements are visible."""
-    required = decision.required_tags
-    alternatives = decision.alternative_tags
-    return required.issubset(allowed_tags) and (
-        not alternatives or bool(alternatives & allowed_tags)
+    """Return whether legacy allow-only capabilities make a command visible."""
+    required = decision.required_capabilities
+    alternatives = decision.alternative_capabilities
+    return (
+        not decision.hard_denied
+        and required.issubset(allowed_tags)
+        and (not alternatives or bool(alternatives & allowed_tags))
     )
 
 
 def _matching_family(command: str) -> FamilyPolicy | None:
     """Return the longest matching family policy."""
-    matches = (family for family in FAMILY_TAGS if command.startswith(family.prefix))
+    matches = (
+        family
+        for family in FAMILY_TAGS
+        if (
+            command.startswith(family.prefix)
+            if family.prefix.endswith(("/", "_"))
+            else command == family.prefix or command.startswith(f"{family.prefix}/")
+        )
+    )
     return max(matches, key=lambda family: len(family.prefix), default=None)
 
 
@@ -359,19 +416,17 @@ def _operation(
     """Resolve the operation column independently from MCP annotations."""
     parts = command.casefold().replace("-", "_").split("/")
     words = {word for part in parts for word in part.split("_")}
+    if family is not None and family.readonly:
+        return "read"
     if words & _DESTRUCTIVE_VERBS:
         return "delete"
-    if parts[0] in _SYSTEM_PREFIXES:
-        return "system"
-    if profile is not None and profile.risk_override is not None:
-        return profile.risk_override
+    if profile is not None and profile.operation_override is not None:
+        return profile.operation_override
     scope_operation = _scope_operation(scope)
     if scope_operation is not None:
         return scope_operation
     if family is not None and len(family.tags) == 1:
         return next(iter(family.tags))
-    if command in _SAFE_UNSCOPED_COMMANDS:
-        return "read"
     return "system"
 
 
@@ -391,32 +446,19 @@ def _scope_operation(scope: Any) -> str | None:
     return None
 
 
-def _risk(operation: str) -> DynamicRisk:
-    """Map an operation column to its independent runtime gate."""
-    if operation == "read":
-        return DynamicRisk.READ
-    if operation == "control":
-        return DynamicRisk.CONTROL
-    if operation in {"write", "delete"}:
-        return DynamicRisk.WRITE
-    return DynamicRisk.SYSTEM
-
-
-def _annotations(risk: DynamicRisk, *, destructive: bool) -> Mapping[str, bool]:
-    """Return default behavior annotations without changing risk."""
+def _annotations(operation: str, *, destructive: bool) -> Mapping[str, bool]:
+    """Return default behavior annotations without changing capabilities."""
     if destructive:
         return _DESTRUCTIVE_ANNOTATIONS
-    if risk is DynamicRisk.READ:
+    if operation == "read":
         return _READ_ANNOTATIONS
-    if risk in {DynamicRisk.CONTROL, DynamicRisk.WRITE}:
+    if operation in {"control", "write"}:
         return _CONTROL_ANNOTATIONS
     return _SYSTEM_ANNOTATIONS
 
 
-def _required_tags(family: FamilyPolicy | None, operation: str) -> frozenset[str]:
-    """Select the family permission for the resolved operation."""
-    if family is None:
-        return frozenset()
+def _required_capabilities(family: FamilyPolicy, operation: str) -> frozenset[str]:
+    """Select the family capability for the resolved operation."""
     tag = family.tags.get(operation)
     if tag is None and operation == "delete":
         tag = family.tags.get("write")
