@@ -25,7 +25,13 @@ from provider.tags import Tag
 from provider.token_identity import TokenIdentity
 
 
-def _handler(command: str, target: Any, scope: str = "library.read") -> Any:
+def _handler(
+    command: str,
+    target: Any,
+    scope: str = "library.read",
+    *,
+    allow_impersonation: bool = False,
+) -> Any:
     """Build the stable subset of MA's API handler contract."""
     return SimpleNamespace(
         command=command,
@@ -34,7 +40,7 @@ def _handler(command: str, target: Any, scope: str = "library.read") -> Any:
         target=target,
         authenticated=True,
         required_scope=scope,
-        allow_impersonation=False,
+        allow_impersonation=allow_impersonation,
         alias=False,
     )
 
@@ -384,6 +390,351 @@ async def test_policy_revoked_during_preflight_is_rechecked_before_confirmation(
             ctx=MagicMock(),
         )
     assert called is False
+
+
+async def test_auth_revoked_during_final_preflight_blocks_handler_execution() -> None:
+    """The last awaited secure inspection cannot leave bearer auth stale."""
+    called = False
+    inspections = 0
+
+    async def save(
+        provider_domain: str,
+        values: dict[str, Any],
+        instance_id: str | None = None,
+    ) -> None:
+        nonlocal called
+        del provider_domain, values, instance_id
+        called = True
+
+    token = AccessToken(token="config", client_id="id-config", scopes=[])
+    policies = {
+        "config": _custom(
+            config__write__provider=PolicyMode.ALLOW,
+            config__write__secret=PolicyMode.ALLOW,
+        )
+    }
+    adapter = _adapter(
+        [_handler("config/providers/save", save, "config.providers.write")],
+        current_token=[token],
+        policies=policies,
+    )
+
+    async def inspect_then_revoke_auth(_target: str) -> list[ConfigEntry]:
+        nonlocal inspections
+        inspections += 1
+        if inspections == 2:
+            adapter.mass.webserver.auth.authenticate_with_token = AsyncMock(return_value=None)
+        return [ConfigEntry(key="token", type=ConfigEntryType.SECURE_STRING, label="Token")]
+
+    adapter.mass.config.get_provider_config_entries = inspect_then_revoke_auth
+    with pytest.raises(ToolError, match="Authentication is required"):
+        await adapter.call(
+            "ma_api:config/providers/save",
+            {
+                "provider_domain": "demo",
+                "instance_id": "demo--1",
+                "values": {"token": "new-secret"},
+            },
+            response_mode="compact",
+            fields=None,
+            max_items=None,
+            ctx=MagicMock(),
+        )
+    assert called is False
+
+
+@pytest.mark.parametrize("revoked", ["token_identity", "user"])
+async def test_exact_identity_revoked_during_final_preflight_blocks_execution(
+    revoked: str,
+) -> None:
+    """Final preflight cannot leave an exact token binding or enabled user stale."""
+    called = False
+    inspections = 0
+    user = SimpleNamespace(
+        user_id="same-user",
+        enabled=True,
+        role="admin",
+        player_filter=[],
+        provider_filter=[],
+    )
+
+    async def save(
+        provider_domain: str,
+        values: dict[str, Any],
+        instance_id: str | None = None,
+    ) -> None:
+        nonlocal called
+        del provider_domain, values, instance_id
+        called = True
+
+    token = AccessToken(token="config", client_id="id-config", scopes=[])
+    adapter = _adapter(
+        [_handler("config/providers/save", save, "config.providers.write")],
+        current_token=[token],
+        policies={
+            "config": _custom(
+                config__write__provider=PolicyMode.ALLOW,
+                config__write__secret=PolicyMode.ALLOW,
+            )
+        },
+        user=user,
+    )
+
+    async def inspect_then_revoke_identity(_target: str) -> list[ConfigEntry]:
+        nonlocal inspections
+        inspections += 1
+        if inspections == 2:
+            if revoked == "token_identity":
+                adapter.mass.webserver.auth.get_token_id_from_token = AsyncMock(
+                    return_value="replacement"
+                )
+            else:
+                user.enabled = False
+        return [ConfigEntry(key="token", type=ConfigEntryType.SECURE_STRING, label="Token")]
+
+    adapter.mass.config.get_provider_config_entries = inspect_then_revoke_identity
+    with pytest.raises(ToolError, match="Authentication is required"):
+        await adapter.call(
+            "ma_api:config/providers/save",
+            {
+                "provider_domain": "demo",
+                "instance_id": "demo--1",
+                "values": {"token": "new-secret"},
+            },
+            response_mode="compact",
+            fields=None,
+            max_items=None,
+            ctx=MagicMock(),
+        )
+    assert called is False
+
+
+async def test_impersonation_revoked_during_final_preflight_blocks_execution() -> None:
+    """The impersonated identity is resolved again after the final inspection."""
+    called = False
+
+    async def save(
+        provider_domain: str,
+        values: dict[str, Any],
+        instance_id: str | None = None,
+    ) -> None:
+        nonlocal called
+        del provider_domain, values, instance_id
+        called = True
+
+    token = AccessToken(token="config", client_id="id-config", scopes=[])
+    adapter = _adapter(
+        [
+            _handler(
+                "config/providers/save",
+                save,
+                "config.providers.write",
+                allow_impersonation=True,
+            )
+        ],
+        current_token=[token],
+        policies={
+            "config": _custom(
+                config__write__provider=PolicyMode.ALLOW,
+                config__write__secret=PolicyMode.ALLOW,
+            )
+        },
+    )
+    adapter.mass.config.get_provider_config_entries = AsyncMock(
+        return_value=[ConfigEntry(key="token", type=ConfigEntryType.SECURE_STRING, label="Token")]
+    )
+    impersonated_user = SimpleNamespace(
+        user_id="target",
+        enabled=True,
+        role="admin",
+        player_filter=[],
+        provider_filter=[],
+    )
+    resolutions = 0
+
+    async def resolve_then_revoke(_auth: Any, _requested: str) -> Any:
+        nonlocal resolutions
+        resolutions += 1
+        if resolutions == 3:
+            raise ToolError("Unable to impersonate requested user")
+        return impersonated_user
+
+    cast("Any", adapter)._resolve_impersonated_user = resolve_then_revoke
+    ctx = SimpleNamespace(
+        elicit=AsyncMock(return_value=SimpleNamespace(action="accept", data=True))
+    )
+    with pytest.raises(ToolError, match="Unable to impersonate requested user"):
+        await adapter.call(
+            "ma_api:config/providers/save",
+            {
+                "provider_domain": "demo",
+                "instance_id": "demo--1",
+                "values": {"token": "new-secret"},
+                "user": "target",
+            },
+            response_mode="compact",
+            fields=None,
+            max_items=None,
+            ctx=cast("Context", ctx),
+        )
+    assert resolutions == 3
+    assert called is False
+
+
+async def test_final_revalidation_cannot_reuse_confirmation_for_a_new_capability() -> None:
+    """A prompt for one capability cannot bless a different final Confirm requirement."""
+    called = False
+
+    async def save(
+        provider_domain: str,
+        values: dict[str, Any],
+        instance_id: str | None = None,
+    ) -> None:
+        nonlocal called
+        del provider_domain, values, instance_id
+        called = True
+
+    token = AccessToken(token="config", client_id="id-config", scopes=[])
+    policies = {
+        "config": _custom(
+            config__write__provider=PolicyMode.ALLOW,
+            config__write__secret=PolicyMode.CONFIRM,
+        )
+    }
+    adapter = _adapter(
+        [_handler("config/providers/save", save, "config.providers.write")],
+        current_token=[token],
+        policies=policies,
+    )
+    adapter.mass.config.get_provider_config_entries = AsyncMock(
+        return_value=[ConfigEntry(key="token", type=ConfigEntryType.SECURE_STRING, label="Token")]
+    )
+    user = await adapter.mass.webserver.auth.authenticate_with_token("config")
+    authentications = 0
+
+    async def authenticate_and_swap_requirement(_bearer: str) -> Any:
+        nonlocal authentications
+        authentications += 1
+        if authentications == 4:
+            policies["config"] = _custom(
+                config__write__provider=PolicyMode.CONFIRM,
+                config__write__secret=PolicyMode.ALLOW,
+            )
+        return user
+
+    adapter.mass.webserver.auth.authenticate_with_token = authenticate_and_swap_requirement
+    ctx = SimpleNamespace(
+        elicit=AsyncMock(return_value=SimpleNamespace(action="accept", data=True))
+    )
+
+    with pytest.raises(ToolError, match="retry the operation"):
+        await adapter.call(
+            "ma_api:config/providers/save",
+            {
+                "provider_domain": "demo",
+                "instance_id": "demo--1",
+                "values": {"token": "new-secret"},
+            },
+            response_mode="compact",
+            fields=None,
+            max_items=None,
+            ctx=cast("Context", ctx),
+        )
+    assert ctx.elicit.await_count == 1
+    assert called is False
+
+
+@pytest.mark.parametrize(
+    ("flow_scope", "allowed_capability", "denied_capability"),
+    [
+        (
+            "config.providers.write",
+            Tag.CONFIG_WRITE_PLAYER,
+            Tag.CONFIG_WRITE_PROVIDER,
+        ),
+        (
+            "config.players.write",
+            Tag.CONFIG_WRITE_PROVIDER,
+            Tag.CONFIG_WRITE_PLAYER,
+        ),
+    ],
+)
+async def test_flow_abort_requires_its_exact_category(
+    flow_scope: str,
+    allowed_capability: Tag,
+    denied_capability: Tag,
+) -> None:
+    """One allowed config category cannot abort a flow owned by the other."""
+    called = False
+
+    async def abort(flow_id: str) -> None:
+        nonlocal called
+        del flow_id
+        called = True
+
+    token = AccessToken(token="abort", client_id="id-abort", scopes=[])
+    adapter = _adapter(
+        [_handler("config/flows/abort", abort, "config.providers.write")],
+        current_token=[token],
+        policies={
+            "abort": policy_snapshot(
+                PolicyProfile.CUSTOM,
+                {allowed_capability: PolicyMode.ALLOW},
+            )
+        },
+    )
+    adapter.mass.config.get_setup_flow_required_scope = lambda _flow_id: flow_scope
+
+    with pytest.raises(ToolError, match=str(denied_capability)):
+        await adapter.call(
+            "ma_api:config/flows/abort",
+            {"flow_id": "flow-1"},
+            response_mode="compact",
+            fields=None,
+            max_items=None,
+            ctx=MagicMock(),
+        )
+    assert called is False
+
+
+async def test_auth_off_uses_global_default_for_discovery_schema_and_execution() -> None:
+    """Without request auth, all command surfaces share the global default policy."""
+    called = False
+
+    async def search() -> str:
+        nonlocal called
+        called = True
+        return "ok"
+
+    default = [_custom(query__library=PolicyMode.ALLOW)]
+    mass = MagicMock()
+    handler = _handler("music/search", search)
+    mass.command_handlers = {handler.command: handler}
+    adapter = DynamicAPIAdapter(
+        mass,
+        auth_required_provider=lambda: False,
+        token_provider=lambda: None,
+        scope_checker=lambda _user, _scope: True,
+        default_policy_provider=lambda: default[0],
+    )
+    service = MetaDiscoveryService(adapter)
+
+    page = await service.discover("search")
+    assert page["items"][0]["policy_mode"] == "allow"
+    schema = await service.get_schema("ma_api:music/search")
+    assert schema["policy_mode"] == "allow"
+    await adapter.call(
+        "ma_api:music/search",
+        {},
+        response_mode="compact",
+        fields=None,
+        max_items=None,
+        ctx=MagicMock(),
+    )
+    assert called is True
+
+    default[0] = _custom()
+    assert await adapter.visible_entries() == []
 
 
 async def test_token_identity_revocation_during_confirmation_blocks_execution() -> None:

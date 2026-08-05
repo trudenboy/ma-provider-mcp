@@ -6,10 +6,11 @@ from __future__ import annotations
 import inspect
 from collections.abc import Callable
 from types import SimpleNamespace
-from typing import Any, get_type_hints
+from typing import TYPE_CHECKING, Any, cast, get_type_hints
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fastmcp.server.auth import AccessToken
 from music_assistant_models.auth import Scope, User, UserRole
 from music_assistant_models.errors import AuthenticationRequired, InsufficientPermissions
 
@@ -19,7 +20,8 @@ from provider.commands import debug as debug_commands
 from provider.commands import registry as command_registry
 from provider.commands.authorization import authorize_extension, scope_allowed
 from provider.config import policy_mode_key, token_policy_key
-from provider.constants import CONF_DEFAULT_POLICY, CONF_MANUAL_TOKEN_IDS
+from provider.constants import CONF_DEFAULT_POLICY, CONF_MANUAL_TOKEN_IDS, CONF_REQUIRE_AUTH
+from provider.dynamic_api import DynamicAPIAdapter
 from provider.dynamic_signatures import compile_signature
 from provider.models import (
     EventBufferStats,
@@ -31,8 +33,12 @@ from provider.models import (
     RemoveFromQueueResult,
     RouteList,
 )
-from provider.policy import PolicyMode, PolicyProfile, policy_snapshot
+from provider.policy import PolicyMode, PolicyProfile, PolicySnapshot, policy_snapshot
 from provider.tags import Tag
+from provider.token_identity import TokenIdentity
+
+if TYPE_CHECKING:
+    from fastmcp import Context
 
 COMMAND_ORDER = (
     "fastmcp/queue/remove_items_safe",
@@ -57,6 +63,8 @@ class CommandRegistry:
         subscribe_error: Exception | None = None,
     ) -> None:
         self.handlers: dict[str, Callable[..., Any]] = {}
+        self.command_handlers: dict[str, APICommandHandler] = {}
+        self.webserver: Any = None
         self.options: dict[str, dict[str, Any]] = {}
         self.removed: list[str] = []
         self.fail_at = fail_at
@@ -360,10 +368,15 @@ async def test_provider_debug_guard_uses_exact_request_policy_not_global_config(
         ),
     }
     current = ["deny"]
+
+    def request_policy(bearer: str | None) -> PolicySnapshot:
+        assert bearer is not None
+        return policies[bearer]
+
     command_set = ProviderCommandSet(
         mass,
         _config(Tag.DEBUG_PROVIDERS),
-        policy_provider=lambda bearer: policies[bearer],
+        policy_provider=request_policy,
     )
     command_set.start()
     monkeypatch.setattr(authorization, "get_current_user", lambda: _user())
@@ -409,6 +422,122 @@ async def test_debug_health_uses_request_policy_for_optional_log_diagnostics(
 
     assert health.await_args is not None
     assert health.await_args.kwargs["logs_enabled"] is False
+
+
+async def test_direct_provider_confirm_requires_dispatcher_confirmation_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A native provider handler cannot treat Confirm as Allow outside MCP dispatch."""
+    mass = CommandRegistry()
+    policy = policy_snapshot(
+        PolicyProfile.CUSTOM,
+        {Tag.DEBUG_PROVIDERS: PolicyMode.CONFIRM},
+    )
+    command_set = ProviderCommandSet(
+        mass,
+        _config(Tag.DEBUG_PROVIDERS),
+        policy_provider=lambda _bearer: policy,
+    )
+    command_set.start()
+    monkeypatch.setattr(authorization, "get_current_user", lambda: _user())
+    monkeypatch.setattr(authorization, "get_current_token", lambda: "request-token")
+
+    with pytest.raises(InsufficientPermissions) as exc_info:
+        await mass.handlers["fastmcp/debug/packages"]()
+
+    message = str(exc_info.value)
+    assert "debug:providers" in message
+    assert "Allow" in message
+    assert "elicitation-capable client" in message
+
+
+async def test_auth_off_provider_command_uses_global_default_without_request_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Provider-owned commands share the auth-off global-default request policy."""
+    mass = CommandRegistry()
+    config = _config()
+    config.get_value.side_effect = lambda key, default=None: {
+        CONF_DEFAULT_POLICY: "Custom",
+        CONF_REQUIRE_AUTH: False,
+    }.get(key, default)
+    policies = [
+        policy_snapshot(
+            PolicyProfile.CUSTOM,
+            {Tag.DEBUG_PROVIDERS: PolicyMode.ALLOW},
+        )
+    ]
+    command_set = ProviderCommandSet(
+        mass,
+        config,
+        policy_provider=lambda _bearer: policies[0],
+    )
+    command_set.start()
+    monkeypatch.setattr(authorization, "get_current_user", lambda: None)
+    monkeypatch.setattr(authorization, "get_current_token", lambda: None)
+    packages = AsyncMock(return_value=MagicMock(spec=PackageVersions))
+    monkeypatch.setattr(debug_commands, "packages", packages)
+
+    await mass.handlers["fastmcp/debug/packages"]()
+    packages.assert_awaited_once()
+
+    policies[0] = policy_snapshot(PolicyProfile.CUSTOM)
+    with pytest.raises(InsufficientPermissions, match="debug:providers"):
+        await mass.handlers["fastmcp/debug/packages"]()
+
+
+async def test_dispatcher_confirmation_context_is_scoped_and_not_remembered(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Accepted provider confirmations work once and cannot bless later native calls."""
+    mass = CommandRegistry()
+    user = _user()
+    policy = policy_snapshot(
+        PolicyProfile.CUSTOM,
+        {Tag.DEBUG_PROVIDERS: PolicyMode.CONFIRM},
+    )
+    command_set = ProviderCommandSet(
+        mass,
+        _config(Tag.DEBUG_PROVIDERS),
+        policy_provider=lambda _bearer: policy,
+    )
+    command_set.start()
+    command = "fastmcp/debug/packages"
+    native_handler = mass.handlers[command]
+    mass.command_handlers = {command: APICommandHandler.parse(command, native_handler)}
+    mass.webserver = SimpleNamespace(
+        auth=SimpleNamespace(
+            authenticate_with_token=AsyncMock(return_value=user),
+            get_token_id_from_token=AsyncMock(return_value="token-id"),
+        )
+    )
+    token = AccessToken(token="bearer", client_id="token-id", scopes=[])
+    adapter = DynamicAPIAdapter(
+        mass,
+        auth_required_provider=lambda: True,
+        token_provider=lambda: token,
+        policy_provider=lambda _bearer: policy,
+        identity_provider=lambda _bearer: TokenIdentity("u1", "token-id"),
+    )
+    ctx = SimpleNamespace(
+        elicit=AsyncMock(return_value=SimpleNamespace(action="accept", data=True))
+    )
+
+    for _ in range(2):
+        await adapter.call(
+            f"ma_api:{command}",
+            {},
+            response_mode="compact",
+            fields=None,
+            max_items=None,
+            ctx=cast("Context", ctx),
+        )
+    assert ctx.elicit.await_count == 2
+
+    monkeypatch.setattr(authorization, "get_current_user", lambda: user)
+    monkeypatch.setattr(authorization, "get_current_token", lambda: "bearer")
+    with pytest.raises(InsufficientPermissions, match="elicitation-capable client"):
+        await native_handler()
 
 
 def test_event_buffer_survives_event_hot_toggles_and_resizes_before_restart() -> None:

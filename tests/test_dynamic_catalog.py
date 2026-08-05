@@ -2067,7 +2067,10 @@ async def test_valid_bearer_revalidation_uses_the_fresh_user_after_confirmation(
         max_items=None,
         ctx=MagicMock(),
     )
-    adapter.mass.webserver.auth.authenticate_with_token.assert_awaited_once_with("secret")
+    assert adapter.mass.webserver.auth.authenticate_with_token.await_args_list == [
+        call("secret"),
+        call("secret"),
+    ]
     assert called is True
 
 
@@ -2278,9 +2281,10 @@ async def test_secure_config_value_is_reclassified_after_confirmation_before_ser
     )
     setattr(adapter.mass.config, getter_name, schema_getter)
 
-    async def confirm(*_args: Any, **_kwargs: Any) -> None:
+    async def confirm(*_args: Any, **_kwargs: Any) -> frozenset[str]:
         nonlocal confirmed
         confirmed = True
+        return frozenset()
 
     monkeypatch.setattr(adapter, "_confirm", AsyncMock(side_effect=confirm))
 

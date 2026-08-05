@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any, cast
 from music_assistant_models.auth import Scope
 
 from ..config import policy_event_buffer_enabled
-from ..constants import CONF_DEBUG_EVENT_BUFFER_CAPACITY
+from ..constants import CONF_DEBUG_EVENT_BUFFER_CAPACITY, CONF_REQUIRE_AUTH
 from ..debug.event_buffer import EventBuffer
 from ..models import (
     EventBufferStats,
@@ -69,7 +69,7 @@ class ProviderCommandSet:
         mass: Any,
         config_provider: Callable[[], ProviderConfig] | ProviderConfig,
         diagnostics_provider: Callable[[], Mapping[str, Any]] | None = None,
-        policy_provider: Callable[[str], PolicySnapshot] | None = None,
+        policy_provider: Callable[[str | None], PolicySnapshot] | None = None,
     ) -> None:
         """Bind MA state and lazy providers for configuration and diagnostics."""
         self._mass = mass
@@ -106,7 +106,7 @@ class ProviderCommandSet:
         if self._unregister:
             self._configure_event_buffer(config)
 
-    def set_policy_provider(self, provider: Callable[[str], PolicySnapshot]) -> None:
+    def set_policy_provider(self, provider: Callable[[str | None], PolicySnapshot]) -> None:
         """Install the exact-bearer policy resolver used by registered handlers."""
         self._policy_provider = provider
 
@@ -177,12 +177,19 @@ class ProviderCommandSet:
         """Return the most recently applied config, or lazily read the provider state."""
         return self._current_config or self._config_provider()
 
-    def _guard(self, scope: str, tag: Tag) -> None:
+    def _auth_required(self) -> bool:
+        """Preserve the secure default for configs created before this setting existed."""
+        value = self._config().get_value(CONF_REQUIRE_AUTH)
+        return True if value is None else bool(value)
+
+    def _guard(self, command: str, scope: str, tag: Tag) -> None:
         authorize_extension(
             self._config(),
             required_scope=scope,
             required_tag=str(tag),
             policy_provider=self._policy_provider,
+            require_auth=self._auth_required(),
+            confirmation_command=command,
         )
 
     def _capability_allowed(self, tag: Tag) -> bool:
@@ -192,13 +199,13 @@ class ProviderCommandSet:
         from ..policy import PolicyMode  # noqa: PLC0415
 
         bearer = authorization.current_bearer_token()
-        return bool(
-            bearer is not None and self._policy_provider(bearer).mode(tag) is PolicyMode.ALLOW
-        )
+        if bearer is None and self._auth_required():
+            return False
+        return bool(self._policy_provider(bearer).mode(tag) is PolicyMode.ALLOW)
 
     def _definitions(self) -> tuple[ProviderCommand, ...]:
         async def remove_items_safe(queue_id: str, item_ids: list[str]) -> RemoveFromQueueResult:
-            self._guard("queues.control", Tag.DELETE_QUEUE)
+            self._guard("fastmcp/queue/remove_items_safe", "queues.control", Tag.DELETE_QUEUE)
             return await queue.remove_items_safe(self._mass, queue_id, item_ids)
 
         async def tail_log(
@@ -210,7 +217,7 @@ class ProviderCommandSet:
             before: str | None = None,
             name: str = "musicassistant.log",
         ) -> LogTailResult:
-            self._guard("system.read", Tag.DEBUG_LOGS)
+            self._guard("fastmcp/debug/tail_log", "system.read", Tag.DEBUG_LOGS)
             return await debug.tail_log(
                 self._mass,
                 lines=lines,
@@ -226,7 +233,7 @@ class ProviderCommandSet:
             since_seconds: int | None = None,
             name: str = "musicassistant.log",
         ) -> LogStatsResult:
-            self._guard("system.read", Tag.DEBUG_LOGS)
+            self._guard("fastmcp/debug/log_stats", "system.read", Tag.DEBUG_LOGS)
             return await debug.log_stats(self._mass, since_seconds=since_seconds, name=name)
 
         async def recent_events(
@@ -235,7 +242,7 @@ class ProviderCommandSet:
             id_filter: str | None = None,
             since_seconds: int | None = None,
         ) -> EventSnapshot:
-            self._guard("system.read", Tag.DEBUG_EVENTS)
+            self._guard("fastmcp/debug/recent_events", "system.read", Tag.DEBUG_EVENTS)
             return await debug.recent_events(
                 self._buffer,
                 limit=limit,
@@ -245,11 +252,11 @@ class ProviderCommandSet:
             )
 
         async def event_buffer_stats() -> EventBufferStats:
-            self._guard("system.read", Tag.DEBUG_EVENTS)
+            self._guard("fastmcp/debug/event_buffer_stats", "system.read", Tag.DEBUG_EVENTS)
             return await debug.event_buffer_stats(self._buffer)
 
         async def health() -> HealthSummary:
-            self._guard("system.read", Tag.DEBUG_PROVIDERS)
+            self._guard("fastmcp/debug/health", "system.read", Tag.DEBUG_PROVIDERS)
             return await debug.health(
                 self._mass,
                 buffer=self._buffer,
@@ -258,11 +265,11 @@ class ProviderCommandSet:
             )
 
         async def routes() -> RouteList:
-            self._guard("system.read", Tag.DEBUG_PROVIDERS)
+            self._guard("fastmcp/debug/routes", "system.read", Tag.DEBUG_PROVIDERS)
             return await debug.routes(self._mass)
 
         async def packages() -> PackageVersions:
-            self._guard("system.read", Tag.DEBUG_PROVIDERS)
+            self._guard("fastmcp/debug/packages", "system.read", Tag.DEBUG_PROVIDERS)
             return await debug.packages()
 
         return (

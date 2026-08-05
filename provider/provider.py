@@ -158,7 +158,11 @@ class MCPServerProvider(PluginProvider):  # type: ignore[misc, unused-ignore]
             self.logger,
             policy_change_callback=self._apply_policy_token_ids,
         )
-        resolve_policy = getattr(runtime, "resolve_policy", None)
+        resolve_policy = getattr(
+            runtime,
+            "resolve_request_policy",
+            getattr(runtime, "resolve_policy", None),
+        )
         if self._commands is not None and callable(resolve_policy):
             self._commands.set_policy_provider(resolve_policy)
         self._runtime = runtime

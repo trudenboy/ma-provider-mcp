@@ -280,6 +280,7 @@ EXACT_POLICIES: dict[str, CommandDecision] = {
     ),
     "config/flows/abort": CommandDecision(
         _DESTRUCTIVE_ANNOTATIONS,
+        preflight="config_flow_abort",
         alternative_capabilities=frozenset(
             {str(Tag.CONFIG_WRITE_PROVIDER), str(Tag.CONFIG_WRITE_PLAYER)}
         ),
@@ -429,6 +430,8 @@ async def preflight_command(
             return CommandPreflight(additional_required=frozenset({str(Tag.CONFIG_WRITE_SECRET)}))
     elif decision.preflight == "config_flow_submit":
         return await _preflight_setup_flow_submit(mass, arguments)
+    elif decision.preflight == "config_flow_abort":
+        return await _preflight_setup_flow_abort(mass, arguments)
     return CommandPreflight()
 
 
@@ -608,6 +611,26 @@ async def _preflight_setup_flow_submit(
     if any(is_secret_key(entries, str(key)) for key in values):
         required.add(str(Tag.CONFIG_WRITE_SECRET))
     return CommandPreflight(additional_required=frozenset(required))
+
+
+async def _preflight_setup_flow_abort(
+    mass: Any,
+    arguments: Mapping[str, Any],
+) -> CommandPreflight:
+    """Classify an abort by the exact live setup-flow category."""
+    flow_id = arguments.get("flow_id")
+    if not isinstance(flow_id, str) or not flow_id:
+        raise ToolError("Invalid setup flow abort")
+    get_scope = getattr(mass.config, "get_setup_flow_required_scope", None)
+    if not callable(get_scope):
+        raise ToolError("Unable to authorize setup flow abort")
+    scope = get_scope(flow_id)
+    if inspect.isawaitable(scope):
+        scope = await scope
+    required_tag = _setup_flow_write_tag(scope)
+    if required_tag is None:
+        raise ToolError("Unknown setup flow or unsupported setup flow scope")
+    return CommandPreflight(additional_required=frozenset({str(required_tag)}))
 
 
 def _setup_flow_write_tag(scope: Any) -> Tag | None:

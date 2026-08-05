@@ -95,6 +95,12 @@ class MCPServerRuntime:
         """Resolve one authenticated bearer through its bounded MA identity binding."""
         return self._request_policies.resolve(bearer_token)
 
+    def resolve_request_policy(self, bearer_token: str | None) -> PolicySnapshot:
+        """Resolve an exact bearer or the configured auth-off global default."""
+        if bearer_token is None:
+            return self.policy_resolver.resolve(None)
+        return self.resolve_policy(bearer_token)
+
     async def start(self) -> None:
         """
         Build the FastMCP server and mount it into the MA webserver.
@@ -279,6 +285,7 @@ class MCPServerRuntime:
             auth_required_provider=lambda: config_bool(CONF_REQUIRE_AUTH, default=True),
             token_provider=get_access_token,
             policy_provider=self.resolve_policy,
+            default_policy_provider=lambda: self.policy_resolver.resolve(None),
             identity_provider=self._token_identities.lookup,
         )
         self._dynamic_adapter = adapter
