@@ -1114,6 +1114,73 @@ def test_nested_response_lists_are_bounded_deterministically() -> None:
     assert first["truncated"] is True
 
 
+def test_deep_response_is_truncated_before_python_recursion_limit() -> None:
+    """Depth limiting happens before recursive normalization can exhaust Python."""
+    payload: Any = "leaf"
+    for _index in range(sys.getrecursionlimit() + 100):
+        payload = [payload]
+
+    result = DynamicAPIAdapter._bounded_envelope(
+        "ma_api:test", payload, response_mode="compact", fields=None, max_items=None
+    )
+
+    nested = result["data"]
+    for _index in range(6):
+        assert isinstance(nested, list)
+        nested = nested[0]
+    assert nested == "[truncated]"
+    assert result["truncated"] is True
+    assert result["bytes"] <= 12_288
+
+
+def test_response_normalization_stops_at_each_list_item_cap() -> None:
+    """Discarded list suffixes are never serialized before item limiting."""
+    serialized: list[int] = []
+
+    @dataclass
+    class Row:
+        index: int
+
+        def model_dump(self, *, mode: str) -> dict[str, int]:
+            assert mode == "json"
+            serialized.append(self.index)
+            return {"index": self.index}
+
+    payload = [Row(index) for index in range(100)]
+    result = DynamicAPIAdapter._bounded_envelope(
+        "ma_api:test", payload, response_mode="compact", fields=None, max_items=3
+    )
+
+    assert result["data"] == [{"index": 0}, {"index": 1}, {"index": 2}]
+    assert result["total_count"] == 100
+    assert result["truncated"] is True
+    assert serialized == [0, 1, 2]
+
+
+def test_response_normalization_emits_strict_json_scalars() -> None:
+    """Surrogates and non-finite floats cannot escape into MCP JSON output."""
+    result = DynamicAPIAdapter._bounded_envelope(
+        "ma_api:test",
+        {"text": "left\ud800right", "numbers": [float("nan"), float("inf"), -float("inf")]},
+        response_mode="full",
+        fields=None,
+        max_items=None,
+    )
+
+    assert result["data"] == {
+        "text": "left\ufffdright",
+        "numbers": [None, None, None],
+    }
+    assert result["truncated"] is True
+    encoded = json.dumps(
+        result,
+        ensure_ascii=False,
+        allow_nan=False,
+        separators=(",", ":"),
+    ).encode()
+    assert result["bytes"] == len(encoded)
+
+
 def test_large_search_envelope_keeps_mapping_shape_within_byte_budget() -> None:
     """Large SearchResults mappings shrink nested rows instead of becoming a string."""
     payload = {
