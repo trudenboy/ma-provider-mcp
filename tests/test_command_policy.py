@@ -11,7 +11,6 @@ from unittest.mock import AsyncMock, create_autospec
 import pytest
 from fastmcp.exceptions import ToolError
 from music_assistant_models.config_entries import ConfigEntry
-from music_assistant_models.constants import SECURE_STRING_SUBSTITUTE
 from music_assistant_models.enums import ConfigEntryType
 
 import music_assistant
@@ -255,16 +254,14 @@ async def test_provider_secure_config_read_uses_current_ma_entries_signature() -
     config.get_provider_config_entries = MethodType(getter, config)
     decision = resolve_command_policy("config/providers/get_value", "config.read", None)
 
-    projector = await preflight_command(
+    preflight = await preflight_command(
         SimpleNamespace(config=config),
         decision,
         {"instance_id": "demo--1", "key": "token"},
         {str(Tag.CONFIG_READ)},
     )
 
-    assert callable(projector)
-    assert projector("raw-encrypted-token") == SECURE_STRING_SUBSTITUTE
-    assert projector(None) is None
+    assert preflight.secure_config_value is True
     getter.assert_awaited_once_with(config, "demo--1")
 
 
@@ -285,7 +282,7 @@ async def test_provider_secure_config_read_uses_current_ma_entries_signature() -
         ),
     ],
 )
-async def test_secure_config_value_reads_return_masking_projector(
+async def test_secure_config_value_reads_retain_secure_preflight_state(
     command: str,
     arguments: dict[str, str],
     getter_name: str,
@@ -299,21 +296,19 @@ async def test_secure_config_value_reads_return_masking_projector(
     )
     decision = resolve_command_policy(command, "config.read", None)
 
-    projector = await preflight_command(
+    preflight = await preflight_command(
         SimpleNamespace(config=config),
         decision,
         arguments,
         {str(Tag.CONFIG_READ)},
     )
 
-    assert callable(projector)
-    assert projector("raw-encrypted-token") == SECURE_STRING_SUBSTITUTE
-    assert projector(None) is None
+    assert preflight.secure_config_value is True
     getter = getattr(config, getter_name)
     getter.assert_awaited_once_with(*getter_arguments)
 
 
-async def test_nonsecure_config_value_read_needs_no_projector() -> None:
+async def test_nonsecure_config_value_read_retains_nonsecure_preflight_state() -> None:
     """Ordinary config values pass through unchanged."""
     config = SimpleNamespace(
         get_core_config_entries=AsyncMock(
@@ -322,14 +317,53 @@ async def test_nonsecure_config_value_read_needs_no_projector() -> None:
     )
     decision = resolve_command_policy("config/core/get_value", "config.core.read", None)
 
-    projector = await preflight_command(
+    preflight = await preflight_command(
         SimpleNamespace(config=config),
         decision,
         {"domain": "webserver", "key": "name"},
         {str(Tag.CONFIG_READ)},
     )
 
-    assert projector is None
+    assert preflight.secure_config_value is False
+
+
+async def test_runtime_string_secure_type_is_classified_secure() -> None:
+    """Runtime string enum values cannot bypass secure-value masking."""
+    runtime_type: Any = "secure_string"
+    config = SimpleNamespace(
+        get_core_config_entries=AsyncMock(
+            return_value=[ConfigEntry(key="token", type=runtime_type, label="Token")]
+        )
+    )
+    decision = resolve_command_policy("config/core/get_value", "config.core.read", None)
+
+    preflight = await preflight_command(
+        SimpleNamespace(config=config),
+        decision,
+        {"domain": "webserver", "key": "token"},
+        {str(Tag.CONFIG_READ)},
+    )
+
+    assert preflight.secure_config_value is True
+
+
+async def test_unknown_runtime_config_type_fails_closed() -> None:
+    """Unknown runtime config-entry types cannot be treated as nonsecure."""
+    runtime_type: Any = "future-secret"
+    config = SimpleNamespace(
+        get_core_config_entries=AsyncMock(
+            return_value=[ConfigEntry(key="token", type=runtime_type, label="Token")]
+        )
+    )
+    decision = resolve_command_policy("config/core/get_value", "config.core.read", None)
+
+    with pytest.raises(ToolError, match="Unable to classify config value"):
+        await preflight_command(
+            SimpleNamespace(config=config),
+            decision,
+            {"domain": "webserver", "key": "token"},
+            {str(Tag.CONFIG_READ)},
+        )
 
 
 async def test_unknown_config_value_key_fails_closed() -> None:

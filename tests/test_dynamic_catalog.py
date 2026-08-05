@@ -2226,8 +2226,131 @@ async def test_secure_config_value_is_reclassified_after_confirmation_before_ser
 
     assert result["data"] == "this_value_is_encrypted"
     assert raw_secret not in json.dumps(result)
-    assert schema_getter.await_count == 2
-    schema_getter.assert_has_awaits([call(*getter_arguments), call(*getter_arguments)])
+    assert schema_getter.await_count == 3
+    schema_getter.assert_has_awaits(
+        [call(*getter_arguments), call(*getter_arguments), call(*getter_arguments)]
+    )
+
+
+async def test_secure_config_value_is_reclassified_after_execution_before_serialization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A value made secure during execution is masked before serialization."""
+    _bypass_ma_argument_parser(monkeypatch)
+    raw_secret = "secret-created-during-execution"
+    secure = False
+
+    async def get_value(key: str, instance_id: str) -> str:
+        nonlocal secure
+        assert key == "token"
+        assert instance_id == "demo--1"
+        secure = True
+        await asyncio.sleep(0)
+        return raw_secret
+
+    adapter = _real_adapter(
+        _handler("config/providers/get_value", get_value, "config.read"),
+        allowed_tags={str(Tag.CONFIG_READ)},
+    )
+    schema_getter = AsyncMock(
+        side_effect=lambda *_args: [
+            ConfigEntry(
+                key="token",
+                type=ConfigEntryType.SECURE_STRING if secure else ConfigEntryType.STRING,
+                label="Token",
+            )
+        ]
+    )
+    adapter.mass.config.get_provider_config_entries = schema_getter
+
+    result = await adapter.call(
+        "ma_api:config/providers/get_value",
+        {"instance_id": "demo--1", "key": "token"},
+        response_mode="full",
+        fields=None,
+        max_items=None,
+        ctx=MagicMock(),
+    )
+
+    assert result["data"] == "this_value_is_encrypted"
+    assert raw_secret not in json.dumps(result)
+    assert schema_getter.await_count == 3
+
+
+async def test_config_value_that_stops_being_secure_during_execution_stays_masked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A result classified secure before execution remains masked afterward."""
+    _bypass_ma_argument_parser(monkeypatch)
+    raw_secret = "secret-before-schema-change"
+    secure = True
+
+    async def get_value(key: str, domain: str) -> str:
+        nonlocal secure
+        assert key == "token"
+        assert domain == "webserver"
+        secure = False
+        return raw_secret
+
+    adapter = _real_adapter(
+        _handler("config/core/get_value", get_value, "config.read"),
+        allowed_tags={str(Tag.CONFIG_READ)},
+    )
+    adapter.mass.config.get_core_config_entries = AsyncMock(
+        side_effect=lambda *_args: [
+            ConfigEntry(
+                key="token",
+                type=ConfigEntryType.SECURE_STRING if secure else ConfigEntryType.STRING,
+                label="Token",
+            )
+        ]
+    )
+
+    result = await adapter.call(
+        "ma_api:config/core/get_value",
+        {"domain": "webserver", "key": "token"},
+        response_mode="full",
+        fields=None,
+        max_items=None,
+        ctx=MagicMock(),
+    )
+
+    assert result["data"] == "this_value_is_encrypted"
+    assert raw_secret not in json.dumps(result)
+
+
+async def test_config_value_postflight_schema_failure_never_serializes_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed postflight classification rejects the result without exposing it."""
+    _bypass_ma_argument_parser(monkeypatch)
+    raw_secret = "secret-with-missing-postflight-schema"
+
+    async def get_value(key: str, player_id: str) -> str:
+        assert key == "token"
+        assert player_id == "kitchen"
+        return raw_secret
+
+    adapter = _real_adapter(
+        _handler("config/players/get_value", get_value, "config.read"),
+        allowed_tags={str(Tag.CONFIG_READ)},
+    )
+    visible_entry = ConfigEntry(key="token", type=ConfigEntryType.STRING, label="Token")
+    adapter.mass.config.get_player_config_entries = AsyncMock(
+        side_effect=[[visible_entry], [visible_entry], RuntimeError("schema disappeared")]
+    )
+
+    with pytest.raises(ToolError, match="Unable to classify config value") as error:
+        await adapter.call(
+            "ma_api:config/players/get_value",
+            {"player_id": "kitchen", "key": "token"},
+            response_mode="full",
+            fields=None,
+            max_items=None,
+            ctx=MagicMock(),
+        )
+
+    assert raw_secret not in str(error.value)
 
 
 async def test_flow_category_revoked_during_confirmation_prevents_execution(
