@@ -89,6 +89,7 @@ async def test_open_connect_action_returns_a_one_shot_url_entry(
 
     entries = await provider.handle_config_action("open_connect")
 
+    assert entries is not None
     assert entries[:-1] == (existing,)
     assert entries[-1].type is ConfigEntryType.URL
     assert entries[-1].value == wizard_url
