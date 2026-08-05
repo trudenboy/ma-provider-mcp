@@ -1083,7 +1083,7 @@ def test_large_top_level_response_uses_logarithmic_byte_fitting(
     def counted_size(value: Any) -> int:
         nonlocal measurements
         measurements += 1
-        return encoded_size(value)
+        return int(encoded_size(value))
 
     monkeypatch.setattr(DynamicAPIAdapter, "_encoded_size", staticmethod(counted_size))
 
