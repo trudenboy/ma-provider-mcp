@@ -120,6 +120,7 @@ def mock_mass(mock_user: MagicMock) -> MagicMock:
     mass.webserver.publish_ip = "127.0.0.1"
     mass.webserver.auth = MagicMock()
     mass.webserver.auth.authenticate_with_token = AsyncMock(return_value=mock_user)
+    mass.webserver.auth.get_token_id_from_token = AsyncMock(return_value=None)
     mass.webserver.register_dynamic_route = MagicMock(return_value=lambda: None)
 
     mass.translations.get_translation = MagicMock(return_value=None)

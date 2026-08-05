@@ -3,7 +3,7 @@ Tests for ``MCPServerProvider.update_config`` routing.
 
 The provider strips the ``values/`` prefix MA's ConfigController prepends to
 each changed key, then dispatches to either a hot-swap (when every changed
-key is in ``HOT_SWAPPABLE_KEYS``) or a full restart. Neither branch was
+key is a resource or v2 policy key) or a full restart. Neither branch was
 covered before — a regression in the ``removeprefix`` (e.g. dropping the
 slash) or in the subset check would silently break MA-driven config edits
 in production.
@@ -24,6 +24,8 @@ import types
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+
+from provider.config import token_policy_key
 
 
 # Install the stub BEFORE the ``provider.provider`` import below. ``setdefault``
@@ -64,6 +66,33 @@ _install_hass_client_stub()
 from provider.provider import MCPServerProvider  # noqa: E402
 
 
+@pytest.mark.asyncio
+async def test_get_config_entries_surfaces_current_user_and_manual_tokens(
+    mock_mass: MagicMock,
+) -> None:
+    """Provider options compose MA current-user discovery with manual IDs."""
+    provider = MCPServerProvider.__new__(MCPServerProvider)
+    provider.mass = mock_mass
+    provider.get_config_value = MagicMock(
+        side_effect=lambda key, default=None: {
+            "mount_path": "/mcp/v1",
+            "policy_manual_token_ids": ["manual-id"],
+        }.get(key, default)
+    )
+    mock_mass.webserver.auth.get_current_user_info = AsyncMock(
+        return_value=types.SimpleNamespace(user_id="u1")
+    )
+    mock_mass.webserver.auth.get_user_tokens = AsyncMock(
+        return_value=[types.SimpleNamespace(token_id="discovered-id", user_id="u1", name="MCP — A")]
+    )
+
+    entries = await provider.get_config_entries()
+    keys = {entry.key for entry in entries}
+
+    assert token_policy_key("discovered-id") in keys
+    assert token_policy_key("manual-id") in keys
+
+
 def _provider_with_mock_runtime(mock_mass: MagicMock, mock_config: MagicMock) -> MCPServerProvider:
     """
     Build a provider with an injected mock runtime (no real start required).
@@ -91,13 +120,13 @@ async def test_hot_swappable_change_takes_hot_swap_path(
     provider = _provider_with_mock_runtime(mock_mass, mock_config)
     new_config = MagicMock()
 
-    await provider.update_config(new_config, changed_keys={"values/query_library"})
+    await provider.update_config(new_config, changed_keys={"values/policy_default"})
 
     provider._runtime.apply_permission_change.assert_awaited_once()
     args, _ = provider._runtime.apply_permission_change.call_args
     assert args[0] is new_config
     # The provider strips the ``values/`` prefix before forwarding.
-    assert args[1] == {"query_library"}
+    assert args[1] == {"policy_default"}
     provider._runtime.stop.assert_not_awaited()
     provider._runtime.start.assert_not_awaited()
     # Hot-swap path swaps ``self.config`` in place — no rebuild of runtime.
@@ -108,7 +137,7 @@ async def test_hot_swappable_change_takes_hot_swap_path(
 async def test_non_hot_swappable_change_triggers_full_restart(
     mock_mass: MagicMock, mock_config: MagicMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A change outside HOT_SWAPPABLE_KEYS rebuilds the runtime from scratch."""
+    """A change outside resource/v2 policy keys rebuilds the runtime from scratch."""
     provider = _provider_with_mock_runtime(mock_mass, mock_config)
     original_runtime = provider._runtime  # captured before the rebind
     new_config = MagicMock()
@@ -125,7 +154,12 @@ async def test_non_hot_swappable_change_triggers_full_restart(
     # Old runtime stopped, new one built + started, hot-swap NOT called.
     original_runtime.stop.assert_awaited_once()
     original_runtime.apply_permission_change.assert_not_awaited()
-    factory.assert_called_once_with(mock_mass, new_config, provider.logger)
+    factory.assert_called_once_with(
+        mock_mass,
+        new_config,
+        provider.logger,
+        policy_change_callback=provider._apply_policy_token_ids,
+    )
     rebuilt.start.assert_awaited_once()
     assert provider._runtime is rebuilt
     assert provider.config is new_config
@@ -143,7 +177,7 @@ async def test_update_config_noop_when_runtime_is_none(
     provider._runtime = None
 
     # Must not raise.
-    await provider.update_config(MagicMock(), changed_keys={"values/query_library"})
+    await provider.update_config(MagicMock(), changed_keys={"values/policy_default"})
 
 
 @pytest.mark.asyncio
@@ -164,9 +198,17 @@ async def test_values_prefix_stripped_off_every_key(
 
     await provider.update_config(
         new_config,
-        changed_keys={"values/query_library", "values/edit_queue", "query_metadata"},
+        changed_keys={
+            "values/policy_default",
+            "values/policy_mode_edit_queue",
+            "policy_token_deadbeef",
+        },
     )
 
     provider._runtime.apply_permission_change.assert_awaited_once()
     forwarded_keys = provider._runtime.apply_permission_change.call_args.args[1]
-    assert forwarded_keys == {"query_library", "edit_queue", "query_metadata"}
+    assert forwarded_keys == {
+        "policy_default",
+        "policy_mode_edit_queue",
+        "policy_token_deadbeef",
+    }

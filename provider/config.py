@@ -1,88 +1,135 @@
-"""ConfigEntry schema for the MCP Server provider."""
+"""Native dynamic configuration and fail-closed v2 policy parsing."""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import hashlib
+import logging
+from collections.abc import Iterable
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
 
-from music_assistant_models.config_entries import ConfigEntry
+from music_assistant_models.config_entries import ConfigEntry, ConfigValueOption
 from music_assistant_models.enums import ConfigEntryType
 
 from .constants import (
-    CONF_CONFIG_READ,
-    CONF_CONFIG_WRITE_CORE,
-    CONF_CONFIG_WRITE_PLAYER,
-    CONF_CONFIG_WRITE_PROVIDER,
-    CONF_CONFIG_WRITE_SECRET,
     CONF_CONNECT_EXTERNAL_URL,
-    CONF_CONTROL_MEDIA,
-    CONF_CONTROL_PLAYBACK,
-    CONF_CONTROL_PLAYERS,
-    CONF_CONTROL_VOLUME,
     CONF_DEBUG_EVENT_BUFFER_CAPACITY,
-    CONF_DEBUG_EVENTS,
-    CONF_DEBUG_INSPECT,
-    CONF_DEBUG_LOGS,
-    CONF_DEBUG_PROVIDERS,
-    CONF_DELETE_FAVORITES,
-    CONF_DELETE_LIBRARY,
-    CONF_DELETE_PLAYLISTS,
-    CONF_DELETE_QUEUE,
-    CONF_DYNAMIC_API_CONTROL,
-    CONF_DYNAMIC_API_READ,
-    CONF_DYNAMIC_API_SYSTEM,
-    CONF_DYNAMIC_API_WRITE,
-    CONF_EDIT_FAVORITES,
-    CONF_EDIT_LIBRARY,
-    CONF_EDIT_PLAYLISTS,
-    CONF_EDIT_QUEUE,
+    CONF_DEFAULT_POLICY,
     CONF_ENFORCE_AUDIENCE,
     CONF_EXTRA_ALLOWED_ORIGINS,
+    CONF_MANUAL_TOKEN_IDS,
     CONF_MOUNT_PATH,
-    CONF_QUERY_LIBRARY,
-    CONF_QUERY_METADATA,
-    CONF_QUERY_PLAYERS,
-    CONF_QUERY_QUEUE,
     CONF_REQUIRE_AUTH,
-    CONF_REQUIRE_CONFIRMATION,
     CONF_RES_LIBRARY,
     CONF_RES_PLAYER,
     CONF_RES_PROMPTS,
     CONF_TRUST_FORWARDED_PROTO,
     DEFAULT_MOUNT_PATH,
+    POLICY_MODE_KEY_PREFIX,
+    TOKEN_POLICY_KEY_PREFIX,
 )
+from .policy import PolicyMode, PolicyProfile, PolicyResolver, PolicySelection
+from .tags import Tag
 
 if TYPE_CHECKING:
+    from music_assistant_models.config_entries import ProviderConfig
+
     from music_assistant.mass import MusicAssistant
 
+LOGGER = logging.getLogger(__name__)
 
-def _bool(key: str, default: bool, category: str) -> ConfigEntry:
-    # Label/description intentionally unset: strings.json owns all entry text.
-    return ConfigEntry(
-        key=key,
-        type=ConfigEntryType.BOOLEAN,
-        default_value=default,
-        category=category,
-        required=False,
-    )
+INHERIT_POLICY = "Inherit"
+MCP_TOKEN_NAME_PREFIX = "MCP — "
+
+
+@dataclass(frozen=True, slots=True)
+class PolicyToken:
+    """Non-secret token metadata used to render one override group."""
+
+    token_id: str
+    name: str
+
+
+def policy_token_suffix(token_id: str) -> str:
+    """Return a deterministic non-reversible suffix for one MA token ID."""
+    return hashlib.sha256(token_id.encode()).hexdigest()
+
+
+def token_policy_key(token_id: str) -> str:
+    """Return the selector key for one token ID without embedding that ID."""
+    return f"{TOKEN_POLICY_KEY_PREFIX}{policy_token_suffix(token_id)}"
+
+
+def policy_mode_key(capability: str | Tag, token_id: str | None = None) -> str:
+    """Return one default or token-specific Custom capability key."""
+    capability_fragment = str(capability).replace(":", "_")
+    if token_id is None:
+        return f"{POLICY_MODE_KEY_PREFIX}{capability_fragment}"
+    return f"{TOKEN_POLICY_KEY_PREFIX}{capability_fragment}_{policy_token_suffix(token_id)}"
+
+
+async def current_user_mcp_tokens(mass: MusicAssistant) -> tuple[PolicyToken, ...]:
+    """Discover exact-prefix MCP tokens belonging to MA's current settings user."""
+    try:
+        current_user = await mass.webserver.auth.get_current_user_info()
+        tokens = await mass.webserver.auth.get_user_tokens()
+    except Exception:
+        LOGGER.warning("Unable to discover current-user MCP tokens")
+        return ()
+    user_id = str(getattr(current_user, "user_id", ""))
+    discovered = {
+        str(token.token_id): PolicyToken(str(token.token_id), str(token.name))
+        for token in tokens
+        if str(getattr(token, "user_id", "")) == user_id
+        and str(getattr(token, "name", "")).startswith(MCP_TOKEN_NAME_PREFIX)
+        and str(getattr(token, "token_id", ""))
+    }
+    return tuple(sorted(discovered.values(), key=lambda token: (token.name, token.token_id)))
+
+
+def build_policy_resolver(
+    config: ProviderConfig,
+    *,
+    active_token_ids: Iterable[str] = (),
+) -> PolicyResolver:
+    """Compile raw provider values into an immutable fail-closed policy resolver."""
+    default = _parse_selection(config, token_id=None, allow_inherit=False)
+    token_ids = set(_manual_token_ids(config.get_value(CONF_MANUAL_TOKEN_IDS)))
+    token_ids.update(str(token_id) for token_id in active_token_ids if str(token_id))
+    overrides = {
+        token_id: _parse_selection(config, token_id=token_id, allow_inherit=True)
+        for token_id in sorted(token_ids)
+    }
+    return PolicyResolver(default=default, overrides=overrides)
+
+
+def policy_event_buffer_enabled(
+    config: ProviderConfig,
+    *,
+    active_token_ids: Iterable[str] = (),
+) -> bool:
+    """Return whether any configured resolvable policy can expose debug events."""
+    resolver = build_policy_resolver(config, active_token_ids=active_token_ids)
+    snapshots = [resolver.resolve(None)]
+    snapshots.extend(resolver.resolve(token_id) for token_id in resolver.overrides)
+    return any(snapshot.mode(Tag.DEBUG_EVENTS) is not PolicyMode.DENY for snapshot in snapshots)
 
 
 def build_config_entries(
     mass: MusicAssistant,
     mount_path: str,
+    *,
+    tokens: Iterable[Any] = (),
+    manual_token_ids: Iterable[str] = (),
 ) -> tuple[ConfigEntry, ...]:
-    """
-    Return the full ConfigEntry schema for this provider.
-
-    :param mass: MusicAssistant instance, used to compose the info label.
-    :param mount_path: The configured mount path, used to compose the info label URL.
-    """
+    """Return endpoint, resource, prompt, and dynamic v2 policy entries."""
     base_url = mass.webserver.base_url.rstrip("/")
-    # Mirror ``MCPServerRuntime.__init__``'s normalisation so the info label
-    # always renders a valid URL even if the user dropped the leading slash.
     mount_path = "/" + mount_path.strip("/")
-    info_label = f"MCP endpoint: {base_url}{mount_path}\nCreate tokens in Profile → Long-lived access tokens."
-
-    return (
+    info_label = (
+        f"MCP endpoint: {base_url}{mount_path}\n"
+        "Create tokens in Profile → Long-lived access tokens."
+    )
+    entries: list[ConfigEntry] = [
         ConfigEntry(
             key="info_label",
             type=ConfigEntryType.LABEL,
@@ -109,13 +156,6 @@ def build_config_entries(
             default_value=DEFAULT_MOUNT_PATH,
             category="server",
             advanced=True,
-            required=False,
-        ),
-        ConfigEntry(
-            key=CONF_REQUIRE_CONFIRMATION,
-            type=ConfigEntryType.BOOLEAN,
-            default_value=True,
-            category="server",
             required=False,
         ),
         ConfigEntry(
@@ -150,53 +190,149 @@ def build_config_entries(
             advanced=True,
             required=False,
         ),
-        # The public MCP surface is permanently reduced to three meta-tools.
-        # These flags independently gate runtime-discovered MA commands.
-        _bool(CONF_DYNAMIC_API_READ, True, "dynamic_api"),
-        _bool(CONF_DYNAMIC_API_CONTROL, False, "dynamic_api"),
-        _bool(CONF_DYNAMIC_API_WRITE, False, "dynamic_api"),
-        _bool(CONF_DYNAMIC_API_SYSTEM, False, "dynamic_api"),
-        # Query permissions
-        _bool(CONF_QUERY_LIBRARY, True, "query_permissions"),
-        _bool(CONF_QUERY_QUEUE, True, "query_permissions"),
-        _bool(CONF_QUERY_PLAYERS, True, "query_permissions"),
-        _bool(CONF_QUERY_METADATA, True, "query_permissions"),
-        # Control permissions
-        _bool(CONF_CONTROL_PLAYBACK, False, "control_permissions"),
-        _bool(CONF_CONTROL_VOLUME, False, "control_permissions"),
-        _bool(CONF_CONTROL_PLAYERS, False, "control_permissions"),
-        _bool(CONF_CONTROL_MEDIA, False, "control_permissions"),
-        # Edit permissions
-        _bool(CONF_EDIT_LIBRARY, False, "edit_permissions"),
-        _bool(CONF_EDIT_QUEUE, False, "edit_permissions"),
-        _bool(CONF_EDIT_PLAYLISTS, False, "edit_permissions"),
-        _bool(CONF_EDIT_FAVORITES, False, "edit_permissions"),
-        # Delete permissions
-        _bool(CONF_DELETE_LIBRARY, False, "delete_permissions"),
-        _bool(CONF_DELETE_QUEUE, False, "delete_permissions"),
-        _bool(CONF_DELETE_PLAYLISTS, False, "delete_permissions"),
-        _bool(CONF_DELETE_FAVORITES, False, "delete_permissions"),
-        # Resources / prompts
-        _bool(CONF_RES_LIBRARY, True, "mcp_resources"),
-        _bool(CONF_RES_PLAYER, True, "mcp_resources"),
-        _bool(CONF_RES_PROMPTS, True, "mcp_resources"),
-        # Debug namespace — all off-by-default. See specs/inprogress/0005-debug-namespace.md.
-        _bool(CONF_DEBUG_INSPECT, False, "debug"),
-        _bool(CONF_DEBUG_LOGS, False, "debug"),
-        _bool(CONF_DEBUG_EVENTS, False, "debug"),
-        _bool(CONF_DEBUG_PROVIDERS, False, "debug"),
+        _policy_selector(CONF_DEFAULT_POLICY, "Default policy", allow_inherit=False),
+    ]
+    entries.extend(_custom_matrix(CONF_DEFAULT_POLICY))
+    entries.append(
         ConfigEntry(
-            key=CONF_DEBUG_EVENT_BUFFER_CAPACITY,
-            type=ConfigEntryType.INTEGER,
-            default_value=500,
-            range=(50, 5000),
-            category="debug",
+            key=CONF_MANUAL_TOKEN_IDS,
+            type=ConfigEntryType.STRING,
+            default_value=[],
+            multi_value=True,
+            label="Manual MCP token IDs",
+            category="policy",
+            category_label="Permissions & confirmations",
             required=False,
-        ),
-        # Config namespace — all off-by-default. See specs/inprogress/0006-config-read-write.md.
-        _bool(CONF_CONFIG_READ, False, "mcp_config"),
-        _bool(CONF_CONFIG_WRITE_PROVIDER, False, "mcp_config"),
-        _bool(CONF_CONFIG_WRITE_CORE, False, "mcp_config"),
-        _bool(CONF_CONFIG_WRITE_PLAYER, False, "mcp_config"),
-        _bool(CONF_CONFIG_WRITE_SECRET, False, "mcp_config"),
+            advanced=True,
+        )
     )
+
+    rendered: dict[str, PolicyToken] = {}
+    for token in tokens:
+        token_id = str(getattr(token, "token_id", "")).strip()
+        if token_id:
+            rendered[token_id] = PolicyToken(token_id, str(getattr(token, "name", token_id)))
+    for token_id in _manual_token_ids(manual_token_ids):
+        rendered.setdefault(token_id, PolicyToken(token_id, f"Manual MCP token ·{token_id[-8:]}"))
+    for token in sorted(rendered.values(), key=lambda value: (value.name, value.token_id)):
+        selector = token_policy_key(token.token_id)
+        entries.append(_policy_selector(selector, token.name, allow_inherit=True))
+        entries.extend(_custom_matrix(selector, token.token_id))
+
+    entries.extend(
+        (
+            _bool(CONF_RES_LIBRARY, True, "mcp_resources"),
+            _bool(CONF_RES_PLAYER, True, "mcp_resources"),
+            _bool(CONF_RES_PROMPTS, True, "mcp_resources"),
+            ConfigEntry(
+                key=CONF_DEBUG_EVENT_BUFFER_CAPACITY,
+                type=ConfigEntryType.INTEGER,
+                default_value=500,
+                range=(50, 5000),
+                category="debug",
+                required=False,
+            ),
+        )
+    )
+    return tuple(entries)
+
+
+def _bool(key: str, default: bool, category: str) -> ConfigEntry:
+    """Build one optional boolean provider entry."""
+    return ConfigEntry(
+        key=key,
+        type=ConfigEntryType.BOOLEAN,
+        default_value=default,
+        category=category,
+        required=False,
+    )
+
+
+def _policy_selector(key: str, label: str, *, allow_inherit: bool) -> ConfigEntry:
+    """Build one profile selector."""
+    values = ([INHERIT_POLICY] if allow_inherit else []) + [
+        profile.value for profile in PolicyProfile
+    ]
+    return ConfigEntry(
+        key=key,
+        type=ConfigEntryType.STRING,
+        default_value=INHERIT_POLICY if allow_inherit else PolicyProfile.READ_ONLY.value,
+        options=[ConfigValueOption(value=value, title=value) for value in values],
+        label=label,
+        category="policy",
+        category_label="Permissions & confirmations",
+        required=False,
+    )
+
+
+def _custom_matrix(selector_key: str, token_id: str | None = None) -> list[ConfigEntry]:
+    """Build the conditional 26-capability Custom matrix for one selector."""
+    options = [ConfigValueOption(value=mode.value, title=mode.value.title()) for mode in PolicyMode]
+    return [
+        ConfigEntry(
+            key=policy_mode_key(capability, token_id),
+            type=ConfigEntryType.STRING,
+            default_value=PolicyMode.DENY.value,
+            options=options,
+            depends_on=selector_key,
+            depends_on_value=PolicyProfile.CUSTOM.value,
+            label=str(capability),
+            category="policy",
+            category_label="Permissions & confirmations",
+            required=False,
+        )
+        for capability in Tag
+    ]
+
+
+def _parse_selection(
+    config: ProviderConfig,
+    *,
+    token_id: str | None,
+    allow_inherit: bool,
+) -> PolicySelection:
+    """Parse one selector and fail closed on every malformed raw value."""
+    key = CONF_DEFAULT_POLICY if token_id is None else token_policy_key(token_id)
+    raw = config.get_value(key)
+    if raw is None:
+        return (
+            PolicySelection.inherit()
+            if allow_inherit
+            else PolicySelection.profile(PolicyProfile.READ_ONLY)
+        )
+    if allow_inherit and raw == INHERIT_POLICY:
+        return PolicySelection.inherit()
+    if not isinstance(raw, str):
+        return PolicySelection.profile(PolicyProfile.READ_ONLY)
+    try:
+        profile = PolicyProfile(raw)
+    except TypeError, ValueError:
+        return PolicySelection.profile(PolicyProfile.READ_ONLY)
+    if profile is not PolicyProfile.CUSTOM:
+        return PolicySelection.profile(profile)
+    modes = {
+        str(capability): _parse_mode(config.get_value(policy_mode_key(capability, token_id)))
+        for capability in Tag
+    }
+    return PolicySelection.custom(modes)
+
+
+def _parse_mode(raw: object) -> PolicyMode:
+    """Parse one raw mode, defaulting invalid and missing values to deny."""
+    if not isinstance(raw, str):
+        return PolicyMode.DENY
+    try:
+        return PolicyMode(raw)
+    except TypeError, ValueError:
+        return PolicyMode.DENY
+
+
+def _manual_token_ids(raw: object) -> tuple[str, ...]:
+    """Normalize a multi-value config input into ordered unique token IDs."""
+    if isinstance(raw, str):
+        values: Iterable[object] = (raw,)
+    elif isinstance(raw, Iterable):
+        values = raw
+    else:
+        values = ()
+    return tuple(dict.fromkeys(value for item in values if (value := str(item).strip())))

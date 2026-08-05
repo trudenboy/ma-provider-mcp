@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from music_assistant_models.auth import Scope
 
+from ..config import policy_event_buffer_enabled
 from ..constants import CONF_DEBUG_EVENT_BUFFER_CAPACITY
 from ..debug.event_buffer import EventBuffer
 from ..models import (
@@ -76,6 +77,7 @@ class ProviderCommandSet:
         else:
             self._config_provider = config_provider
         self._current_config: ProviderConfig | None = None
+        self._active_policy_token_ids: frozenset[str] = frozenset()
         self._diagnostics_provider = diagnostics_provider
         self._buffer: EventBuffer | None = EventBuffer(
             self._mass, capacity=self._event_buffer_capacity(self._config())
@@ -87,9 +89,16 @@ class ProviderCommandSet:
         """Return the command-owned event buffer for the MCP debug server."""
         return self._buffer
 
-    def update_config(self, config: ProviderConfig) -> None:
+    def update_config(
+        self,
+        config: ProviderConfig,
+        *,
+        active_token_ids: frozenset[str] | set[str] | None = None,
+    ) -> None:
         """Make existing handler closures observe the new provider configuration."""
         self._current_config = config
+        if active_token_ids is not None:
+            self._active_policy_token_ids = frozenset(active_token_ids)
         if self._unregister:
             self._configure_event_buffer(config)
 
@@ -135,7 +144,10 @@ class ProviderCommandSet:
 
     def _configure_event_buffer(self, config: ProviderConfig) -> None:
         """Start, stop, or resize the subscription held across MCP restarts."""
-        enabled = Tag.DEBUG_EVENTS in enabled_tags(config)
+        enabled = policy_event_buffer_enabled(
+            config,
+            active_token_ids=self._active_policy_token_ids,
+        )
         capacity = self._event_buffer_capacity(config)
         if self._buffer is None or self._buffer.stats().capacity != capacity:
             if self._buffer is not None:

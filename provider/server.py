@@ -6,6 +6,7 @@ import contextlib
 import logging
 from typing import TYPE_CHECKING, Any
 
+from .config import build_policy_resolver
 from .constants import (
     CONF_ENFORCE_AUDIENCE,
     CONF_EXTRA_ALLOWED_ORIGINS,
@@ -13,8 +14,10 @@ from .constants import (
     CONF_REQUIRE_AUTH,
     CONF_TRUST_FORWARDED_PROTO,
     DEFAULT_MOUNT_PATH,
+    is_policy_key,
 )
 from .tags import enabled_tags
+from .token_identity import AuthenticatedPolicyResolver, TokenIdentityRegistry
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -22,6 +25,8 @@ if TYPE_CHECKING:
     from music_assistant_models.config_entries import ProviderConfig
 
     from music_assistant.mass import MusicAssistant
+
+    from .policy import PolicyResolver, PolicySnapshot
 
 LOGGER = logging.getLogger(__name__)
 
@@ -46,6 +51,7 @@ class MCPServerRuntime:
         mass: MusicAssistant,
         config: ProviderConfig,
         logger: logging.Logger,
+        policy_change_callback: Callable[[frozenset[str]], None] | None = None,
     ) -> None:
         """
         Hold the shared dependencies; nothing is started here.
@@ -57,6 +63,7 @@ class MCPServerRuntime:
         self._mass = mass
         self._config = config
         self._logger = logger
+        self._policy_change_callback = policy_change_callback
         raw_path = str(config.get_value(CONF_MOUNT_PATH) or DEFAULT_MOUNT_PATH)
         self._mount_path: str = "/" + raw_path.strip("/")
         self._mcp: Any = None
@@ -67,12 +74,26 @@ class MCPServerRuntime:
         # without re-instantiating the TagFilterMiddleware closure.
         self._allowed_tags: set[str] = set()
         self._dynamic_adapter: Any = None
+        self._token_identities = TokenIdentityRegistry(on_change=self._refresh_policy_resolver)
+        self._request_policies = AuthenticatedPolicyResolver(
+            self._token_identities,
+            build_policy_resolver(config),
+        )
 
     @property
     def public_url(self) -> str:
         """Return the externally visible MCP endpoint URL."""
         base = str(self._mass.webserver.base_url).rstrip("/")
         return f"{base}{self._mount_path}"
+
+    @property
+    def policy_resolver(self) -> PolicyResolver:
+        """Return the immutable token-ID resolver used by future requests."""
+        return self._request_policies.policies
+
+    def resolve_policy(self, bearer_token: str) -> PolicySnapshot:
+        """Resolve one authenticated bearer through its bounded MA identity binding."""
+        return self._request_policies.resolve(bearer_token)
 
     async def start(self) -> None:
         """
@@ -131,17 +152,14 @@ class MCPServerRuntime:
             ``new`` here would always be empty — the caller's set is the only
             reliable signal.
         """
-        from .constants import DYNAMIC_API_KEYS, PERMISSION_KEYS  # noqa: PLC0415
-
-        # ``set().issubset(...)`` is True, so an empty ``changed_keys`` (no-op
-        # call) classifies as permission-only and skips a pointless restart.
-        permission_only = changed_keys.issubset(PERMISSION_KEYS | DYNAMIC_API_KEYS)
+        policy_only = all(is_policy_key(key) for key in changed_keys)
 
         self._config = new_config
-        if permission_only and hasattr(self, "_allowed_tags"):
+        if policy_only:
+            self._refresh_policy_resolver()
             self._allowed_tags = {str(t) for t in enabled_tags(new_config)}
             self._logger.debug(
-                "MCP runtime: hot-swapped tag filter to %d tags",
+                "MCP runtime: hot-swapped policy snapshot and %d visible tags",
                 len(self._allowed_tags),
             )
             return
@@ -174,6 +192,7 @@ class MCPServerRuntime:
                 base_url=base_url or None,
                 public_resource_uri=public_resource_uri,
                 enforce_audience=enforce_audience,
+                identity_registry=self._token_identities,
             )
             if require_auth
             else None
@@ -278,6 +297,17 @@ class MCPServerRuntime:
         # middleware sees the new permissions without rebuilding FastMCP.
         self._allowed_tags = {str(t) for t in allowed}
         mcp.add_middleware(TagFilterMiddleware(lambda: self._allowed_tags, build_tag_lookup(mcp)))
+
+    def _refresh_policy_resolver(self) -> None:
+        """Compile and atomically install a resolver for known and manual token IDs."""
+        resolver = build_policy_resolver(
+            self._config,
+            active_token_ids=self._token_identities.token_ids(),
+        )
+        if hasattr(self, "_request_policies"):
+            self._request_policies.replace(resolver)
+            if self._policy_change_callback is not None:
+                self._policy_change_callback(self._token_identities.token_ids())
 
 
 async def _tag_lookup(mcp: Any, kind: str, key: str) -> set[str] | None:

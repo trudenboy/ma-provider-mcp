@@ -14,8 +14,11 @@ from music_assistant_models.enums import ConfigEntryType
 from music_assistant.models.plugin import PluginProvider
 from provider import _init_helpers, server
 from provider.commands import ProviderCommandSet
+from provider.config import policy_mode_key
+from provider.constants import CONF_DEFAULT_POLICY
 from provider.provider import MCPServerProvider
 from provider.server import MCPServerRuntime
+from provider.tags import Tag
 
 
 class _LifecycleMass:
@@ -61,7 +64,8 @@ def _config(*, debug_events: bool = False) -> MagicMock:
     """Return only the config surface provider command registration needs."""
     config = MagicMock()
     config.get_value.side_effect = lambda key, default=None: {
-        "debug_events": debug_events,
+        CONF_DEFAULT_POLICY: "Custom",
+        policy_mode_key(Tag.DEBUG_EVENTS): "allow" if debug_events else "deny",
         "debug_event_buffer_capacity": 100,
     }.get(key, default)
     return config

@@ -18,6 +18,8 @@ from provider.commands import ProviderCommandSet, authorization
 from provider.commands import debug as debug_commands
 from provider.commands import registry as command_registry
 from provider.commands.authorization import authorize_extension, scope_allowed
+from provider.config import policy_mode_key, token_policy_key
+from provider.constants import CONF_DEFAULT_POLICY, CONF_MANUAL_TOKEN_IDS
 from provider.dynamic_signatures import compile_signature
 from provider.models import (
     EventBufferStats,
@@ -102,10 +104,9 @@ class CommandRegistry:
 
 def _config(*enabled: Tag) -> MagicMock:
     config = MagicMock()
-    allowed = {str(tag) for tag in enabled}
-    config.get_value.side_effect = lambda key, _default=None: any(
-        str(tag) in allowed and tag.value.replace(":", "_") == key for tag in Tag
-    )
+    values: dict[str, object] = {CONF_DEFAULT_POLICY: "Custom"}
+    values.update({policy_mode_key(tag): "allow" for tag in enabled})
+    config.get_value.side_effect = lambda key, default=None: values.get(key, default)
     return config
 
 
@@ -395,7 +396,8 @@ def test_event_buffer_survives_event_hot_toggles_and_resizes_before_restart() ->
 
     resized = _config(Tag.DEBUG_EVENTS)
     resized.get_value.side_effect = lambda key, default=None: {
-        "debug_events": True,
+        CONF_DEFAULT_POLICY: "Custom",
+        policy_mode_key(Tag.DEBUG_EVENTS): "allow",
         "debug_event_buffer_capacity": 250,
     }.get(key, default)
     command_set.update_config(resized)
@@ -408,6 +410,50 @@ def test_event_buffer_survives_event_hot_toggles_and_resizes_before_restart() ->
 
     command_set.stop()
     assert mass.unsubscribed == 3
+
+
+def test_manual_token_policy_activates_event_buffer() -> None:
+    """A resolvable manual override starts retention even when the default denies it."""
+    mass = CommandRegistry()
+    token_id = "foreign-token-id"
+    values = {
+        CONF_DEFAULT_POLICY: "Read-only",
+        CONF_MANUAL_TOKEN_IDS: [token_id],
+        token_policy_key(token_id): "Custom",
+        policy_mode_key(Tag.DEBUG_EVENTS, token_id): "confirm",
+        "debug_event_buffer_capacity": 100,
+    }
+    config = MagicMock()
+    config.get_value.side_effect = lambda key, default=None: values.get(key, default)
+    command_set = ProviderCommandSet(mass, config)
+
+    command_set.start()
+
+    assert mass.subscribed == 1
+
+
+def test_authenticated_discovered_token_policy_activates_event_buffer() -> None:
+    """A bound discovered token makes its non-deny debug policy retain events."""
+    mass = CommandRegistry()
+    token_id = "discovered-token-id"
+    values = {
+        CONF_DEFAULT_POLICY: "Read-only",
+        token_policy_key(token_id): "Custom",
+        policy_mode_key(Tag.DEBUG_EVENTS, token_id): "allow",
+        "debug_event_buffer_capacity": 100,
+    }
+    config = MagicMock()
+    config.get_value.side_effect = lambda key, default=None: values.get(key, default)
+    command_set = ProviderCommandSet(mass, config)
+    command_set.start()
+
+    command_set.update_config(config, active_token_ids={token_id})
+
+    assert mass.subscribed == 1
+
+    command_set.update_config(config)
+
+    assert mass.unsubscribed == 0
 
 
 def test_stop_attempts_all_unregistrations_then_raises_first_error() -> None:

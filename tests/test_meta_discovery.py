@@ -13,14 +13,7 @@ from mcp.shared.exceptions import McpError
 
 from provider import meta_discovery
 from provider.config import build_config_entries
-from provider.constants import (
-    CONF_DYNAMIC_API_CONTROL,
-    CONF_DYNAMIC_API_READ,
-    CONF_DYNAMIC_API_SYSTEM,
-    CONF_DYNAMIC_API_WRITE,
-    DEFAULT_MOUNT_PATH,
-    HOT_SWAPPABLE_KEYS,
-)
+from provider.constants import DEFAULT_MOUNT_PATH
 from provider.dynamic_api import CatalogSnapshot, CatalogView, DynamicEntry
 from provider.meta_discovery import register_meta_discovery
 from provider.middleware import TagFilterMiddleware
@@ -203,20 +196,15 @@ def test_meta_discovery_service_is_a_direct_index_owner() -> None:
     assert getattr(meta_discovery, "MetaDiscoveryService", None) is not None
 
 
-def test_dynamic_config_entries_replace_meta_toggle(mock_mass: Any) -> None:
-    """Four risk gates replace the former discovery-mode switch."""
+def test_dynamic_risk_gate_entries_are_removed(mock_mass: Any) -> None:
+    """V2 command behavior no longer exposes legacy dynamic risk gates."""
     entries = {entry.key: entry for entry in build_config_entries(mock_mass, DEFAULT_MOUNT_PATH)}
-    keys = {
-        CONF_DYNAMIC_API_READ,
-        CONF_DYNAMIC_API_CONTROL,
-        CONF_DYNAMIC_API_WRITE,
-        CONF_DYNAMIC_API_SYSTEM,
-    }
-    assert keys <= entries.keys()
-    assert entries[CONF_DYNAMIC_API_READ].default_value is True
-    assert all(entries[key].category == "dynamic_api" for key in keys)
-    assert all(entries[key].default_value is False for key in keys - {CONF_DYNAMIC_API_READ})
-    assert keys <= HOT_SWAPPABLE_KEYS
+    assert {
+        "dynamic_api_read",
+        "dynamic_api_control",
+        "dynamic_api_write",
+        "dynamic_api_system",
+    }.isdisjoint(entries)
 
 
 def test_dynamic_entry_type_carries_no_classifier_risk_gate() -> None:

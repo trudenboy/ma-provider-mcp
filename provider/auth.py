@@ -27,6 +27,8 @@ from fastmcp.server.auth.auth import AccessToken
 if TYPE_CHECKING:
     from music_assistant.mass import MusicAssistant
 
+    from .token_identity import TokenIdentityRegistry
+
 LOGGER = logging.getLogger(__name__)
 
 
@@ -76,6 +78,7 @@ class MASTokenVerifier(TokenVerifier):
         base_url: str | None = None,
         public_resource_uri: str | None = None,
         enforce_audience: bool = False,
+        identity_registry: TokenIdentityRegistry | None = None,
     ) -> None:
         """
         Bind the verifier to a MusicAssistant instance.
@@ -99,6 +102,11 @@ class MASTokenVerifier(TokenVerifier):
         self._mass = mass
         self._public_resource_uri = public_resource_uri
         self._enforce_audience = enforce_audience
+        if identity_registry is None:
+            from .token_identity import TokenIdentityRegistry  # noqa: PLC0415
+
+            identity_registry = TokenIdentityRegistry()
+        self._identity_registry = identity_registry
 
     async def verify_token(self, token: str) -> AccessToken | None:
         """
@@ -114,16 +122,31 @@ class MASTokenVerifier(TokenVerifier):
         # expiry for that token on every MCP request, keeping an attacker's
         # stolen non-MCP token alive indefinitely via the MCP endpoint.
         if not self._check_audience(token):
+            self._identity_registry.discard(token)
             return None
 
         try:
             user = await self._mass.webserver.auth.authenticate_with_token(token)
         except Exception:
-            LOGGER.exception("MA token verification raised")
+            self._identity_registry.discard(token)
+            LOGGER.error("MA token verification raised")
             return None
 
         if user is None or not getattr(user, "enabled", True):
+            self._identity_registry.discard(token)
             return None
+
+        try:
+            token_id = await self._mass.webserver.auth.get_token_id_from_token(token)
+        except Exception:
+            self._identity_registry.discard(token)
+            LOGGER.error("MA token identity lookup raised; using Read-only policy")
+        else:
+            self._identity_registry.bind(
+                token,
+                user_id=str(getattr(user, "user_id", "")),
+                token_id=str(token_id) if token_id is not None else None,
+            )
 
         # MCP SDK's AccessToken pydantic model has no `claims` field — extras
         # are silently dropped — so we don't try to forward username/role here.

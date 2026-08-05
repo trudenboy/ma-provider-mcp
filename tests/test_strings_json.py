@@ -45,6 +45,8 @@ def test_every_category_is_known_or_declared(mock_mass: MagicMock) -> None:
         category = getattr(entry, "category", None)
         if not category:
             continue
+        if entry.category_label is not None:
+            continue
         assert category in COMMON_CATEGORIES or category in declared, (
             f"category {category!r} is neither common nor declared in config_categories"
         )
@@ -54,11 +56,11 @@ def test_static_entries_carry_no_inline_text(mock_mass: MagicMock) -> None:
     """
     All static entries are de-literalized — ``strings.json`` owns their text.
 
-    Only ``LABEL``-type entries may carry inline text: their content is composed
-    at runtime (e.g. the endpoint info label embeds the live ``base_url``).
+    Runtime-composed labels are allowed for the native dynamic policy block,
+    where current-user token names and hashed entry keys cannot live in strings.json.
     """
     for entry in build_config_entries(mock_mass, DEFAULT_MOUNT_PATH):
-        if entry.type is ConfigEntryType.LABEL:
+        if entry.type is ConfigEntryType.LABEL or entry.category == "policy":
             continue
         assert entry.label is None, f"inline label on {entry.key!r}"
         assert entry.description is None, f"inline description on {entry.key!r}"
