@@ -10,6 +10,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Provider commands now use the current Music Assistant authorization,
   registration, and configuration-action APIs directly.
+- Large dynamic API responses now fit their byte budget without repeatedly
+  serializing the complete payload for every removed item.
+
+### Fixed
+- Catalog discovery now terminates predictably during persistent Music
+  Assistant command-registry churn instead of retrying indefinitely.
+
+### Security
+- Secure provider, core, and player configuration values are masked from
+  dynamic API responses according to their live Music Assistant schemas.
+- Authentication commands are no longer exposed through the dynamic MCP
+  catalog, preventing credential-management operations from bypassing its
+  permission model.
 
 ## [1.0.0] — 2026-07-31
 

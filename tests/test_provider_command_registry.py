@@ -169,6 +169,22 @@ def test_scope_allowed_delegates_to_current_ma_scope_helper(
     assert checked == [(user, Scope.QUEUES_CONTROL), (user, Scope.SYSTEM_READ)]
 
 
+def test_scope_allowed_rejects_unknown_scopes_without_calling_ma(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An MA scope added after this provider release fails closed locally."""
+    checked: list[tuple[User, Scope]] = []
+
+    def check(user: User, scope: Scope) -> bool:
+        checked.append((user, scope))
+        return True
+
+    monkeypatch.setattr(authorization, "has_scope", check, raising=False)
+
+    assert scope_allowed(_user(UserRole.USER), "future.scope") is False
+    assert checked == []
+
+
 def test_start_registers_exact_command_set_with_native_scopes() -> None:
     """No legacy or duplicate command leaks into MA's registry."""
     mass = CommandRegistry()

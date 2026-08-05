@@ -25,9 +25,12 @@ def scope_allowed(user: User, required_scope: str) -> bool:
     if not getattr(user, "enabled", False):
         return False
     try:
-        return bool(has_scope(user, Scope(required_scope)))
+        scope = Scope(required_scope)
     except TypeError, ValueError:
         return False
+    if scope is Scope.UNKNOWN:
+        return False
+    return bool(has_scope(user, scope))
 
 
 def authorize_extension(
