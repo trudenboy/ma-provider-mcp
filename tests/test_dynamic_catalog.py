@@ -1072,6 +1072,35 @@ def test_large_search_envelope_keeps_mapping_shape_within_byte_budget() -> None:
     assert result["bytes"] <= 12_288
 
 
+def test_large_top_level_response_uses_logarithmic_byte_fitting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A large bounded response does not serialize once per removed row."""
+    payload = [f"row-{index}:" + ("x" * 3000) for index in range(200)]
+    encoded_size = DynamicAPIAdapter._encoded_size
+    measurements = 0
+
+    def counted_size(value: Any) -> int:
+        nonlocal measurements
+        measurements += 1
+        return encoded_size(value)
+
+    monkeypatch.setattr(DynamicAPIAdapter, "_encoded_size", staticmethod(counted_size))
+
+    result = DynamicAPIAdapter._bounded_envelope(
+        "ma_api:test",
+        payload,
+        response_mode="full",
+        fields=None,
+        max_items=None,
+    )
+
+    assert result["bytes"] <= 65_536
+    assert result["data"]
+    assert result["data"] == payload[: len(result["data"])]
+    assert measurements <= 16
+
+
 async def test_registry_incompatibility_is_reported_without_breaking_catalog() -> None:
     """Structural MA drift is isolated and leaves actionable diagnostics."""
 

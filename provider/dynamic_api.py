@@ -813,19 +813,44 @@ class DynamicAPIAdapter:
 
     @classmethod
     def _fit_bytes(cls, envelope: dict[str, Any], byte_cap: int) -> None:
-        """Shrink nested result lists until the complete envelope fits the byte cap."""
-        while cls._encoded_size(envelope) > byte_cap and cls._pop_largest_list(envelope["data"]):
+        """Shrink the largest nested list to the longest prefix fitting the byte cap."""
+        envelope["bytes"] = byte_cap
+        fits = False
+        while cls._encoded_size(envelope) > byte_cap:
+            candidate = cls._largest_list(envelope["data"])
+            if candidate is None:
+                break
+            original = list(candidate)
+            low = 0
+            high = len(original) - 1
+            best = -1
+            while low <= high:
+                midpoint = (low + high) // 2
+                candidate[:] = original[:midpoint]
+                if cls._encoded_size(envelope) <= byte_cap:
+                    best = midpoint
+                    low = midpoint + 1
+                else:
+                    high = midpoint - 1
+            if best >= 0:
+                candidate[:] = original[:best]
+                fits = True
+                envelope["truncated"] = True
+                break
+            candidate.clear()
             envelope["truncated"] = True
+        else:
+            fits = True
         if isinstance(envelope["data"], list):
             envelope["returned_count"] = len(envelope["data"])
-        if cls._encoded_size(envelope) > byte_cap:
+        if not fits:
             envelope["data"] = "[response exceeded byte budget]"
             envelope["returned_count"] = 1
             envelope["truncated"] = True
 
     @staticmethod
-    def _pop_largest_list(value: Any) -> bool:
-        """Remove one row from the largest, shallowest nested list deterministically."""
+    def _largest_list(value: Any) -> list[Any] | None:
+        """Return the largest, shallowest nested list deterministically."""
         candidates: list[tuple[int, int, int, list[Any]]] = []
 
         def collect(item: Any, depth: int) -> None:
@@ -840,9 +865,8 @@ class DynamicAPIAdapter:
 
         collect(value, 0)
         if not candidates:
-            return False
-        max(candidates, key=lambda candidate: candidate[:3])[3].pop()
-        return True
+            return None
+        return max(candidates, key=lambda candidate: candidate[:3])[3]
 
     @staticmethod
     def _encoded_size(value: Any) -> int:
