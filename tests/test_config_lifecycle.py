@@ -8,8 +8,11 @@ from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from music_assistant_models.config_entries import ConfigEntry
+from music_assistant_models.enums import ConfigEntryType
 
-from provider import server
+from music_assistant.models.plugin import PluginProvider
+from provider import _init_helpers, server
 from provider.commands import ProviderCommandSet
 from provider.provider import MCPServerProvider
 from provider.server import MCPServerRuntime
@@ -62,6 +65,43 @@ def _config(*, debug_events: bool = False) -> MagicMock:
         "debug_event_buffer_capacity": 100,
     }.get(key, default)
     return config
+
+
+@pytest.mark.asyncio
+async def test_open_connect_action_returns_a_one_shot_url_entry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The MA frontend receives a URL entry it can open after the action completes."""
+    provider = _provider(MagicMock(), _config())
+    existing = ConfigEntry(key="info", type=ConfigEntryType.LABEL, label="MCP endpoint")
+    monkeypatch.setattr(
+        MCPServerProvider, "get_config_entries", AsyncMock(return_value=(existing,))
+    )
+    monkeypatch.setattr(MCPServerProvider, "get_config_value", MagicMock(return_value="/mcp/v1"))
+    wizard_url = "https://ma.example/mcp/v1/connect?bootstrap=one-shot"
+    monkeypatch.setattr(_init_helpers, "_dispatch_open_connect", AsyncMock(return_value=wizard_url))
+
+    entries = await provider.handle_config_action("open_connect")
+
+    assert entries[:-1] == (existing,)
+    assert entries[-1].type is ConfigEntryType.URL
+    assert entries[-1].value == wizard_url
+
+
+@pytest.mark.asyncio
+async def test_unknown_config_action_uses_plugin_provider_handler(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Future MA config actions retain the framework's native handling."""
+    provider = _provider(MagicMock(), _config())
+    expected = (ConfigEntry(key="ma_result", type=ConfigEntryType.LABEL, label="Handled by MA"),)
+    base_handler = AsyncMock(return_value=expected)
+    monkeypatch.setattr(PluginProvider, "handle_config_action", base_handler)
+
+    entries = await provider.handle_config_action("future_ma_action")
+
+    assert entries == expected
+    base_handler.assert_awaited_once_with("future_ma_action")
 
 
 @pytest.mark.asyncio

@@ -13,12 +13,15 @@ import logging
 from contextlib import suppress
 from typing import TYPE_CHECKING
 
+from music_assistant_models.config_entries import ConfigEntry
+from music_assistant_models.enums import ConfigEntryType
+
 from music_assistant.models.plugin import PluginProvider
 
 from .constants import HOT_SWAPPABLE_KEYS
 
 if TYPE_CHECKING:
-    from music_assistant_models.config_entries import ConfigEntry, ProviderConfig
+    from music_assistant_models.config_entries import ProviderConfig
 
     from .commands import ProviderCommandSet
     from .server import MCPServerRuntime
@@ -45,9 +48,6 @@ class MCPServerProvider(PluginProvider):  # type: ignore[misc, unused-ignore]
     async def handle_config_action(self, action: str) -> tuple[ConfigEntry, ...]:
         """Handle a one-shot config action button press and re-render the entries."""
         if action == "open_connect":
-            from music_assistant_models.config_entries import ConfigEntry  # noqa: PLC0415
-            from music_assistant_models.enums import ConfigEntryType  # noqa: PLC0415
-
             from ._init_helpers import _dispatch_open_connect  # noqa: PLC0415
             from .constants import CONF_CONNECT_EXTERNAL_URL, CONF_MOUNT_PATH  # noqa: PLC0415
 
@@ -61,19 +61,16 @@ class MCPServerProvider(PluginProvider):  # type: ignore[misc, unused-ignore]
             entries = await self.get_config_entries()
             if url is None:
                 return entries
-            url_entry_type = "URL"
+            # a URL entry in an invoke_action response is opened one-shot by the frontend
             return (
                 *entries,
                 ConfigEntry(
                     key="connect_wizard_url",
-                    type=getattr(ConfigEntryType, url_entry_type),
+                    type=ConfigEntryType.URL,
                     value=url,
                 ),
             )
-        action_handler_name = "handle_config_action"
-        action_handler = getattr(super(), action_handler_name)
-        result: tuple[ConfigEntry, ...] = await action_handler(action)
-        return result
+        return await super().handle_config_action(action)
 
     async def handle_async_init(self) -> None:
         """Register MA commands, then build and start the FastMCP runtime."""

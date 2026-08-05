@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.0.1] - 2026-08-05
 
 ### Changed
+- Provider commands now use the current Music Assistant authorization,
+  registration, and configuration-action APIs directly.
 - Large dynamic API responses now fit their byte budget without repeatedly
   serializing the complete payload for every removed item.
 
