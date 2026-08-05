@@ -169,7 +169,9 @@ def test_scope_allowed_delegates_to_current_ma_scope_helper(
     assert checked == [(user, Scope.QUEUES_CONTROL), (user, Scope.SYSTEM_READ)]
 
 
+@pytest.mark.parametrize("required_scope", [Scope.UNKNOWN, "future.scope", object()])
 def test_scope_allowed_rejects_unknown_scopes_without_calling_ma(
+    required_scope: object,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """An MA scope added after this provider release fails closed locally."""
@@ -181,7 +183,7 @@ def test_scope_allowed_rejects_unknown_scopes_without_calling_ma(
 
     monkeypatch.setattr(authorization, "has_scope", check, raising=False)
 
-    assert scope_allowed(_user(UserRole.USER), "future.scope") is False
+    assert scope_allowed(_user(UserRole.USER), required_scope) is False
     assert checked == []
 
 

@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Secure configuration reads are classified before and after native command
   execution so live schema changes and non-canonical entry types cannot expose
   raw credential values.
+- Unknown Music Assistant scopes now fail closed, while hidden authentication
+  handlers no longer affect catalog diagnostics, revisions, or cursors.
 
 ## [1.0.1] - 2026-08-05
 

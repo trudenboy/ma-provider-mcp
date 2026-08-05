@@ -20,15 +20,26 @@ if TYPE_CHECKING:
     from music_assistant_models.config_entries import ProviderConfig
 
 
-def scope_allowed(user: User, required_scope: str) -> bool:
+def normalize_scope(required_scope: object) -> Scope | None:
+    """Return one known MA scope or fail closed for unknown runtime values."""
+    if isinstance(required_scope, Scope):
+        scope = required_scope
+    elif isinstance(required_scope, str):
+        try:
+            scope = Scope(required_scope)
+        except ValueError:
+            return None
+    else:
+        return None
+    return None if scope is Scope.UNKNOWN else scope
+
+
+def scope_allowed(user: User, required_scope: object) -> bool:
     """Delegate enabled-user scope checks to Music Assistant's current helper."""
     if not getattr(user, "enabled", False):
         return False
-    try:
-        scope = Scope(required_scope)
-    except TypeError, ValueError:
-        return False
-    if scope is Scope.UNKNOWN:
+    scope = normalize_scope(required_scope)
+    if scope is None:
         return False
     return bool(has_scope(user, scope))
 

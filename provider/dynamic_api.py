@@ -35,6 +35,7 @@ from .command_profiles import (
     LegacyMigration,
     aliases_by_command,
 )
+from .commands.authorization import normalize_scope
 from .dynamic_serialization import json_value
 from .dynamic_signatures import (
     CompiledSignature,
@@ -161,6 +162,15 @@ class _SnapshotDiagnostics:
     last_error: str | None
 
 
+@dataclass(frozen=True, slots=True)
+class _RegistryCapture:
+    """One immutable caller-safe view of the live MA command registry."""
+
+    fingerprint: CatalogFingerprint
+    registry_type: str
+    items: tuple[tuple[str, Any], ...] | None
+
+
 @dataclass(slots=True)
 class _ListReductionCandidate:
     """Mutable heap state for one list in a response-reduction trial."""
@@ -205,13 +215,13 @@ class DynamicAPIAdapter:
 
     async def base_snapshot(self) -> CatalogSnapshot:
         """Return the compiled snapshot for the current live command registry."""
-        fingerprint = self._registry_fingerprint()
-        if self._snapshot is not None and self._snapshot.fingerprint == fingerprint:
+        capture = self._capture_registry()
+        if self._snapshot is not None and self._snapshot.fingerprint == capture.fingerprint:
             return self._snapshot
         async with self._snapshot_lock:
-            fingerprint = self._registry_fingerprint()
-            if self._snapshot is None or self._snapshot.fingerprint != fingerprint:
-                snapshot, diagnostics = self._compile_snapshot(fingerprint)
+            capture = self._capture_registry()
+            if self._snapshot is None or self._snapshot.fingerprint != capture.fingerprint:
+                snapshot, diagnostics = self._compile_snapshot(capture)
                 self._snapshot = snapshot
                 self._snapshot_diagnostics = diagnostics
                 self._publish_snapshot_diagnostics()
@@ -232,7 +242,7 @@ class DynamicAPIAdapter:
             for entry in snapshot.entries
             if (
                 entry.required_scope is None
-                or self._scope_checker(user, getattr(entry.handler, "required_scope", None))
+                or self._scope_is_allowed(user, getattr(entry.handler, "required_scope", None))
             )
             and policy.allows(entry.risk)
             and entry.decision is not None
@@ -328,8 +338,8 @@ class DynamicAPIAdapter:
             profile=invocation.entry.profile,
         )
 
-    def _registry_fingerprint(self) -> CatalogFingerprint:
-        """Fingerprint the actual live command-handler registry."""
+    def _capture_registry(self) -> _RegistryCapture:
+        """Capture the caller-safe subset used by compilation and diagnostics."""
         handlers = getattr(self.mass, "command_handlers", {})
         registry_type = type(handlers)
         registry_kind = (
@@ -337,22 +347,36 @@ class DynamicAPIAdapter:
             f"{registry_type.__module__}.{registry_type.__qualname__}"
         )
         if not isinstance(handlers, Mapping):
-            return CATALOG_REVISION, registry_kind, ()
-        return (
-            CATALOG_REVISION,
-            registry_kind,
-            tuple(sorted((command, id(handler)) for command, handler in handlers.items())),
+            return _RegistryCapture(
+                fingerprint=(CATALOG_REVISION, registry_kind, ()),
+                registry_type=registry_type.__name__,
+                items=None,
+            )
+        items = tuple(
+            sorted(
+                (command, handler)
+                for command, handler in handlers.items()
+                if not self._command_is_denied(command)
+            )
+        )
+        return _RegistryCapture(
+            fingerprint=(
+                CATALOG_REVISION,
+                registry_kind,
+                tuple((command, id(handler)) for command, handler in items),
+            ),
+            registry_type=registry_type.__name__,
+            items=items,
         )
 
     def _compile_snapshot(
-        self, fingerprint: CatalogFingerprint
+        self, capture: _RegistryCapture
     ) -> tuple[CatalogSnapshot, _SnapshotDiagnostics]:
         """Compile the base descriptors and compatibility errors atomically."""
-        handlers = getattr(self.mass, "command_handlers", {})
-        if not isinstance(handlers, Mapping):
-            return CatalogSnapshot(fingerprint, ()), _SnapshotDiagnostics(
+        if capture.items is None:
+            return CatalogSnapshot(capture.fingerprint, ()), _SnapshotDiagnostics(
                 available=False,
-                registry_type=type(handlers).__name__,
+                registry_type=capture.registry_type,
                 handlers_seen=0,
                 handlers_visible=0,
                 incompatible_handlers=(),
@@ -361,9 +385,7 @@ class DynamicAPIAdapter:
 
         entries: list[DynamicEntry] = []
         incompatible: list[str] = []
-        for command, handler in sorted(handlers.items()):
-            if self._command_is_denied(command):
-                continue
+        for command, handler in capture.items:
             if not self._handler_is_discoverable(command, handler):
                 incompatible.append(str(command))
                 continue
@@ -377,8 +399,8 @@ class DynamicAPIAdapter:
         incompatible_handlers = tuple(sorted(incompatible))
         diagnostics = _SnapshotDiagnostics(
             available=True,
-            registry_type=type(handlers).__name__,
-            handlers_seen=len(handlers),
+            registry_type=capture.registry_type,
+            handlers_seen=len(capture.items),
             handlers_visible=len(entries),
             incompatible_handlers=incompatible_handlers,
             last_error=(
@@ -386,7 +408,7 @@ class DynamicAPIAdapter:
             ),
         )
         return CatalogSnapshot(
-            fingerprint,
+            capture.fingerprint,
             tuple(sorted(entries, key=lambda entry: entry.name)),
         ), diagnostics
 
@@ -594,7 +616,7 @@ class DynamicAPIAdapter:
         if auth is None:
             raise ToolError("Authentication is required")
         scope = getattr(handler, "required_scope", None)
-        if scope is not None and not self._scope_checker(auth[1], scope):
+        if scope is not None and not self._scope_is_allowed(auth[1], scope):
             raise ToolError(f"Tool {entry.name!r} not found or not permitted")
         profile = COMMAND_PROFILES.get(entry.command)
         decision = resolve_command_policy(entry.command, scope, profile)
@@ -1029,6 +1051,11 @@ class DynamicAPIAdapter:
             if envelope["bytes"] == measured:
                 return
             envelope["bytes"] = measured
+
+    def _scope_is_allowed(self, user: Any, scope: Any) -> bool:
+        """Normalize one MA scope before delegating its authorization decision."""
+        normalized = normalize_scope(scope)
+        return normalized is not None and bool(self._scope_checker(user, normalized))
 
     @staticmethod
     def _default_scope_checker(user: Any, scope: Any) -> bool:
