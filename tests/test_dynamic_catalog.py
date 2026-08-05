@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import inspect
+import json
 import sys
 from dataclasses import dataclass, replace
 from enum import StrEnum
@@ -1799,6 +1800,39 @@ async def test_secret_tag_revoked_during_confirmation_prevents_config_execution(
             ctx=MagicMock(),
         )
     assert called is False
+
+
+async def test_secure_config_value_is_masked_before_response_serialization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A native get_value result cannot expose an encrypted secure value."""
+    _bypass_ma_argument_parser(monkeypatch)
+    raw_secret = "super-secret-encrypted-token"
+
+    async def get_provider_value(instance_id: str, key: str) -> str:
+        assert (instance_id, key) == ("demo--1", "token")
+        return raw_secret
+
+    adapter = _real_adapter(
+        _handler("config/providers/get_value", get_provider_value, "config.providers.read"),
+        allowed_tags={str(Tag.CONFIG_READ)},
+    )
+    adapter.mass.config.get_provider_config = AsyncMock(return_value=SimpleNamespace(domain="demo"))
+    adapter.mass.config.get_provider_config_entries = AsyncMock(
+        return_value=[ConfigEntry(key="token", type=ConfigEntryType.SECURE_STRING, label="Token")]
+    )
+
+    result = await adapter.call(
+        "ma_api:config/providers/get_value",
+        {"instance_id": "demo--1", "key": "token"},
+        response_mode="full",
+        fields=None,
+        max_items=None,
+        ctx=MagicMock(),
+    )
+
+    assert result["data"] == "this_value_is_encrypted"
+    assert raw_secret not in json.dumps(result)
 
 
 async def test_flow_category_revoked_during_confirmation_prevents_execution(
