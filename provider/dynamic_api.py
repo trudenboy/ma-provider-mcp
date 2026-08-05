@@ -20,6 +20,7 @@ from .command_policy import (
     Confirmation,
     DynamicPolicy,
     DynamicRisk,
+    ResultProjector,
     command_tags_visible,
     preflight_command,
     resolve_command_policy,
@@ -261,7 +262,7 @@ class DynamicAPIAdapter:
         except (KeyError, TypeError, ValueError) as exc:
             raise ToolError(str(exc)) from exc
 
-        entry, impersonated_user = await self._authorize_call(
+        entry, impersonated_user, _result_projector = await self._authorize_call(
             entry,
             auth,
             parsed,
@@ -271,7 +272,7 @@ class DynamicAPIAdapter:
         auth = await self._authentication(revalidate=True)
         if auth is None and self._auth_required_provider():
             raise ToolError("Authentication is required")
-        entry, impersonated_user = await self._authorize_call(
+        entry, impersonated_user, result_projector = await self._authorize_call(
             entry,
             auth,
             parsed,
@@ -281,6 +282,8 @@ class DynamicAPIAdapter:
         try:
             async with asyncio.timeout(_CALL_TIMEOUT_SECONDS):
                 result = await self._execute(entry, parsed, auth, impersonated_user)
+                if result_projector is not None:
+                    result = result_projector(result)
         except TimeoutError as exc:
             raise ToolError(f"Command {entry.command!r} timed out") from exc
         except ToolError:
@@ -582,11 +585,11 @@ class DynamicAPIAdapter:
         decision: CommandDecision,
         arguments: Mapping[str, Any],
         auth: tuple[AccessToken, Any] | None,
-    ) -> None:
+    ) -> ResultProjector | None:
         """Run request-dependent policy checks under the current MA auth context."""
         context_tokens = self._set_auth_context(auth)
         try:
-            await preflight_command(
+            return await preflight_command(
                 self.mass,
                 decision,
                 arguments,
@@ -603,7 +606,7 @@ class DynamicAPIAdapter:
         arguments: Mapping[str, Any],
         *,
         impersonated: Any,
-    ) -> tuple[DynamicEntry, Any | None]:
+    ) -> tuple[DynamicEntry, Any | None, ResultProjector | None]:
         """Refresh authorization, impersonation, target filters and request preflight."""
         entry = self._reauthorize_entry(entry, auth)
         impersonated_user = (
@@ -616,8 +619,8 @@ class DynamicAPIAdapter:
         decision = entry.decision
         if decision is None:
             decision = resolve_command_policy(entry.command, entry.required_scope, entry.profile)
-        await self._preflight(decision, arguments, auth)
-        return entry, impersonated_user
+        result_projector = await self._preflight(decision, arguments, auth)
+        return entry, impersonated_user, result_projector
 
     async def _resolve_impersonated_user(
         self,

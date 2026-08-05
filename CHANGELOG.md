@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.0.1] - 2026-08-05
 
 ### Security
+- Secure provider, core, and player configuration values are masked from
+  dynamic API responses according to their live Music Assistant schemas.
 - Authentication commands are no longer exposed through the dynamic MCP
   catalog, preventing credential-management operations from bypassing its
   permission model.
