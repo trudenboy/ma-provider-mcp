@@ -1,6 +1,6 @@
 {
   "name": "music-assistant",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Control Music Assistant — playback, library, queues, and players — from OpenClaw over the Model Context Protocol.",
   "author": {
     "name": "ma-provider-mcp contributors",
