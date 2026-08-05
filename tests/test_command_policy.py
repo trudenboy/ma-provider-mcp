@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-from unittest.mock import AsyncMock
+import ast
+from pathlib import Path
+from types import MethodType, SimpleNamespace
+from typing import Any
+from unittest.mock import AsyncMock, create_autospec
 
 import pytest
 from fastmcp.exceptions import ToolError
 from music_assistant_models.config_entries import ConfigEntry
+from music_assistant_models.constants import SECURE_STRING_SUBSTITUTE
 from music_assistant_models.enums import ConfigEntryType
 
+import music_assistant
 from provider.command_policy import (
     CommandDecision,
     Confirmation,
@@ -20,6 +25,37 @@ from provider.command_policy import (
 )
 from provider.command_profiles import CommandProfile
 from provider.tags import Tag
+
+
+def _current_ma_provider_entries_autospec() -> Any:
+    """Return an autospec generated from MA's installed provider-entry API source."""
+    source_path = Path(music_assistant.__file__).parent / "controllers" / "config" / "providers.py"
+    source_tree = ast.parse(source_path.read_text())
+    provider_mixin = next(
+        node
+        for node in source_tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "ProviderConfigMixin"
+    )
+    method = next(
+        node
+        for node in provider_mixin.body
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "get_provider_config_entries"
+    )
+    method.decorator_list = []
+    module = ast.Module(
+        body=[
+            ast.ImportFrom(
+                module="__future__",
+                names=[ast.alias(name="annotations")],
+                level=0,
+            ),
+            method,
+        ],
+        type_ignores=[],
+    )
+    namespace: dict[str, Any] = {}
+    exec(compile(ast.fix_missing_locations(module), str(source_path), "exec"), namespace)  # noqa: S102
+    return create_autospec(namespace[method.name], spec_set=True)
 
 
 @pytest.mark.parametrize("command", ["player_queues/delete_item", "player_queues/clear"])
@@ -208,6 +244,122 @@ async def test_nonsecret_config_preflight_needs_no_secret_tag() -> None:
         },
         {str(Tag.CONFIG_WRITE_PROVIDER)},
     )
+
+
+async def test_provider_secure_config_read_uses_current_ma_entries_signature() -> None:
+    """Provider secure reads use MA's instance-ID-only schema lookup contract."""
+    entries = [ConfigEntry(key="token", type=ConfigEntryType.SECURE_STRING, label="Token")]
+    getter = _current_ma_provider_entries_autospec()
+    getter.return_value = entries
+    config = SimpleNamespace()
+    config.get_provider_config_entries = MethodType(getter, config)
+    decision = resolve_command_policy("config/providers/get_value", "config.read", None)
+
+    projector = await preflight_command(
+        SimpleNamespace(config=config),
+        decision,
+        {"instance_id": "demo--1", "key": "token"},
+        {str(Tag.CONFIG_READ)},
+    )
+
+    assert callable(projector)
+    assert projector("raw-encrypted-token") == SECURE_STRING_SUBSTITUTE
+    assert projector(None) is None
+    getter.assert_awaited_once_with(config, "demo--1")
+
+
+@pytest.mark.parametrize(
+    ("command", "arguments", "getter_name", "getter_arguments"),
+    [
+        (
+            "config/core/get_value",
+            {"domain": "webserver", "key": "token"},
+            "get_core_config_entries",
+            ("webserver",),
+        ),
+        (
+            "config/players/get_value",
+            {"player_id": "kitchen", "key": "token"},
+            "get_player_config_entries",
+            ("kitchen",),
+        ),
+    ],
+)
+async def test_secure_config_value_reads_return_masking_projector(
+    command: str,
+    arguments: dict[str, str],
+    getter_name: str,
+    getter_arguments: tuple[str, ...],
+) -> None:
+    """Every config value family masks keys declared as SECURE_STRING."""
+    entries = [ConfigEntry(key="token", type=ConfigEntryType.SECURE_STRING, label="Token")]
+    config = SimpleNamespace(
+        get_core_config_entries=AsyncMock(return_value=entries),
+        get_player_config_entries=AsyncMock(return_value=entries),
+    )
+    decision = resolve_command_policy(command, "config.read", None)
+
+    projector = await preflight_command(
+        SimpleNamespace(config=config),
+        decision,
+        arguments,
+        {str(Tag.CONFIG_READ)},
+    )
+
+    assert callable(projector)
+    assert projector("raw-encrypted-token") == SECURE_STRING_SUBSTITUTE
+    assert projector(None) is None
+    getter = getattr(config, getter_name)
+    getter.assert_awaited_once_with(*getter_arguments)
+
+
+async def test_nonsecure_config_value_read_needs_no_projector() -> None:
+    """Ordinary config values pass through unchanged."""
+    config = SimpleNamespace(
+        get_core_config_entries=AsyncMock(
+            return_value=[ConfigEntry(key="name", type=ConfigEntryType.STRING, label="Name")]
+        )
+    )
+    decision = resolve_command_policy("config/core/get_value", "config.core.read", None)
+
+    projector = await preflight_command(
+        SimpleNamespace(config=config),
+        decision,
+        {"domain": "webserver", "key": "name"},
+        {str(Tag.CONFIG_READ)},
+    )
+
+    assert projector is None
+
+
+async def test_unknown_config_value_key_fails_closed() -> None:
+    """An unrecognized key cannot bypass secure-value classification."""
+    config = SimpleNamespace(get_core_config_entries=AsyncMock(return_value=[]))
+    decision = resolve_command_policy("config/core/get_value", "config.core.read", None)
+
+    with pytest.raises(ToolError, match="Unable to classify config value"):
+        await preflight_command(
+            SimpleNamespace(config=config),
+            decision,
+            {"domain": "webserver", "key": "future-secret"},
+            {str(Tag.CONFIG_READ)},
+        )
+
+
+async def test_config_value_schema_failure_fails_closed() -> None:
+    """Schema lookup failures cannot expose an unclassified value."""
+    config = SimpleNamespace(
+        get_player_config_entries=AsyncMock(side_effect=RuntimeError("player disappeared"))
+    )
+    decision = resolve_command_policy("config/players/get_value", "config.players.read", None)
+
+    with pytest.raises(ToolError, match="Unable to classify config value"):
+        await preflight_command(
+            SimpleNamespace(config=config),
+            decision,
+            {"player_id": "missing", "key": "token"},
+            {str(Tag.CONFIG_READ)},
+        )
 
 
 async def test_secret_config_preflight_accepts_explicit_secret_tag() -> None:

@@ -5,12 +5,13 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import inspect
+import json
 import sys
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
 from fastmcp import Client, Context, FastMCP
@@ -1120,6 +1121,55 @@ async def test_registry_incompatibility_is_reported_without_breaking_catalog() -
     assert adapter.diagnostics()["last_error"] == "mass.command_handlers is not a mapping"
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        "auth/future_dangerous_command",
+        "dashboard/register",
+        "dashboard/unregister",
+    ],
+)
+async def test_denied_handlers_are_omitted_from_dynamic_health_diagnostics(command: str) -> None:
+    """Intentional denylist exclusions do not look like MA compatibility failures."""
+
+    async def operation() -> None:
+        return None
+
+    adapter = _real_adapter(_handler(command, operation, scope="admin"))
+    adapter.mass.command_handlers["broken"] = SimpleNamespace(target=None)
+
+    assert await adapter.visible_entries() == []
+    assert adapter.diagnostics()["incompatible_handlers"] == ("broken",)
+    assert adapter.diagnostics()["last_error"] == "1 incompatible handler(s) skipped"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "auth/future_dangerous_command",
+        "dashboard/register",
+        "dashboard/unregister",
+    ],
+)
+async def test_denied_handlers_stay_denied_when_reauthorized(command: str) -> None:
+    """A cached entry cannot make an intentionally denied handler executable."""
+
+    async def operation() -> None:
+        return None
+
+    adapter = _real_adapter(_handler("music/read", operation), policy=DynamicPolicy(system=True))
+    entry = (await adapter.visible_entries())[0]
+    handler = _handler(command, operation, scope="admin")
+    adapter.mass.command_handlers = {command: handler}
+    stale_entry = replace(entry, name=f"ma_api:{command}", command=command, handler=handler)
+
+    with pytest.raises(ToolError, match="not found or not permitted"):
+        adapter._reauthorize_entry(
+            stale_entry,
+            (AccessToken(token="secret", client_id="u1", scopes=[]), MagicMock()),
+        )
+
+
 async def test_execution_sets_and_restores_ma_auth_context(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1219,6 +1269,59 @@ async def test_disabled_user_and_transport_commands_are_hidden() -> None:
     assert await adapter.visible_entries() == []
     transport = _real_adapter(_handler("dashboard/register", operation))
     assert await transport.visible_entries() == []
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "auth/token/create",
+        "auth/token/revoke",
+        "auth/tokens",
+        "auth/user/create",
+        "auth/join_codes",
+        "auth/future_dangerous_command",
+    ],
+)
+async def test_auth_command_prefix_is_never_discoverable(command: str) -> None:
+    """System access cannot expose current or future authentication commands."""
+
+    async def operation() -> None:
+        return None
+
+    handler = _handler(command, operation, scope="admin")
+    adapter = _real_adapter(handler, policy=DynamicPolicy(system=True))
+
+    assert await adapter.visible_entries() == []
+    assert await adapter.get_visible_entry(f"ma_api:{command}") is None
+
+
+async def test_denied_auth_command_cannot_be_called_directly() -> None:
+    """A cached auth command name cannot bypass catalog compilation."""
+    called = False
+
+    async def mint_token() -> str:
+        nonlocal called
+        called = True
+        return "full-scope-token"
+
+    adapter = _real_adapter(
+        _handler("auth/token/create", mint_token, scope="admin"),
+        policy=DynamicPolicy(system=True),
+    )
+    ctx = SimpleNamespace(
+        elicit=AsyncMock(return_value=SimpleNamespace(action="accept", data=True))
+    )
+
+    with pytest.raises(ToolError, match="not found or not permitted"):
+        await adapter.call(
+            "ma_api:auth/token/create",
+            {},
+            response_mode="compact",
+            fields=None,
+            max_items=None,
+            ctx=cast("Context", ctx),
+        )
+    assert called is False
 
 
 async def test_native_command_requires_its_live_permission_tag() -> None:
@@ -1828,6 +1931,91 @@ async def test_secret_tag_revoked_during_confirmation_prevents_config_execution(
             ctx=MagicMock(),
         )
     assert called is False
+
+
+@pytest.mark.parametrize(
+    ("command", "arguments", "getter_name", "getter_arguments"),
+    [
+        (
+            "config/providers/get_value",
+            {"instance_id": "demo--1", "key": "token"},
+            "get_provider_config_entries",
+            ("demo--1",),
+        ),
+        (
+            "config/core/get_value",
+            {"domain": "webserver", "key": "token"},
+            "get_core_config_entries",
+            ("webserver",),
+        ),
+        (
+            "config/players/get_value",
+            {"player_id": "kitchen", "key": "token"},
+            "get_player_config_entries",
+            ("kitchen",),
+        ),
+    ],
+)
+async def test_secure_config_value_is_reclassified_after_confirmation_before_serialization(
+    command: str,
+    arguments: dict[str, str],
+    getter_name: str,
+    getter_arguments: tuple[str, ...],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The refreshed config schema controls whether a native result is serialized masked."""
+    _bypass_ma_argument_parser(monkeypatch)
+    raw_secret = "super-secret-encrypted-token"
+    confirmed = False
+
+    async def get_value(
+        key: str,
+        instance_id: str | None = None,
+        domain: str | None = None,
+        player_id: str | None = None,
+    ) -> str:
+        assert {"instance_id": instance_id, "domain": domain, "player_id": player_id} == {
+            "instance_id": arguments.get("instance_id"),
+            "domain": arguments.get("domain"),
+            "player_id": arguments.get("player_id"),
+        }
+        assert key == "token"
+        return raw_secret
+
+    adapter = _real_adapter(
+        _handler(command, get_value, "config.read"),
+        allowed_tags={str(Tag.CONFIG_READ)},
+    )
+    schema_getter = AsyncMock(
+        side_effect=lambda *_args: [
+            ConfigEntry(
+                key="token",
+                type=(ConfigEntryType.SECURE_STRING if confirmed else ConfigEntryType.STRING),
+                label="Token",
+            )
+        ]
+    )
+    setattr(adapter.mass.config, getter_name, schema_getter)
+
+    async def confirm(*_args: Any, **_kwargs: Any) -> None:
+        nonlocal confirmed
+        confirmed = True
+
+    monkeypatch.setattr(adapter, "_confirm", AsyncMock(side_effect=confirm))
+
+    result = await adapter.call(
+        f"ma_api:{command}",
+        arguments,
+        response_mode="full",
+        fields=None,
+        max_items=None,
+        ctx=MagicMock(),
+    )
+
+    assert result["data"] == "this_value_is_encrypted"
+    assert raw_secret not in json.dumps(result)
+    assert schema_getter.await_count == 2
+    schema_getter.assert_has_awaits([call(*getter_arguments), call(*getter_arguments)])
 
 
 async def test_flow_category_revoked_during_confirmation_prevents_execution(
