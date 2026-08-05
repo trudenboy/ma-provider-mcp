@@ -19,6 +19,7 @@ from fastmcp.exceptions import ToolError
 from fastmcp.server.auth import AccessToken
 from mcp.shared.exceptions import McpError
 from mcp.types import INVALID_REQUEST, METHOD_NOT_FOUND, ErrorData
+from music_assistant_models.auth import Scope
 from music_assistant_models.config_entries import ConfigEntry
 from music_assistant_models.enums import ConfigEntryType
 
@@ -948,12 +949,12 @@ async def test_cancelled_snapshot_builder_and_waiter_leave_later_reads_usable(
     compile_snapshot = adapter._compile_snapshot
     attempts = 0
 
-    def cancel_once(fingerprint: Any) -> Any:
+    def cancel_once(capture: Any) -> Any:
         nonlocal attempts
         attempts += 1
         if attempts == 1:
             raise asyncio.CancelledError
-        return compile_snapshot(fingerprint)
+        return compile_snapshot(capture)
 
     monkeypatch.setattr(adapter, "_compile_snapshot", cancel_once)
     with pytest.raises(asyncio.CancelledError):
@@ -1353,6 +1354,93 @@ async def test_denied_handlers_are_omitted_from_dynamic_health_diagnostics(comma
     assert await adapter.visible_entries() == []
     assert adapter.diagnostics()["incompatible_handlers"] == ("broken",)
     assert adapter.diagnostics()["last_error"] == "1 incompatible handler(s) skipped"
+
+
+async def test_hidden_auth_registry_churn_keeps_catalog_state_stable() -> None:
+    """Hidden-only registry changes cannot affect diagnostics, revisions, or cursors."""
+
+    async def first() -> None:
+        return None
+
+    async def second() -> None:
+        return None
+
+    async def hidden() -> None:
+        return None
+
+    adapter = _real_adapter(_handler("music/first", first))
+    adapter.mass.command_handlers["music/second"] = _handler("music/second", second)
+    service = meta_discovery.MetaDiscoveryService(adapter)
+    initial_view = await adapter.visible_catalog()
+    initial_page = await service.discover("", limit=1)
+    initial_diagnostics = adapter.diagnostics()
+    assert initial_page["next_cursor"] is not None
+
+    for hidden_handler in (
+        _handler("auth/token/create", hidden, scope="admin"),
+        _handler("auth/token/create", lambda: None, scope="admin"),
+        None,
+    ):
+        if hidden_handler is None:
+            adapter.mass.command_handlers.pop("auth/token/create")
+        else:
+            adapter.mass.command_handlers["auth/token/create"] = hidden_handler
+        current_view = await adapter.visible_catalog()
+        continued = await service.discover(cursor=initial_page["next_cursor"], limit=1)
+        assert current_view.fingerprint == initial_view.fingerprint
+        assert continued["catalog_revision"] == initial_page["catalog_revision"]
+        assert adapter.diagnostics() == initial_diagnostics
+
+
+@pytest.mark.parametrize("scope", [Scope.UNKNOWN, "future.scope", object()])
+async def test_dynamic_catalog_rejects_unknown_scopes_before_ma_checker(scope: object) -> None:
+    """Unknown scopes are neither visible nor executable, even for a permissive checker."""
+    checked: list[object] = []
+    called = False
+
+    async def search() -> None:
+        nonlocal called
+        called = True
+
+    def scope_checker(_user: Any, required_scope: object) -> bool:
+        checked.append(required_scope)
+        return True
+
+    handler = _handler("music/search", search, cast("Any", scope))
+    adapter = _real_adapter(handler, scope_checker=scope_checker)
+
+    assert await adapter.visible_entries() == []
+    with pytest.raises(ToolError, match="not found or not permitted"):
+        await adapter.call(
+            "ma_api:music/search",
+            {},
+            response_mode="compact",
+            fields=None,
+            max_items=None,
+            ctx=MagicMock(),
+        )
+    assert checked == []
+    assert called is False
+
+
+async def test_dynamic_catalog_passes_normalized_scope_to_ma_checker() -> None:
+    """Known string scopes are normalized before MA authorization is delegated."""
+    checked: list[Scope] = []
+
+    async def search() -> None:
+        return None
+
+    def scope_checker(_user: Any, required_scope: Scope) -> bool:
+        checked.append(required_scope)
+        return True
+
+    adapter = _real_adapter(
+        _handler("music/search", search, "library.read"),
+        scope_checker=scope_checker,
+    )
+
+    assert [entry.name for entry in await adapter.visible_entries()] == ["ma_api:music/search"]
+    assert checked == [Scope.LIBRARY_READ]
 
 
 @pytest.mark.parametrize(
@@ -2195,7 +2283,15 @@ async def test_secure_config_value_is_reclassified_after_confirmation_before_ser
         return raw_secret
 
     adapter = _real_adapter(
-        _handler(command, get_value, "config.read"),
+        _handler(
+            command,
+            get_value,
+            {
+                "providers": "config.providers.read",
+                "core": "config.core.read",
+                "players": "config.players.read",
+            }[command.split("/")[1]],
+        ),
         allowed_tags={str(Tag.CONFIG_READ)},
     )
     schema_getter = AsyncMock(
@@ -2249,7 +2345,7 @@ async def test_secure_config_value_is_reclassified_after_execution_before_serial
         return raw_secret
 
     adapter = _real_adapter(
-        _handler("config/providers/get_value", get_value, "config.read"),
+        _handler("config/providers/get_value", get_value, "config.providers.read"),
         allowed_tags={str(Tag.CONFIG_READ)},
     )
     schema_getter = AsyncMock(
@@ -2293,7 +2389,7 @@ async def test_config_value_that_stops_being_secure_during_execution_stays_maske
         return raw_secret
 
     adapter = _real_adapter(
-        _handler("config/core/get_value", get_value, "config.read"),
+        _handler("config/core/get_value", get_value, "config.core.read"),
         allowed_tags={str(Tag.CONFIG_READ)},
     )
     adapter.mass.config.get_core_config_entries = AsyncMock(
@@ -2332,7 +2428,7 @@ async def test_config_value_postflight_schema_failure_never_serializes_result(
         return raw_secret
 
     adapter = _real_adapter(
-        _handler("config/players/get_value", get_value, "config.read"),
+        _handler("config/players/get_value", get_value, "config.players.read"),
         allowed_tags={str(Tag.CONFIG_READ)},
     )
     visible_entry = ConfigEntry(key="token", type=ConfigEntryType.STRING, label="Token")
