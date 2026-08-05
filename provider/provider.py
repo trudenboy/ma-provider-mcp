@@ -150,6 +150,8 @@ class MCPServerProvider(PluginProvider):  # type: ignore[misc, unused-ignore]
         """Create and start a runtime, leaving no failed instance attached."""
         from .server import MCPServerRuntime  # noqa: PLC0415
 
+        if self._commands is not None:
+            self._commands.update_config(config, active_token_ids=frozenset())
         runtime = MCPServerRuntime(
             self.mass,
             config,

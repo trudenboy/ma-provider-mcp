@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from provider.auth import MASTokenVerifier
+from provider.auth import LOOKUP_FAILURE_CLIENT_ID, MASTokenVerifier
 from provider.policy import PolicyMode, PolicyProfile, PolicyResolver, PolicySelection
 from provider.tags import Tag
 from provider.token_identity import AuthenticatedPolicyResolver, TokenIdentityRegistry
@@ -101,6 +101,30 @@ async def test_token_id_lookup_failure_fails_closed_without_leaking_bearer(
 
     assert registry.lookup("do-not-log-this") is None
     assert "do-not-log-this" not in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("malformed", ["", "   ", " token-id ", 42, object()])
+async def test_malformed_lookup_result_uses_lookup_failure_policy(
+    malformed: object,
+    mock_mass: MagicMock,
+    mock_user: MagicMock,
+) -> None:
+    """Only exact None is legacy; every malformed token ID remains Read-only."""
+    registry = TokenIdentityRegistry()
+    registry.bind("bearer", user_id="u1", token_id="stale-id")
+    mock_mass.webserver.auth.authenticate_with_token = AsyncMock(return_value=mock_user)
+    mock_mass.webserver.auth.get_token_id_from_token = AsyncMock(return_value=malformed)
+    verifier = MASTokenVerifier(mock_mass, identity_registry=registry)
+    policies = PolicyResolver(default=PolicySelection.profile(PolicyProfile.TRUSTED))
+    resolver = AuthenticatedPolicyResolver(registry, policies)
+
+    access_token = await verifier.verify_token("bearer")
+
+    assert access_token is not None
+    assert access_token.client_id == LOOKUP_FAILURE_CLIENT_ID
+    assert registry.lookup("bearer") is None
+    assert resolver.resolve("bearer").profile is PolicyProfile.READ_ONLY
 
 
 def test_authenticated_policy_resolution_distinguishes_legacy_and_lookup_failure() -> None:

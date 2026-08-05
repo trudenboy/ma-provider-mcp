@@ -230,7 +230,9 @@ async def test_config_reaches_commands_before_runtime_restart(
     provider = _provider(MagicMock(), _config())
     provider._commands = MagicMock(
         spec=ProviderCommandSet,
-        update_config=MagicMock(side_effect=lambda _config: call_order.append("commands.update")),
+        update_config=MagicMock(
+            side_effect=lambda _config, **_kwargs: call_order.append("commands.update")
+        ),
     )
     provider._runtime = MagicMock(
         stop=AsyncMock(side_effect=lambda: call_order.append("runtime.stop")),

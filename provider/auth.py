@@ -31,6 +31,19 @@ if TYPE_CHECKING:
 
 LOGGER = logging.getLogger(__name__)
 
+LEGACY_TOKEN_CLIENT_ID = "ma-token:legacy"
+LOOKUP_FAILURE_CLIENT_ID = "ma-token:lookup-failed"
+
+
+def _is_valid_token_id(value: object) -> bool:
+    """Return whether a lookup result has MA's non-empty URL-safe token-ID shape."""
+    return (
+        isinstance(value, str)
+        and bool(value)
+        and value == value.strip()
+        and all(char.isascii() and (char.isalnum() or char in "_-") for char in value)
+    )
+
 
 def _extract_jwt_audience(token: str) -> str | list[str] | None:
     """
@@ -94,6 +107,8 @@ class MASTokenVerifier(TokenVerifier):
             ``aud`` claim is missing or does not contain ``public_resource_uri``.
             When ``False`` (default), only logs a warning so operators can
             migrate gracefully once MA-side issues audience-bound tokens.
+        :param identity_registry: Shared bounded token-identity registry. A
+            private registry is created when omitted.
         """
         # ``base_url`` is optional on TokenVerifier — passing ``None`` is
         # equivalent to not setting it. Forward verbatim so FastMCP can later
@@ -136,23 +151,38 @@ class MASTokenVerifier(TokenVerifier):
             self._identity_registry.discard(token)
             return None
 
+        client_id = LOOKUP_FAILURE_CLIENT_ID
         try:
             token_id = await self._mass.webserver.auth.get_token_id_from_token(token)
         except Exception:
             self._identity_registry.discard(token)
             LOGGER.error("MA token identity lookup raised; using Read-only policy")
         else:
-            self._identity_registry.bind(
-                token,
-                user_id=str(getattr(user, "user_id", "")),
-                token_id=str(token_id) if token_id is not None else None,
-            )
+            if token_id is None:
+                self._identity_registry.bind(
+                    token,
+                    user_id=str(getattr(user, "user_id", "")),
+                    token_id=None,
+                )
+                client_id = LEGACY_TOKEN_CLIENT_ID
+            elif _is_valid_token_id(token_id):
+                self._identity_registry.bind(
+                    token,
+                    user_id=str(getattr(user, "user_id", "")),
+                    token_id=token_id,
+                )
+                client_id = token_id
+            else:
+                self._identity_registry.discard(token)
+                LOGGER.error(
+                    "MA token identity lookup returned invalid data; using Read-only policy"
+                )
 
         # MCP SDK's AccessToken pydantic model has no `claims` field — extras
         # are silently dropped — so we don't try to forward username/role here.
         return AccessToken(
             token=token,
-            client_id=str(getattr(user, "user_id", "")) or "music-assistant",
+            client_id=client_id,
             scopes=[],
             expires_at=None,
             resource=self._public_resource_uri,

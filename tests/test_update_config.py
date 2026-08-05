@@ -25,7 +25,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from provider.config import token_policy_key
+from provider.commands import ProviderCommandSet
+from provider.config import policy_mode_key, token_policy_key
+from provider.constants import CONF_DEFAULT_POLICY
+from provider.tags import Tag
 
 
 # Install the stub BEFORE the ``provider.provider`` import below. ``setdefault``
@@ -163,6 +166,46 @@ async def test_non_hot_swappable_change_triggers_full_restart(
     rebuilt.start.assert_awaited_once()
     assert provider._runtime is rebuilt
     assert provider.config is new_config
+
+
+@pytest.mark.asyncio
+async def test_runtime_replacement_clears_stale_event_buffer_token_ids(
+    mock_mass: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A new empty registry deactivates retention enabled by the old runtime's token IDs."""
+    token_id = "discovered-token-id"
+    values = {
+        CONF_DEFAULT_POLICY: "Read-only",
+        token_policy_key(token_id): "Custom",
+        policy_mode_key(Tag.DEBUG_EVENTS, token_id): "allow",
+        "debug_event_buffer_capacity": 100,
+    }
+
+    def config() -> MagicMock:
+        result = MagicMock()
+        result.get_value.side_effect = lambda key, default=None: values.get(key, default)
+        return result
+
+    old_config = config()
+    new_config = config()
+    unsubscribe = MagicMock()
+    mock_mass.subscribe = MagicMock(return_value=unsubscribe)
+    mock_mass.register_api_command = MagicMock(return_value=MagicMock())
+    commands = ProviderCommandSet(mock_mass, old_config)
+    commands.start()
+    commands.update_config(old_config, active_token_ids={token_id})
+    assert mock_mass.subscribe.call_count == 1
+
+    provider = _provider_with_mock_runtime(mock_mass, old_config)
+    provider._commands = commands
+    rebuilt = MagicMock()
+    rebuilt.start = AsyncMock()
+    monkeypatch.setattr("provider.server.MCPServerRuntime", MagicMock(return_value=rebuilt))
+
+    await provider.update_config(new_config, changed_keys={"values/mount_path"})
+
+    unsubscribe.assert_called_once_with()
 
 
 @pytest.mark.asyncio
