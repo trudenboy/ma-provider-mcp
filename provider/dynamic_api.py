@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import dataclasses
+import heapq
 import inspect
 import json
 from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
@@ -145,6 +147,17 @@ class _SnapshotDiagnostics:
     handlers_visible: int
     incompatible_handlers: tuple[str, ...]
     last_error: str | None
+
+
+@dataclass(slots=True)
+class _ListReductionCandidate:
+    """Mutable heap state for one list in a response-reduction trial."""
+
+    items: list[Any]
+    depth: int
+    order: int
+    active: bool = True
+    revision: int = 0
 
 
 class DynamicAPIAdapter:
@@ -759,8 +772,8 @@ class DynamicAPIAdapter:
         cls._fit_bytes(envelope, byte_cap)
         cls._set_measured_bytes(envelope)
         if envelope["bytes"] > byte_cap:
-            cls._fit_bytes(envelope, byte_cap)
-            cls._set_measured_bytes(envelope)
+            mode = str(envelope["applied"]["mode"])
+            raise ToolError(f"Response exceeds the {mode} byte budget")
         return envelope
 
     @classmethod
@@ -824,36 +837,144 @@ class DynamicAPIAdapter:
 
     @classmethod
     def _fit_bytes(cls, envelope: dict[str, Any], byte_cap: int) -> None:
-        """Shrink nested result lists until the complete envelope fits the byte cap."""
-        while cls._encoded_size(envelope) > byte_cap and cls._pop_largest_list(envelope["data"]):
-            envelope["truncated"] = True
-        if isinstance(envelope["data"], list):
-            envelope["returned_count"] = len(envelope["data"])
-        if cls._encoded_size(envelope) > byte_cap:
-            envelope["data"] = "[response exceeded byte budget]"
-            envelope["returned_count"] = 1
-            envelope["truncated"] = True
+        """Apply the original global list-reduction policy within the byte cap."""
+        envelope["bytes"] = byte_cap
+        if cls._encoded_size(envelope) <= byte_cap:
+            return
 
-    @staticmethod
-    def _pop_largest_list(value: Any) -> bool:
-        """Remove one row from the largest, shallowest nested list deterministically."""
-        candidates: list[tuple[int, int, int, list[Any]]] = []
+        original_data = envelope["data"]
+        max_removals = cls._count_list_items(original_data)
+        if max_removals:
+            envelope["truncated"] = True
+            smallest_data = cls._simulate_list_removals(original_data, max_removals)
+            envelope["data"] = smallest_data
+            cls._set_returned_count(envelope)
+            if cls._encoded_size(envelope) <= byte_cap:
+                low = 1
+                high = max_removals
+                best_data = smallest_data
+                while low < high:
+                    midpoint = (low + high) // 2
+                    candidate_data = cls._simulate_list_removals(original_data, midpoint)
+                    envelope["data"] = candidate_data
+                    cls._set_returned_count(envelope)
+                    if cls._encoded_size(envelope) <= byte_cap:
+                        high = midpoint
+                        best_data = candidate_data
+                    else:
+                        low = midpoint + 1
+                envelope["data"] = best_data
+                cls._set_returned_count(envelope)
+                return
+
+        envelope["data"] = cls._minimal_json_shape(original_data)
+        envelope["truncated"] = True
+        cls._set_returned_count(envelope)
+        envelope.pop("total_count", None)
+        if cls._encoded_size(envelope) <= byte_cap:
+            return
+        envelope["applied"]["fields"] = []
+        if cls._encoded_size(envelope) <= byte_cap:
+            return
+        mode = str(envelope["applied"]["mode"])
+        raise ToolError(f"Response exceeds the {mode} byte budget")
+
+    @classmethod
+    def _simulate_list_removals(cls, value: Any, removals: int) -> Any:
+        """Return a copy after a bounded number of original-policy list removals."""
+        reduced = copy.deepcopy(value)
+        candidates: list[_ListReductionCandidate] = []
+        candidates_by_id: dict[int, _ListReductionCandidate] = {}
+        heap: list[tuple[int, int, int, int, int]] = []
 
         def collect(item: Any, depth: int) -> None:
             if isinstance(item, list):
+                candidate_index = len(candidates)
+                candidate = _ListReductionCandidate(item, depth, candidate_index)
+                candidates.append(candidate)
+                candidates_by_id[id(item)] = candidate
                 if item:
-                    candidates.append((len(item), -depth, -len(candidates), item))
+                    heap.append(
+                        (-len(item), depth, candidate.order, candidate.revision, candidate_index)
+                    )
                 for child in item:
                     collect(child, depth + 1)
             elif isinstance(item, dict):
                 for child in item.values():
                     collect(child, depth + 1)
 
-        collect(value, 0)
-        if not candidates:
+        def invalidate(item: Any) -> None:
+            if isinstance(item, list):
+                candidate = candidates_by_id.get(id(item))
+                if candidate is not None:
+                    candidate.active = False
+                    candidate.revision += 1
+                for child in item:
+                    invalidate(child)
+            elif isinstance(item, dict):
+                for child in item.values():
+                    invalidate(child)
+
+        collect(reduced, 0)
+        heapq.heapify(heap)
+        removed = 0
+        while removed < removals and heap:
+            negative_length, _depth, _order, revision, candidate_index = heapq.heappop(heap)
+            candidate = candidates[candidate_index]
+            if (
+                not candidate.active
+                or candidate.revision != revision
+                or len(candidate.items) != -negative_length
+            ):
+                continue
+            removed_item = candidate.items.pop()
+            removed += 1
+            invalidate(removed_item)
+            candidate.revision += 1
+            if candidate.items:
+                heapq.heappush(
+                    heap,
+                    (
+                        -len(candidate.items),
+                        candidate.depth,
+                        candidate.order,
+                        candidate.revision,
+                        candidate_index,
+                    ),
+                )
+        return reduced
+
+    @classmethod
+    def _count_list_items(cls, value: Any) -> int:
+        """Return a safe upper bound on logical removals for a JSON tree."""
+        if isinstance(value, list):
+            return len(value) + sum(cls._count_list_items(item) for item in value)
+        if isinstance(value, dict):
+            return sum(cls._count_list_items(item) for item in value.values())
+        return 0
+
+    @staticmethod
+    def _minimal_json_shape(value: Any) -> Any:
+        """Return the smallest JSON value retaining the result's top-level type."""
+        if isinstance(value, dict):
+            return {}
+        if isinstance(value, list):
+            return []
+        if isinstance(value, str):
+            return ""
+        if isinstance(value, bool):
             return False
-        max(candidates, key=lambda candidate: candidate[:3])[3].pop()
-        return True
+        if isinstance(value, int | float):
+            return 0
+        return None
+
+    @staticmethod
+    def _set_returned_count(envelope: dict[str, Any]) -> None:
+        """Refresh the envelope's top-level returned item count."""
+        data = envelope["data"]
+        envelope["returned_count"] = (
+            len(data) if isinstance(data, list) else (0 if data is None else 1)
+        )
 
     @staticmethod
     def _encoded_size(value: Any) -> int:

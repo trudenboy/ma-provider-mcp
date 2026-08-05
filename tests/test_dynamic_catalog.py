@@ -1073,6 +1073,176 @@ def test_large_search_envelope_keeps_mapping_shape_within_byte_budget() -> None:
     assert result["bytes"] <= 12_288
 
 
+def test_byte_fitting_balances_equal_sibling_lists_by_original_policy() -> None:
+    """Equal sibling lists lose suffix rows in traversal order, one row at a time."""
+    payload = {
+        "first": [f"a{index}:" + ("x" * 930) for index in range(10)],
+        "second": [f"b{index}:" + ("y" * 930) for index in range(10)],
+    }
+
+    result = DynamicAPIAdapter._bounded_envelope(
+        "ma_api:test",
+        payload,
+        response_mode="compact",
+        fields=None,
+        max_items=None,
+    )
+
+    assert result["data"] == {
+        "first": payload["first"][:6],
+        "second": payload["second"][:6],
+    }
+    assert result["truncated"] is True
+    assert result["returned_count"] == 1
+    assert result["bytes"] == DynamicAPIAdapter._encoded_size(result)
+    assert result["bytes"] <= 12_288
+
+
+def test_byte_fitting_measures_trials_with_truncation_metadata() -> None:
+    """The first fitting logical removal is retained at a one-byte boundary."""
+    envelope = {
+        "command": "ma_api:test",
+        "data": ["x", "x"],
+        "truncated": False,
+        "returned_count": 2,
+        "bytes": 0,
+        "applied": {"mode": "compact", "fields": [], "max_items": 25},
+    }
+
+    DynamicAPIAdapter._fit_bytes(envelope, 142)
+
+    assert envelope["data"] == ["x"]
+    assert envelope["returned_count"] == 1
+    assert envelope["truncated"] is True
+
+
+def test_nested_sibling_response_uses_logarithmic_byte_fitting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Many one-row nested siblings do not trigger a full encoding per removal."""
+    payload = {
+        f"group-{index:03}": [{"items": [f"row-{index}:" + ("x" * 500)]}] for index in range(200)
+    }
+    encoded_size = DynamicAPIAdapter._encoded_size
+    measurements = 0
+
+    def counted_size(value: Any) -> int:
+        nonlocal measurements
+        measurements += 1
+        return int(encoded_size(value))
+
+    monkeypatch.setattr(DynamicAPIAdapter, "_encoded_size", staticmethod(counted_size))
+
+    result = DynamicAPIAdapter._bounded_envelope(
+        "ma_api:test",
+        payload,
+        response_mode="full",
+        fields=None,
+        max_items=None,
+    )
+
+    remaining = [index for index, group in enumerate(result["data"].values()) if group]
+    assert remaining == list(range(81, 200))
+    assert list(result["data"]) == list(payload)
+    assert result["truncated"] is True
+    assert result["returned_count"] == 1
+    assert result["bytes"] == encoded_size(result)
+    assert result["bytes"] <= 65_536
+    assert measurements <= 16
+
+
+def test_large_top_level_response_uses_logarithmic_byte_fitting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A large bounded response does not serialize once per removed row."""
+    payload = [f"row-{index}:" + ("x" * 3000) for index in range(200)]
+    encoded_size = DynamicAPIAdapter._encoded_size
+    measurements = 0
+
+    def counted_size(value: Any) -> int:
+        nonlocal measurements
+        measurements += 1
+        return int(encoded_size(value))
+
+    monkeypatch.setattr(DynamicAPIAdapter, "_encoded_size", staticmethod(counted_size))
+
+    result = DynamicAPIAdapter._bounded_envelope(
+        "ma_api:test",
+        payload,
+        response_mode="full",
+        fields=None,
+        max_items=None,
+    )
+
+    assert result["bytes"] <= 65_536
+    assert result["data"]
+    assert result["data"] == payload[: len(result["data"])]
+    assert result["returned_count"] == len(result["data"])
+    assert result["truncated"] is True
+    assert result["bytes"] == encoded_size(result)
+    assert measurements <= 16
+
+
+@pytest.mark.parametrize(
+    ("response_mode", "field_width", "byte_cap"),
+    [("compact", 20_000, 12_288), ("full", 100_000, 65_536)],
+)
+def test_oversized_echoed_fields_use_a_bounded_shape_preserving_fallback(
+    response_mode: str,
+    field_width: int,
+    byte_cap: int,
+) -> None:
+    """Oversized optional metadata cannot make a success envelope exceed its cap."""
+    result = DynamicAPIAdapter._bounded_envelope(
+        "ma_api:test",
+        ["kept"],
+        response_mode=response_mode,
+        fields=["f" * field_width],
+        max_items=None,
+    )
+
+    assert result["data"] == []
+    assert result["applied"]["fields"] == []
+    assert "total_count" not in result
+    assert result["returned_count"] == 0
+    assert result["truncated"] is True
+    assert result["bytes"] == DynamicAPIAdapter._encoded_size(result)
+    assert result["bytes"] <= byte_cap
+
+
+def test_oversized_mapping_without_lists_uses_empty_mapping_fallback() -> None:
+    """A response with no reducible list retains its top-level JSON container type."""
+    payload = {f"key-{index}": "x" * 3_000 for index in range(10)}
+
+    result = DynamicAPIAdapter._bounded_envelope(
+        "ma_api:test",
+        payload,
+        response_mode="compact",
+        fields=None,
+        max_items=None,
+    )
+
+    assert result["data"] == {}
+    assert result["returned_count"] == 1
+    assert result["truncated"] is True
+    assert result["bytes"] == DynamicAPIAdapter._encoded_size(result)
+    assert result["bytes"] <= 12_288
+
+
+def test_unshrinkable_envelope_metadata_raises_short_tool_error() -> None:
+    """Required metadata that cannot fit is reported as an error, never as success."""
+    with pytest.raises(ToolError, match="Response exceeds the compact byte budget") as error:
+        DynamicAPIAdapter._bounded_envelope(
+            "x" * 20_000,
+            None,
+            response_mode="compact",
+            fields=None,
+            max_items=None,
+        )
+
+    assert len(str(error.value).encode()) < 200
+
+
 async def test_registry_incompatibility_is_reported_without_breaking_catalog() -> None:
     """Structural MA drift is isolated and leaves actionable diagnostics."""
 
