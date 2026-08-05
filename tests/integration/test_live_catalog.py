@@ -11,7 +11,6 @@ from typing import Any, cast
 
 import pytest
 from fastmcp import Client
-from fastmcp.client.elicitation import ElicitResult
 from fastmcp.client.transports import StreamableHttpTransport
 from fastmcp.exceptions import ToolError
 
@@ -51,6 +50,15 @@ def _restricted_live_settings() -> tuple[str, str]:
     return url, token
 
 
+def _confirm_live_settings() -> tuple[str, str]:
+    """Require the token assigned a Confirm debug-provider policy."""
+    url = os.getenv("MA_MCP_URL")
+    token = os.getenv("MA_MCP_CONFIRM_TOKEN")
+    if not url or not token:
+        pytest.skip("set MA_MCP_URL and MA_MCP_CONFIRM_TOKEN for Confirm acceptance")
+    return url, token
+
+
 @pytest.fixture
 async def live_client() -> AsyncIterator[LiveClient]:
     """Yield a live authenticated client only when credentials were supplied."""
@@ -66,6 +74,15 @@ async def restricted_live_client() -> AsyncIterator[LiveClient]:
     url, token = _restricted_live_settings()
     transport = StreamableHttpTransport(url, auth=token)
     async with Client(transport, elicitation_handler=_accept_elicitation) as client:
+        yield client
+
+
+@pytest.fixture
+async def confirm_live_client() -> AsyncIterator[LiveClient]:
+    """Yield a Confirm-policy client without an elicitation implementation."""
+    url, token = _confirm_live_settings()
+    transport = StreamableHttpTransport(url, auth=token)
+    async with Client(transport) as client:
         yield client
 
 
@@ -91,6 +108,8 @@ async def collect_tool_catalog(client: LiveClient) -> tuple[list[str], str]:
         result = await client.call_tool("search_tools", arguments)
         page = structured_content(result)
         assert page["mode"] == "catalog"
+        assert all(set(item) == {"name", "policy_mode"} for item in page["items"])
+        assert all(item["policy_mode"] in {"allow", "confirm"} for item in page["items"])
         revision = revision or str(page["catalog_revision"])
         total = int(page["total"]) if total is None else total
         assert page["catalog_revision"] == revision
@@ -113,7 +132,8 @@ async def collect_resource_catalog(client: LiveClient) -> tuple[list[str], str]:
         contents = await client.read_resource(uri)
         page = json.loads(next(item.text for item in contents if hasattr(item, "text")))
         assert set(page) == {"items", "total", "next_cursor", "next_uri", "catalog_revision"}
-        assert all(set(item) == {"name"} for item in page["items"])
+        assert all(set(item) == {"name", "policy_mode"} for item in page["items"])
+        assert all(item["policy_mode"] in {"allow", "confirm"} for item in page["items"])
         revision = revision or str(page["catalog_revision"])
         total = int(page["total"]) if total is None else total
         assert page["catalog_revision"] == revision
@@ -249,7 +269,9 @@ async def test_live_paginated_catalog_tool_resource_parity(live_client: LiveClie
     ):
         assert name in tool_names
         schema = await live_client.call_tool("get_tool_schema", {"tool_name": name})
-        assert structured_content(schema)["name"] == name
+        structured_schema = structured_content(schema)
+        assert structured_schema["name"] == name
+        assert structured_schema["policy_mode"] in {"allow", "confirm"}
 
 
 @pytest.mark.integration
@@ -387,7 +409,7 @@ async def test_live_reversible_queue_cycle(live_client: LiveClient) -> None:
 
 
 @pytest.mark.integration
-async def test_live_annotations_and_declined_queue_confirmation(
+async def test_live_annotations_remain_truthful(
     live_client: LiveClient,
 ) -> None:
     """Destructive queue schemas and read-only health annotations remain truthful."""
@@ -399,32 +421,51 @@ async def test_live_annotations_and_declined_queue_confirmation(
         result = await live_client.call_tool("get_tool_schema", {"tool_name": f"ma_api:{command}"})
         schema = structured_content(result)
         assert schema["annotations"]["destructiveHint"] is True
-        assert schema["risk"] == "write"
     health = await live_client.call_tool(
         "get_tool_schema", {"tool_name": "ma_api:fastmcp/debug/health"}
     )
     health_schema = structured_content(health)
     assert health_schema["annotations"]["readOnlyHint"] is True
-    assert health_schema["risk"] == "system"
-    declines = 0
 
-    async def decline_elicitation(
-        message: str, response_type: Any, params: Any, context: Any
-    ) -> ElicitResult[Any]:
-        nonlocal declines
-        del message, response_type, params, context
-        declines += 1
-        return ElicitResult(action="decline")
 
-    url, token = _live_settings()
-    transport = StreamableHttpTransport(url, auth=token)
-    async with Client(transport, elicitation_handler=decline_elicitation) as client:
-        with pytest.raises(ToolError, match="Operation cancelled by user"):
-            await client.call_tool(
-                "call_tool",
-                {
-                    "name": "ma_api:fastmcp/queue/remove_items_safe",
-                    "arguments": {"queue_id": "stale", "item_ids": ["stale"]},
-                },
-            )
-    assert declines == 1
+@pytest.mark.integration
+async def test_v2_acceptance_allow_debug_health_executes(live_client: LiveClient) -> None:
+    """The primary Docker token is assigned debug:providers=Allow."""
+    schema = structured_content(
+        await live_client.call_tool(
+            "get_tool_schema",
+            {"tool_name": "ma_api:fastmcp/debug/health"},
+        )
+    )
+    assert schema["policy_mode"] == "allow"
+    health = await call_ma(live_client, "fastmcp/debug/health", {})
+    assert isinstance(health, Mapping)
+
+
+@pytest.mark.integration
+async def test_v2_acceptance_confirm_without_elicitation_does_not_execute(
+    confirm_live_client: LiveClient,
+) -> None:
+    """The Confirm token cannot execute debug health without elicitation support."""
+    schema = structured_content(
+        await confirm_live_client.call_tool(
+            "get_tool_schema",
+            {"tool_name": "ma_api:fastmcp/debug/health"},
+        )
+    )
+    assert schema["policy_mode"] == "confirm"
+    with pytest.raises(ToolError, match="requires confirmation"):
+        await call_ma(confirm_live_client, "fastmcp/debug/health", {})
+
+
+@pytest.mark.integration
+async def test_v2_acceptance_two_tokens_observe_assigned_profiles(
+    live_client: LiveClient,
+    restricted_live_client: LiveClient,
+) -> None:
+    """Broad and restricted Docker tokens retain distinct catalog profiles."""
+    broad_names, _revision = await collect_tool_catalog(live_client)
+    restricted_names, _revision = await collect_tool_catalog(restricted_live_client)
+    command = "ma_api:fastmcp/debug/health"
+    assert command in broad_names
+    assert command not in restricted_names

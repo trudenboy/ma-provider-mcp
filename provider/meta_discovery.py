@@ -10,7 +10,7 @@ from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Annotated, Any, Protocol
+from typing import TYPE_CHECKING, Annotated, Any, Literal, Protocol, cast
 
 from fastmcp import Context  # noqa: TC002  -- FastMCP resolves injected annotations at runtime.
 from fastmcp.exceptions import NotFoundError, ToolError
@@ -52,6 +52,11 @@ SEARCH_TOOL_NAME = "search_tools"
 _META_NAMES = {CALL_TOOL_NAME, SEARCH_TOOL_NAME, GET_TOOL_SCHEMA_NAME}
 _TOKEN_RE = re.compile(r"[^\W_]+", re.UNICODE)
 _CATALOG_STABILIZATION_ATTEMPTS = 3
+
+
+def _discovery_policy_mode(entry: DynamicEntry) -> Literal["allow", "confirm"]:
+    """Return the public mode after request visibility has excluded deny."""
+    return cast("Literal['allow', 'confirm']", entry.policy_mode.value)
 
 
 class DynamicAdapter(Protocol):
@@ -208,20 +213,38 @@ class MetaDiscoveryService:
         if legacy is not None:
             canonical = f"ma_api:{legacy.command}" if legacy.command is not None else None
             if canonical is not None and canonical in visible:
-                ordered_items = [{"name": canonical, "description": visible[canonical].description}]
+                ordered_items = [
+                    {
+                        "name": canonical,
+                        "description": visible[canonical].description,
+                        "policy_mode": _discovery_policy_mode(visible[canonical]),
+                    }
+                ]
             else:
                 hint = canonical or legacy.message
                 ordered_items = [
-                    {"name": normalized_query, "description": f"Retired tool; use {hint}."}
+                    {
+                        "name": normalized_query,
+                        "description": f"Retired tool; use {hint}.",
+                        "policy_mode": "confirm",
+                    }
                 ]
         elif mode == "search":
             assert index is not None
             names = _rank(index, _tokens(normalized_query), allowed_names=set(visible))
             ordered_items = [
-                {"name": name, "description": visible[name].description} for name in names
+                {
+                    "name": name,
+                    "description": visible[name].description,
+                    "policy_mode": _discovery_policy_mode(visible[name]),
+                }
+                for name in names
             ]
         else:
-            ordered_items = [{"name": name} for name in sorted(visible)]
+            ordered_items = [
+                {"name": name, "policy_mode": _discovery_policy_mode(visible[name])}
+                for name in sorted(visible)
+            ]
 
         total = len(ordered_items)
         if state is not None and offset >= total:
@@ -286,10 +309,10 @@ def _schema_result(entry: DynamicEntry) -> dict[str, Any]:
         "command": entry.command,
         "description": entry.description,
         "inputSchema": entry.input_schema,
-        "risk": entry.risk.value,
         "requiredScope": entry.required_scope,
         "allowImpersonation": entry.allow_impersonation,
         "annotations": entry.annotations,
+        "policy_mode": entry.policy_mode.value,
     }
     if entry.output_schema is not None:
         result["outputSchema"] = entry.output_schema

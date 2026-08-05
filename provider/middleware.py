@@ -32,6 +32,9 @@ from fastmcp.server.middleware import Middleware
 if TYPE_CHECKING:
     from fastmcp.server.middleware.middleware import CallNext, MiddlewareContext
 
+    from .policy import PolicySnapshot
+    from .resource_authorization import ResourceAuthorizer
+
 
 ComponentKind = Literal["tool", "resource", "prompt"]
 TagsLookup = Callable[[ComponentKind, str], Awaitable[set[str] | None]]
@@ -68,6 +71,8 @@ class TagFilterMiddleware(Middleware):  # type: ignore[misc, unused-ignore]
         self,
         allowed_tags_provider: Callable[[], set[str]],
         lookup_component_tags: TagsLookup,
+        policy_provider: Callable[[], PolicySnapshot] | None = None,
+        resource_authorizer: ResourceAuthorizer | None = None,
     ) -> None:
         """
         Initialise the middleware.
@@ -84,6 +89,8 @@ class TagFilterMiddleware(Middleware):  # type: ignore[misc, unused-ignore]
         super().__init__()
         self._allowed = allowed_tags_provider
         self._lookup = lookup_component_tags
+        self._policy = policy_provider
+        self._resource_authorizer = resource_authorizer
 
     # ── filtered listings ────────────────────────────────────────────────────
 
@@ -94,7 +101,7 @@ class TagFilterMiddleware(Middleware):  # type: ignore[misc, unused-ignore]
     ) -> Sequence[Any]:
         """Drop tools whose tags are all disabled."""
         items = await call_next(context)
-        return [t for t in items if self._is_visible(t)]
+        return [t for t in items if self._is_visible("tool", t)]
 
     async def on_list_resources(
         self,
@@ -103,7 +110,7 @@ class TagFilterMiddleware(Middleware):  # type: ignore[misc, unused-ignore]
     ) -> Sequence[Any]:
         """Drop resources whose tags are all disabled."""
         items = await call_next(context)
-        return [r for r in items if self._is_visible(r)]
+        return [r for r in items if await self._resource_is_visible(r)]
 
     async def on_list_resource_templates(
         self,
@@ -112,7 +119,7 @@ class TagFilterMiddleware(Middleware):  # type: ignore[misc, unused-ignore]
     ) -> Sequence[Any]:
         """Drop resource templates whose tags are all disabled."""
         items = await call_next(context)
-        return [r for r in items if self._is_visible(r)]
+        return [r for r in items if await self._resource_is_visible(r)]
 
     async def on_list_prompts(
         self,
@@ -121,7 +128,7 @@ class TagFilterMiddleware(Middleware):  # type: ignore[misc, unused-ignore]
     ) -> Sequence[Any]:
         """Drop prompts whose tags are all disabled."""
         items = await call_next(context)
-        return [p for p in items if self._is_visible(p)]
+        return [p for p in items if self._is_visible("prompt", p)]
 
     # ── invocation guards ────────────────────────────────────────────────────
 
@@ -142,8 +149,29 @@ class TagFilterMiddleware(Middleware):  # type: ignore[misc, unused-ignore]
     ) -> Any:
         """Block reads of resources whose tag set has been disabled."""
         uri = str(getattr(context.message, "uri", ""))
-        await self._reject_if_hidden("resource", uri)
-        return await call_next(context)
+        if self._resource_authorizer is None:
+            await self._reject_if_hidden("resource", uri)
+            return await call_next(context)
+        tags = await self._lookup("resource", uri)
+        if tags == set():
+            # Untagged catalog infrastructure performs its own request-bound
+            # dynamic authorization and remains permanently addressable.
+            return await call_next(context)
+        # Unknown/cached URIs go through the authorizer with a fixed unknown
+        # capability so their denial is audited without recording the URI.
+        request = await self._resource_authorizer.authorize(uri, tags or set())
+        if request is None:  # pragma: no cover - raising direct authorization is contractual
+            raise ResourceError("Resource is not permitted")
+        from .resource_authorization import (  # noqa: PLC0415
+            bind_resource_request,
+            reset_resource_request,
+        )
+
+        token = bind_resource_request(request)
+        try:
+            return await call_next(context)
+        finally:
+            reset_resource_request(token)
 
     async def on_get_prompt(
         self,
@@ -165,13 +193,35 @@ class TagFilterMiddleware(Middleware):  # type: ignore[misc, unused-ignore]
 
     # ── helpers ──────────────────────────────────────────────────────────────
 
-    def _is_visible(self, component: Any) -> bool:
+    def _is_visible(self, kind: ComponentKind, component: Any) -> bool:
         tags = {str(t) for t in (getattr(component, "tags", None) or set())}
+        if kind == "resource" and tags and self._policy is not None:
+            from .policy import PolicyMode  # noqa: PLC0415
+
+            policy = self._policy()
+            return any(policy.mode(tag) is PolicyMode.ALLOW for tag in tags)
         return tags_visible(tags, self._allowed())
 
-    async def _reject_if_hidden(self, kind: ComponentKind, key: str) -> None:
+    async def _resource_is_visible(self, component: Any) -> bool:
+        tags = {str(t) for t in (getattr(component, "tags", None) or set())}
+        if not tags:
+            return True
+        if self._resource_authorizer is not None:
+            key = str(
+                getattr(component, "uriTemplate", None)
+                or getattr(component, "uri_template", None)
+                or getattr(component, "uri", "")
+            )
+            return (
+                await self._resource_authorizer.authorize(key, tags, audit_denial=False) is not None
+            )
+        if not tags_visible(tags, self._allowed()):
+            return False
+        return self._is_visible("resource", component)
+
+    async def _reject_if_hidden(self, kind: ComponentKind, key: str) -> set[str]:
         if not key:
-            return
+            return set()
         tags = await self._lookup(kind, key)
         if tags is None:
             # Component doesn't exist (or is itself disabled at the FastMCP layer).
@@ -179,6 +229,20 @@ class TagFilterMiddleware(Middleware):  # type: ignore[misc, unused-ignore]
             # "method-not-allowed" / "not-found" path rather than 500.
             msg = f"{kind.capitalize()} {key!r} not found"
             raise NotFoundError(msg)
+        if (
+            kind == "resource"
+            and tags
+            and self._policy is not None
+            and self._resource_authorizer is None
+        ):
+            from .policy import PolicyMode  # noqa: PLC0415
+
+            policy = self._policy()
+            if not any(policy.mode(tag) is PolicyMode.ALLOW for tag in tags):
+                msg = f"{kind.capitalize()} {key!r} is not allowed by request policy"
+                raise self._ERROR_BY_KIND[kind](msg)
+            return tags
         if not tags_visible(tags, self._allowed()):
             msg = f"{kind.capitalize()} {key!r} is currently disabled by configuration"
             raise self._ERROR_BY_KIND[kind](msg)
+        return tags

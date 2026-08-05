@@ -155,7 +155,7 @@ class CommandProfile:
     argument_aliases: Mapping[str, str] = field(default_factory=dict)
     list_arguments: frozenset[str] = frozenset()
     compact_fields: tuple[str, ...] = ()
-    risk_override: str | None = None
+    operation_override: str | None = None
     annotations: Mapping[str, bool] = field(default_factory=dict)
     allow_extra_kwargs: bool = False
 
@@ -243,7 +243,7 @@ def _profile_annotations(command: str) -> Mapping[str, bool]:
     return _READ_ANNOTATIONS
 
 
-def _profile_risk(command: str) -> str:
+def _profile_operation(command: str) -> str:
     """Keep known curated commands stable if upstream scope metadata drifts."""
     if any(part in command for part in ("remove", "delete", "clear")):
         return "write"
@@ -262,7 +262,7 @@ def _build_profiles() -> dict[str, CommandProfile]:
             command=command,
             search_aliases=aliases.get(command, ()),
             compact_fields=_MEDIA_FIELDS if command.startswith("music/") else (),
-            risk_override=_profile_risk(command),
+            operation_override=_profile_operation(command),
             annotations=_profile_annotations(command),
         )
     profiles["providers"] = CommandProfile(
@@ -276,7 +276,7 @@ def _build_profiles() -> dict[str, CommandProfile]:
             "enabled",
             "last_error",
         ),
-        risk_override="read",
+        operation_override="read",
         annotations=_READ_ANNOTATIONS,
     )
 
@@ -306,7 +306,7 @@ def _build_profiles() -> dict[str, CommandProfile]:
             command=base.command,
             search_aliases=base.search_aliases,
             compact_fields=base.compact_fields,
-            risk_override=base.risk_override,
+            operation_override=base.operation_override,
             annotations=base.annotations,
             **changes,
         )

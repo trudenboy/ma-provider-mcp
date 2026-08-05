@@ -10,6 +10,7 @@ middleware (for permission-only changes) or restarts the runtime.
 from __future__ import annotations
 
 import logging
+import re
 from contextlib import suppress
 from typing import TYPE_CHECKING
 
@@ -18,7 +19,7 @@ from music_assistant_models.enums import ConfigEntryType
 
 from music_assistant.models.plugin import PluginProvider
 
-from .constants import HOT_SWAPPABLE_KEYS
+from .constants import is_hot_swappable_key
 
 if TYPE_CHECKING:
     from music_assistant_models.config_entries import ProviderConfig
@@ -38,11 +39,20 @@ class MCPServerProvider(PluginProvider):  # type: ignore[misc, unused-ignore]
 
     async def get_config_entries(self) -> tuple[ConfigEntry, ...]:
         """Return Config entries to configure this provider."""
-        from .config import build_config_entries  # noqa: PLC0415
-        from .constants import CONF_MOUNT_PATH, DEFAULT_MOUNT_PATH  # noqa: PLC0415
+        from .config import build_config_entries, current_user_mcp_tokens  # noqa: PLC0415
+        from .constants import (  # noqa: PLC0415
+            CONF_MANUAL_TOKEN_IDS,
+            CONF_MOUNT_PATH,
+            DEFAULT_MOUNT_PATH,
+        )
 
+        tokens = await current_user_mcp_tokens(self.mass)
         return build_config_entries(
-            self.mass, str(self.get_config_value(CONF_MOUNT_PATH, DEFAULT_MOUNT_PATH))
+            self.mass,
+            str(self.get_config_value(CONF_MOUNT_PATH, DEFAULT_MOUNT_PATH)),
+            tokens=tokens,
+            manual_token_ids=self.get_config_value(CONF_MANUAL_TOKEN_IDS, []) or (),
+            stored_value_provider=self._raw_policy_value,
         )
 
     async def handle_config_action(self, action: str) -> tuple[ConfigEntry, ...] | None:
@@ -84,6 +94,7 @@ class MCPServerProvider(PluginProvider):  # type: ignore[misc, unused-ignore]
                 if self._runtime is not None
                 else {"available": False, "last_error": "MCP runtime not started"}
             ),
+            raw_policy_value_provider=self._raw_policy_value,
         )
         try:
             self._commands.start()
@@ -124,6 +135,7 @@ class MCPServerProvider(PluginProvider):  # type: ignore[misc, unused-ignore]
     async def update_config(self, config: ProviderConfig, changed_keys: set[str]) -> None:
         """Apply config changes — hot-swap when possible, restart otherwise."""
         self.config = config
+        self._persist_policy_suffix_index(config, changed_keys)
         if self._commands is not None:
             self._commands.update_config(config)
         if self._runtime is None:
@@ -131,7 +143,7 @@ class MCPServerProvider(PluginProvider):  # type: ignore[misc, unused-ignore]
                 await self._start_runtime(config)
             return
         normalized_keys = {k.removeprefix("values/") for k in changed_keys}
-        if normalized_keys.issubset(HOT_SWAPPABLE_KEYS):
+        if all(is_hot_swappable_key(key) for key in normalized_keys):
             await self._runtime.apply_permission_change(config, normalized_keys)
         else:
             await self._runtime.stop()
@@ -142,7 +154,22 @@ class MCPServerProvider(PluginProvider):  # type: ignore[misc, unused-ignore]
         """Create and start a runtime, leaving no failed instance attached."""
         from .server import MCPServerRuntime  # noqa: PLC0415
 
-        runtime = MCPServerRuntime(self.mass, config, self.logger)
+        if self._commands is not None:
+            self._commands.update_config(config, active_token_ids=frozenset())
+        runtime = MCPServerRuntime(
+            self.mass,
+            config,
+            self.logger,
+            policy_change_callback=self._apply_policy_token_ids,
+        )
+        resolve_policy = getattr(
+            runtime,
+            "resolve_request_policy",
+            getattr(runtime, "resolve_policy", None),
+        )
+        if self._commands is not None and callable(resolve_policy):
+            self._commands.set_policy_provider(resolve_policy)
+            self._commands.set_audit_client_id_provider(runtime.audit_client_id)
         self._runtime = runtime
         try:
             await runtime.start()
@@ -151,3 +178,52 @@ class MCPServerProvider(PluginProvider):  # type: ignore[misc, unused-ignore]
             with suppress(BaseException):
                 await runtime.stop()
             raise
+
+    def _apply_policy_token_ids(self, token_ids: frozenset[str]) -> None:
+        """Refresh event retention when authenticated token identities change."""
+        if self._commands is not None:
+            self._commands.update_config(self.config, active_token_ids=token_ids)
+
+    def _raw_policy_value(self, key: str) -> object:
+        """Read one preserved policy value through MA's sanctioned raw API."""
+        instance_id = str(getattr(getattr(self, "config", None), "instance_id", ""))
+        config_controller = getattr(self.mass, "config", None)
+        getter = getattr(config_controller, "get_raw_provider_config_value", None)
+        if not instance_id or not callable(getter):
+            return None
+        return getter(instance_id, key, None)
+
+    def _persist_policy_suffix_index(
+        self,
+        config: ProviderConfig,
+        changed_keys: set[str],
+    ) -> None:
+        """Persist non-reversible suffixes for newly rendered token policy rows."""
+        from .constants import CONF_POLICY_TOKEN_SUFFIXES  # noqa: PLC0415
+
+        suffixes = {
+            match.group(1)
+            for key in changed_keys
+            if (match := re.search(r"([0-9a-f]{64})$", key.removeprefix("values/")))
+        }
+        if not suffixes:
+            return
+        current = config.get_value(CONF_POLICY_TOKEN_SUFFIXES, [])
+        if isinstance(current, list | tuple | set | frozenset):
+            suffixes.update(
+                str(value) for value in current if re.fullmatch(r"[0-9a-f]{64}", str(value))
+            )
+        ordered = sorted(suffixes)
+        entry = getattr(config, "values", {}).get(CONF_POLICY_TOKEN_SUFFIXES)
+        if entry is not None:
+            entry.value = ordered
+        config_controller = getattr(self.mass, "config", None)
+        setter = getattr(config_controller, "set_raw_provider_config_value", None)
+        instance_id = str(getattr(config, "instance_id", ""))
+        if callable(setter) and instance_id:
+            setter(
+                instance_id,
+                CONF_POLICY_TOKEN_SUFFIXES,
+                ordered,
+                immediate=True,
+            )

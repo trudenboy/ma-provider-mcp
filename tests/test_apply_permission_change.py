@@ -68,65 +68,61 @@ async def test_empty_changed_keys_does_not_restart(
 
 
 @pytest.mark.asyncio
-async def test_permission_only_change_hot_swaps(
+async def test_policy_change_hot_swaps_immutable_snapshot(
     mock_mass: MagicMock, mock_config: MagicMock
 ) -> None:
-    """
-    A permission-key-only change rebuilds ``_allowed_tags`` from the new config.
-
-    The preset tag (``edit:queue``) is intentionally NOT enabled in
-    ``mock_config``'s defaults, while ``query:library`` IS — so a passing
-    test proves the rebuild actually happened. Asserting on a tag that
-    matches the defaults would hold whether the rebuild ran or not (the
-    original tautology we are fixing here).
-    """
+    """A v2 policy change replaces the resolver snapshot without remounting."""
     from provider.server import MCPServerRuntime  # noqa: PLC0415
 
     runtime = MCPServerRuntime(mock_mass, mock_config, logging.getLogger("t"))
-    # Preset a tag that's NOT in mock_config defaults — must be REMOVED after the rebuild.
-    runtime._allowed_tags = {"edit:queue"}
+    before = runtime.policy_resolver
     runtime.stop = AsyncMock()
     runtime.start = AsyncMock()
+    mock_config._values["policy_default"] = "Trusted"
 
-    await runtime.apply_permission_change(
-        mock_config, changed_keys={"control_volume", "query_library"}
-    )
+    await runtime.apply_permission_change(mock_config, changed_keys={"policy_default"})
 
     runtime.stop.assert_not_awaited()
     runtime.start.assert_not_awaited()
-    # The preset tag must be gone (default has edit_queue=False) and the
-    # default-enabled query:library tag must be present (default has
-    # query_library=True). Both checks are necessary to prove the rebuild
-    # actually rebuilt from new_config rather than no-op'd or appended.
-    assert "edit:queue" not in runtime._allowed_tags, (
-        "preset edit:queue tag was not removed — hot-swap did not rebuild from new_config"
-    )
-    assert "query:library" in runtime._allowed_tags, (
-        "default-enabled query:library tag missing — hot-swap rebuild lost defaults"
-    )
+    assert runtime.policy_resolver is not before
+    assert runtime.policy_resolver.resolve(None).profile.value == "Trusted"
 
 
 @pytest.mark.asyncio
-async def test_dynamic_api_risk_gate_hot_swaps(
+async def test_v1_dynamic_api_key_is_not_hot_swapped(
     mock_mass: MagicMock, mock_config: MagicMock
 ) -> None:
-    """
-    Toggling a dynamic API risk gate must not restart the runtime.
-
-    The adapter reads flags through a closure over ``_config`` on each request.
-    """
+    """A removed v1 dynamic risk key follows the ordinary restart path."""
     from provider.server import MCPServerRuntime  # noqa: PLC0415
 
     runtime = MCPServerRuntime(mock_mass, mock_config, logging.getLogger("t"))
-    runtime._allowed_tags = {"query:library"}
     runtime.stop = AsyncMock()
     runtime.start = AsyncMock()
 
     await runtime.apply_permission_change(mock_config, changed_keys={"dynamic_api_control"})
 
-    runtime.stop.assert_not_awaited()
-    runtime.start.assert_not_awaited()
+    runtime.stop.assert_awaited_once()
+    runtime.start.assert_awaited_once()
     assert runtime._config is mock_config
+
+
+def test_authenticated_identity_notifies_event_buffer_policy(
+    mock_mass: MagicMock, mock_config: MagicMock
+) -> None:
+    """Binding a discovered token publishes its ID to the provider command owner."""
+    from provider.server import MCPServerRuntime  # noqa: PLC0415
+
+    notified: list[frozenset[str]] = []
+    runtime = MCPServerRuntime(
+        mock_mass,
+        mock_config,
+        logging.getLogger("t"),
+        policy_change_callback=notified.append,
+    )
+
+    runtime._token_identities.bind("bearer", user_id="u1", token_id="token-id")
+
+    assert notified == [frozenset({"token-id"})]
 
 
 @pytest.mark.asyncio

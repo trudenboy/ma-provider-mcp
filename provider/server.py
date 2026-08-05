@@ -6,20 +6,21 @@ import contextlib
 import logging
 from typing import TYPE_CHECKING, Any
 
+from .audit import NO_TOKEN_CLIENT_ID
+from .auth import LEGACY_TOKEN_CLIENT_ID, LOOKUP_FAILURE_CLIENT_ID
+from .config import build_policy_resolver
 from .constants import (
-    CONF_DYNAMIC_API_CONTROL,
-    CONF_DYNAMIC_API_READ,
-    CONF_DYNAMIC_API_SYSTEM,
-    CONF_DYNAMIC_API_WRITE,
     CONF_ENFORCE_AUDIENCE,
     CONF_EXTRA_ALLOWED_ORIGINS,
     CONF_MOUNT_PATH,
     CONF_REQUIRE_AUTH,
-    CONF_REQUIRE_CONFIRMATION,
     CONF_TRUST_FORWARDED_PROTO,
     DEFAULT_MOUNT_PATH,
+    is_policy_key,
 )
-from .tags import enabled_tags
+from .policy import POLICY_SCHEMA_VERSION
+from .tags import Tag, enabled_tags
+from .token_identity import AuthenticatedPolicyResolver, TokenIdentityRegistry
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -27,6 +28,8 @@ if TYPE_CHECKING:
     from music_assistant_models.config_entries import ProviderConfig
 
     from music_assistant.mass import MusicAssistant
+
+    from .policy import PolicyResolver, PolicySnapshot
 
 LOGGER = logging.getLogger(__name__)
 
@@ -51,6 +54,7 @@ class MCPServerRuntime:
         mass: MusicAssistant,
         config: ProviderConfig,
         logger: logging.Logger,
+        policy_change_callback: Callable[[frozenset[str]], None] | None = None,
     ) -> None:
         """
         Hold the shared dependencies; nothing is started here.
@@ -62,6 +66,7 @@ class MCPServerRuntime:
         self._mass = mass
         self._config = config
         self._logger = logger
+        self._policy_change_callback = policy_change_callback
         raw_path = str(config.get_value(CONF_MOUNT_PATH) or DEFAULT_MOUNT_PATH)
         self._mount_path: str = "/" + raw_path.strip("/")
         self._mcp: Any = None
@@ -72,12 +77,41 @@ class MCPServerRuntime:
         # without re-instantiating the TagFilterMiddleware closure.
         self._allowed_tags: set[str] = set()
         self._dynamic_adapter: Any = None
+        self._token_identities = TokenIdentityRegistry(on_change=self._refresh_policy_resolver)
+        self._request_policies = AuthenticatedPolicyResolver(
+            self._token_identities,
+            build_policy_resolver(config, raw_value_provider=self._raw_policy_value),
+        )
 
     @property
     def public_url(self) -> str:
         """Return the externally visible MCP endpoint URL."""
         base = str(self._mass.webserver.base_url).rstrip("/")
         return f"{base}{self._mount_path}"
+
+    @property
+    def policy_resolver(self) -> PolicyResolver:
+        """Return the immutable token-ID resolver used by future requests."""
+        return self._request_policies.policies
+
+    def resolve_policy(self, bearer_token: str) -> PolicySnapshot:
+        """Resolve one authenticated bearer through its bounded MA identity binding."""
+        return self._request_policies.resolve(bearer_token)
+
+    def resolve_request_policy(self, bearer_token: str | None) -> PolicySnapshot:
+        """Resolve an exact bearer or the configured auth-off global default."""
+        if bearer_token is None:
+            return self.policy_resolver.resolve(None)
+        return self.resolve_policy(bearer_token)
+
+    def audit_client_id(self, bearer_token: str | None) -> str:
+        """Return an exact token ID or a safe non-authoritative client label."""
+        if bearer_token is None:
+            return NO_TOKEN_CLIENT_ID
+        identity = self._token_identities.lookup(bearer_token)
+        if identity is None:
+            return LOOKUP_FAILURE_CLIENT_ID
+        return identity.token_id or LEGACY_TOKEN_CLIENT_ID
 
     async def start(self) -> None:
         """
@@ -136,17 +170,14 @@ class MCPServerRuntime:
             ``new`` here would always be empty — the caller's set is the only
             reliable signal.
         """
-        from .constants import DYNAMIC_API_KEYS, PERMISSION_KEYS  # noqa: PLC0415
-
-        # ``set().issubset(...)`` is True, so an empty ``changed_keys`` (no-op
-        # call) classifies as permission-only and skips a pointless restart.
-        permission_only = changed_keys.issubset(PERMISSION_KEYS | DYNAMIC_API_KEYS)
+        policy_only = all(is_policy_key(key) for key in changed_keys)
 
         self._config = new_config
-        if permission_only and hasattr(self, "_allowed_tags"):
+        if policy_only:
+            self._refresh_policy_resolver()
             self._allowed_tags = {str(t) for t in enabled_tags(new_config)}
             self._logger.debug(
-                "MCP runtime: hot-swapped tag filter to %d tags",
+                "MCP runtime: hot-swapped policy snapshot and %d visible tags",
                 len(self._allowed_tags),
             )
             return
@@ -156,9 +187,16 @@ class MCPServerRuntime:
 
     def dynamic_diagnostics(self) -> dict[str, Any]:
         """Return a public snapshot of dynamic-command health without exposing its adapter."""
-        if self._dynamic_adapter is None:
-            return {"available": False, "last_error": "catalog not initialized"}
-        return dict(self._dynamic_adapter.diagnostics())
+        diagnostics = (
+            {"available": False, "last_error": "catalog not initialized"}
+            if self._dynamic_adapter is None
+            else dict(self._dynamic_adapter.diagnostics())
+        )
+        diagnostics.update(
+            policy_schema_version=POLICY_SCHEMA_VERSION,
+            token_resolution_failures=self._token_identities.token_resolution_failures,
+        )
+        return diagnostics
 
     async def _start_impl(self) -> None:
         """Mount the runtime; see :meth:`start` for the public-facing wrapper."""
@@ -179,6 +217,7 @@ class MCPServerRuntime:
                 base_url=base_url or None,
                 public_resource_uri=public_resource_uri,
                 enforce_audience=enforce_audience,
+                identity_registry=self._token_identities,
             )
             if require_auth
             else None
@@ -222,7 +261,7 @@ class MCPServerRuntime:
                 # Lazy provider so hot-swapped permissions update the
                 # advertised `scopes_supported` immediately, without
                 # rebuilding the runtime.
-                scopes_supported=lambda: [str(t) for t in enabled_tags(self._config)],
+                scopes_supported=lambda: [str(capability) for capability in Tag],
                 resource_name="Music Assistant MCP",
             )
 
@@ -252,7 +291,6 @@ class MCPServerRuntime:
         """Install the permanent dynamic command discovery layer."""
         from fastmcp.server.dependencies import get_access_token  # noqa: PLC0415
 
-        from .command_policy import DynamicPolicy  # noqa: PLC0415
         from .dynamic_api import DynamicAPIAdapter  # noqa: PLC0415
         from .meta_discovery import register_meta_discovery  # noqa: PLC0415
 
@@ -263,16 +301,11 @@ class MCPServerRuntime:
 
         adapter = DynamicAPIAdapter(
             self._mass,
-            policy_provider=lambda: DynamicPolicy(
-                read=config_bool(CONF_DYNAMIC_API_READ, default=True),
-                control=config_bool(CONF_DYNAMIC_API_CONTROL),
-                write=config_bool(CONF_DYNAMIC_API_WRITE),
-                system=config_bool(CONF_DYNAMIC_API_SYSTEM),
-            ),
             auth_required_provider=lambda: config_bool(CONF_REQUIRE_AUTH, default=True),
-            confirmation_provider=lambda: config_bool(CONF_REQUIRE_CONFIRMATION, default=True),
             token_provider=get_access_token,
-            allowed_tags_provider=lambda: self._allowed_tags,
+            policy_provider=self.resolve_policy,
+            default_policy_provider=lambda: self.policy_resolver.resolve(None),
+            identity_provider=self._token_identities.lookup,
         )
         self._dynamic_adapter = adapter
         register_meta_discovery(
@@ -284,13 +317,58 @@ class MCPServerRuntime:
 
     def _apply_tag_filter(self, mcp: Any, allowed: set[Any]) -> None:
         """Install the tag-filter middleware on the given FastMCP server."""
+        from fastmcp.server.dependencies import get_access_token  # noqa: PLC0415
+
         from .middleware import TagFilterMiddleware  # noqa: PLC0415
+        from .resource_authorization import ResourceAuthorizer  # noqa: PLC0415
 
         # Snapshot tags into the closure-captured set declared in __init__.
         # apply_permission_change mutates the same set later, so the
         # middleware sees the new permissions without rebuilding FastMCP.
         self._allowed_tags = {str(t) for t in allowed}
-        mcp.add_middleware(TagFilterMiddleware(lambda: self._allowed_tags, build_tag_lookup(mcp)))
+
+        def request_policy() -> PolicySnapshot:
+            token = get_access_token()
+            if token is None:
+                return self.policy_resolver.resolve(None)
+            return self.resolve_policy(token.token)
+
+        mcp.add_middleware(
+            TagFilterMiddleware(
+                lambda: self._allowed_tags,
+                build_tag_lookup(mcp),
+                policy_provider=request_policy,
+                resource_authorizer=ResourceAuthorizer(
+                    self._mass,
+                    auth_required_provider=lambda: bool(self._config.get_value(CONF_REQUIRE_AUTH)),
+                    token_provider=get_access_token,
+                    identity_provider=self._token_identities.lookup,
+                    policy_provider=self.resolve_policy,
+                    default_policy_provider=lambda: self.policy_resolver.resolve(None),
+                ),
+            )
+        )
+
+    def _refresh_policy_resolver(self) -> None:
+        """Compile and atomically install a resolver for known and manual token IDs."""
+        resolver = build_policy_resolver(
+            self._config,
+            active_token_ids=self._token_identities.token_ids(),
+            raw_value_provider=self._raw_policy_value,
+        )
+        if hasattr(self, "_request_policies"):
+            self._request_policies.replace(resolver)
+            if self._policy_change_callback is not None:
+                self._policy_change_callback(self._token_identities.token_ids())
+
+    def _raw_policy_value(self, key: str) -> object:
+        """Read one preserved policy value through MA's sanctioned raw API."""
+        instance_id = str(getattr(self._config, "instance_id", ""))
+        config_controller = getattr(self._mass, "config", None)
+        getter = getattr(config_controller, "get_raw_provider_config_value", None)
+        if not instance_id or not callable(getter):
+            return None
+        return getter(instance_id, key, None)
 
 
 async def _tag_lookup(mcp: Any, kind: str, key: str) -> set[str] | None:

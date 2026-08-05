@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
@@ -14,8 +15,11 @@ from music_assistant_models.enums import ConfigEntryType
 from music_assistant.models.plugin import PluginProvider
 from provider import _init_helpers, server
 from provider.commands import ProviderCommandSet
+from provider.config import policy_mode_key, policy_token_suffix, token_policy_key
+from provider.constants import CONF_DEFAULT_POLICY, CONF_POLICY_TOKEN_SUFFIXES
 from provider.provider import MCPServerProvider
 from provider.server import MCPServerRuntime
+from provider.tags import Tag
 
 
 class _LifecycleMass:
@@ -26,6 +30,7 @@ class _LifecycleMass:
         self.registered: dict[str, Callable[..., Any]] = {}
         self.register_api_command = MagicMock(side_effect=self._register)
         self.subscribe = MagicMock(side_effect=self._subscribe)
+        self.webserver: Any = None
 
     def _register(
         self, command: str, handler: Callable[..., Any], **_kwargs: Any
@@ -61,7 +66,8 @@ def _config(*, debug_events: bool = False) -> MagicMock:
     """Return only the config surface provider command registration needs."""
     config = MagicMock()
     config.get_value.side_effect = lambda key, default=None: {
-        "debug_events": debug_events,
+        CONF_DEFAULT_POLICY: "Custom",
+        policy_mode_key(Tag.DEBUG_EVENTS): "allow" if debug_events else "deny",
         "debug_event_buffer_capacity": 100,
     }.get(key, default)
     return config
@@ -219,6 +225,51 @@ async def test_restart_does_not_duplicate_event_subscription(
 
 
 @pytest.mark.asyncio
+async def test_auto_discovered_debug_override_activates_buffer_before_authentication(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Hashed configured overrides retain events without a settings-user lookup."""
+    mass = _LifecycleMass()
+    token_id = "auto-token-id"
+    mass.webserver = MagicMock()
+    mass.webserver.auth.get_current_user_info = AsyncMock(
+        side_effect=AssertionError("startup must not depend on a current settings user")
+    )
+    mass.webserver.auth.get_user_tokens = AsyncMock(
+        side_effect=AssertionError("startup must not enumerate user tokens")
+    )
+    values = {
+        CONF_DEFAULT_POLICY: "Read-only",
+        CONF_POLICY_TOKEN_SUFFIXES: [policy_token_suffix(token_id)],
+        token_policy_key(token_id): "Custom",
+        policy_mode_key(Tag.DEBUG_EVENTS, token_id): "allow",
+        "debug_event_buffer_capacity": 100,
+    }
+    config = MagicMock()
+    config.get_value.side_effect = lambda key, default=None: values.get(key, default)
+    config.values = {key: SimpleNamespace(value=value) for key, value in values.items()}
+    provider = _provider(mass, config)
+
+    class Runtime:
+        def __init__(self, *_args: Any, **_kwargs: Any) -> None:
+            pass
+
+        async def start(self) -> None:
+            pass
+
+        async def stop(self) -> None:
+            pass
+
+    monkeypatch.setattr(server, "MCPServerRuntime", Runtime)
+    await provider.handle_async_init()
+
+    assert mass.subscribe.call_count == 1
+    mass.webserver.auth.get_current_user_info.assert_not_awaited()
+    mass.webserver.auth.get_user_tokens.assert_not_awaited()
+    await provider.unload()
+
+
+@pytest.mark.asyncio
 async def test_config_reaches_commands_before_runtime_restart(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -227,7 +278,9 @@ async def test_config_reaches_commands_before_runtime_restart(
     provider = _provider(MagicMock(), _config())
     provider._commands = MagicMock(
         spec=ProviderCommandSet,
-        update_config=MagicMock(side_effect=lambda _config: call_order.append("commands.update")),
+        update_config=MagicMock(
+            side_effect=lambda _config, **_kwargs: call_order.append("commands.update")
+        ),
     )
     provider._runtime = MagicMock(
         stop=AsyncMock(side_effect=lambda: call_order.append("runtime.stop")),
@@ -304,7 +357,11 @@ def test_runtime_exposes_dynamic_diagnostics_without_adapter_leak(
     runtime = MCPServerRuntime(mock_mass, mock_config, logger=MagicMock())
     runtime._dynamic_adapter = MagicMock(diagnostics=MagicMock(return_value={"available": True}))
 
-    assert runtime.dynamic_diagnostics() == {"available": True}
+    assert runtime.dynamic_diagnostics() == {
+        "available": True,
+        "policy_schema_version": 2,
+        "token_resolution_failures": 0,
+    }
 
 
 async def test_config_server_mounted_and_visible(

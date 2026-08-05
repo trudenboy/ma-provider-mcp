@@ -3,14 +3,25 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from music_assistant_models.auth import Scope
+from music_assistant_models.errors import AuthenticationRequired, InsufficientPermissions
 
-from ..constants import CONF_DEBUG_EVENT_BUFFER_CAPACITY
+from ..audit import (
+    ANONYMOUS_USER_ID,
+    NO_TOKEN_CLIENT_ID,
+    AuditRecord,
+    AuditSink,
+    emit_audit_record,
+    is_privileged_capability,
+)
+from ..auth import LOOKUP_FAILURE_CLIENT_ID
+from ..config import policy_event_buffer_enabled
+from ..constants import CONF_DEBUG_EVENT_BUFFER_CAPACITY, CONF_REQUIRE_AUTH
 from ..debug.event_buffer import EventBuffer
 from ..models import (
     EventBufferStats,
@@ -23,11 +34,15 @@ from ..models import (
     RouteList,
 )
 from ..tags import Tag, enabled_tags
-from . import debug, queue
+from . import authorization, debug, queue
 from .authorization import authorize_extension
+
+_ResultT = TypeVar("_ResultT")
 
 if TYPE_CHECKING:
     from music_assistant_models.config_entries import ProviderConfig
+
+    from ..policy import PolicySnapshot
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,6 +53,17 @@ class ProviderCommand:
     handler: Callable[..., Any]
     required_scope: str
     required_tag: str
+
+
+@dataclass(frozen=True, slots=True)
+class _ProviderAuditContext:
+    """Fixed authorization fields retained across one provider-owned execution."""
+
+    user_id: str
+    client_id: str
+    command: str
+    capability: str
+    mode: str
 
 
 def _scope(value: str) -> Scope:
@@ -66,6 +92,10 @@ class ProviderCommandSet:
         mass: Any,
         config_provider: Callable[[], ProviderConfig] | ProviderConfig,
         diagnostics_provider: Callable[[], Mapping[str, Any]] | None = None,
+        policy_provider: Callable[[str | None], PolicySnapshot] | None = None,
+        audit_sink: AuditSink | None = None,
+        audit_client_id_provider: Callable[[str | None], str] | None = None,
+        raw_policy_value_provider: Callable[[str], Any] | None = None,
     ) -> None:
         """Bind MA state and lazy providers for configuration and diagnostics."""
         self._mass = mass
@@ -76,7 +106,12 @@ class ProviderCommandSet:
         else:
             self._config_provider = config_provider
         self._current_config: ProviderConfig | None = None
+        self._active_policy_token_ids: frozenset[str] = frozenset()
         self._diagnostics_provider = diagnostics_provider
+        self._policy_provider = policy_provider
+        self._audit_sink = audit_sink or emit_audit_record
+        self._audit_client_id_provider = audit_client_id_provider
+        self._raw_policy_value_provider = raw_policy_value_provider
         self._buffer: EventBuffer | None = EventBuffer(
             self._mass, capacity=self._event_buffer_capacity(self._config())
         )
@@ -87,11 +122,26 @@ class ProviderCommandSet:
         """Return the command-owned event buffer for the MCP debug server."""
         return self._buffer
 
-    def update_config(self, config: ProviderConfig) -> None:
+    def update_config(
+        self,
+        config: ProviderConfig,
+        *,
+        active_token_ids: frozenset[str] | set[str] | None = None,
+    ) -> None:
         """Make existing handler closures observe the new provider configuration."""
         self._current_config = config
+        if active_token_ids is not None:
+            self._active_policy_token_ids = frozenset(active_token_ids)
         if self._unregister:
             self._configure_event_buffer(config)
+
+    def set_policy_provider(self, provider: Callable[[str | None], PolicySnapshot]) -> None:
+        """Install the exact-bearer policy resolver used by registered handlers."""
+        self._policy_provider = provider
+
+    def set_audit_client_id_provider(self, provider: Callable[[str | None], str]) -> None:
+        """Install the safe exact-token label resolver used by audit records."""
+        self._audit_client_id_provider = provider
 
     def start(self) -> None:
         """Register each command, restoring the previous state on partial failure."""
@@ -135,7 +185,11 @@ class ProviderCommandSet:
 
     def _configure_event_buffer(self, config: ProviderConfig) -> None:
         """Start, stop, or resize the subscription held across MCP restarts."""
-        enabled = Tag.DEBUG_EVENTS in enabled_tags(config)
+        enabled = policy_event_buffer_enabled(
+            config,
+            active_token_ids=self._active_policy_token_ids,
+            raw_value_provider=self._raw_policy_value_provider,
+        )
         capacity = self._event_buffer_capacity(config)
         if self._buffer is None or self._buffer.stats().capacity != capacity:
             if self._buffer is not None:
@@ -157,17 +211,116 @@ class ProviderCommandSet:
         """Return the most recently applied config, or lazily read the provider state."""
         return self._current_config or self._config_provider()
 
-    def _guard(self, scope: str, tag: Tag) -> None:
-        authorize_extension(
-            self._config(),
-            required_scope=scope,
-            required_tag=str(tag),
+    def _auth_required(self) -> bool:
+        """Preserve the secure default for configs created before this setting existed."""
+        value = self._config().get_value(CONF_REQUIRE_AUTH)
+        return True if value is None else bool(value)
+
+    def _guard(self, command: str, scope: str, tag: Tag) -> _ProviderAuditContext:
+        """Authorize one provider command and audit a controlled denial."""
+        from ..policy import PolicyMode  # noqa: PLC0415
+
+        bearer = authorization.current_bearer_token()
+        user = authorization.current_user()
+        if self._policy_provider is not None:
+            mode = (
+                self._policy_provider(bearer).mode(tag)
+                if bearer is not None or not self._auth_required()
+                else PolicyMode.DENY
+            )
+        else:
+            mode = PolicyMode.ALLOW if tag in enabled_tags(self._config()) else PolicyMode.DENY
+        context = _ProviderAuditContext(
+            user_id=str(getattr(user, "user_id", "") or ANONYMOUS_USER_ID),
+            client_id=self._audit_client_id(bearer),
+            command=command,
+            capability=str(tag),
+            mode=mode.value,
         )
+        try:
+            authorize_extension(
+                self._config(),
+                required_scope=scope,
+                required_tag=str(tag),
+                policy_provider=self._policy_provider,
+                require_auth=self._auth_required(),
+                confirmation_command=command,
+            )
+        except AuthenticationRequired, InsufficientPermissions:
+            self._emit_audit(context, "authorization.denied")
+            raise
+        return context
+
+    async def _execute_audited(
+        self,
+        context: _ProviderAuditContext,
+        result: Awaitable[_ResultT],
+    ) -> _ResultT:
+        """Await a provider-owned operation and record privileged outcomes."""
+        try:
+            value = await result
+        except BaseException:
+            if is_privileged_capability(context.capability):
+                self._emit_audit(context, "execution.failed")
+            raise
+        if is_privileged_capability(context.capability):
+            self._emit_audit(context, "execution.succeeded")
+        return value
+
+    def _audit_client_id(self, bearer: str | None) -> str:
+        """Resolve an exact ID or a non-authoritative safe label."""
+        if self._audit_client_id_provider is not None:
+            return self._audit_client_id_provider(bearer)
+        return LOOKUP_FAILURE_CLIENT_ID if bearer is not None else NO_TOKEN_CLIENT_ID
+
+    def _emit_audit(self, context: _ProviderAuditContext, outcome: str) -> None:
+        """Send one provider-owned record through the value-free audit boundary."""
+        self._audit_sink(
+            AuditRecord(
+                user_id=context.user_id,
+                client_id=context.client_id,
+                command=context.command,
+                capability=context.capability,
+                mode=context.mode,
+                outcome=outcome,
+            )
+        )
+
+    def _capability_allowed(self, tag: Tag) -> bool:
+        """Return whether the current request may read optional debug detail."""
+        if self._policy_provider is None:
+            return tag in enabled_tags(self._config())
+        from ..policy import PolicyMode  # noqa: PLC0415
+
+        bearer = authorization.current_bearer_token()
+        if bearer is None and self._auth_required():
+            return False
+        return bool(self._policy_provider(bearer).mode(tag) is PolicyMode.ALLOW)
+
+    def _effective_policy_profile(self) -> str:
+        """Return the profile active for the exact current request."""
+        from ..policy import PolicyProfile  # noqa: PLC0415
+
+        if self._policy_provider is None:
+            return PolicyProfile.CUSTOM.value
+        bearer = authorization.current_bearer_token()
+        if bearer is None and self._auth_required():
+            return PolicyProfile.READ_ONLY.value
+        return self._policy_provider(bearer).profile.value
+
+    def _runtime_diagnostics(self) -> dict[str, Any]:
+        """Read the public value-only runtime diagnostic mapping once."""
+        return dict(self._diagnostics_provider()) if self._diagnostics_provider is not None else {}
 
     def _definitions(self) -> tuple[ProviderCommand, ...]:
         async def remove_items_safe(queue_id: str, item_ids: list[str]) -> RemoveFromQueueResult:
-            self._guard("queues.control", Tag.DELETE_QUEUE)
-            return await queue.remove_items_safe(self._mass, queue_id, item_ids)
+            audit = self._guard(
+                "fastmcp/queue/remove_items_safe", "queues.control", Tag.DELETE_QUEUE
+            )
+            return await self._execute_audited(
+                audit,
+                queue.remove_items_safe(self._mass, queue_id, item_ids),
+            )
 
         async def tail_log(
             lines: int = 200,
@@ -178,24 +331,30 @@ class ProviderCommandSet:
             before: str | None = None,
             name: str = "musicassistant.log",
         ) -> LogTailResult:
-            self._guard("system.read", Tag.DEBUG_LOGS)
-            return await debug.tail_log(
-                self._mass,
-                lines=lines,
-                level=level,
-                component_regex=component_regex,
-                search=search,
-                since_seconds=since_seconds,
-                before=before,
-                name=name,
+            audit = self._guard("fastmcp/debug/tail_log", "system.read", Tag.DEBUG_LOGS)
+            return await self._execute_audited(
+                audit,
+                debug.tail_log(
+                    self._mass,
+                    lines=lines,
+                    level=level,
+                    component_regex=component_regex,
+                    search=search,
+                    since_seconds=since_seconds,
+                    before=before,
+                    name=name,
+                ),
             )
 
         async def log_stats(
             since_seconds: int | None = None,
             name: str = "musicassistant.log",
         ) -> LogStatsResult:
-            self._guard("system.read", Tag.DEBUG_LOGS)
-            return await debug.log_stats(self._mass, since_seconds=since_seconds, name=name)
+            audit = self._guard("fastmcp/debug/log_stats", "system.read", Tag.DEBUG_LOGS)
+            return await self._execute_audited(
+                audit,
+                debug.log_stats(self._mass, since_seconds=since_seconds, name=name),
+            )
 
         async def recent_events(
             limit: int = 100,
@@ -203,35 +362,47 @@ class ProviderCommandSet:
             id_filter: str | None = None,
             since_seconds: int | None = None,
         ) -> EventSnapshot:
-            self._guard("system.read", Tag.DEBUG_EVENTS)
-            return await debug.recent_events(
-                self._buffer,
-                limit=limit,
-                event_types=event_types,
-                id_filter=id_filter,
-                since_seconds=since_seconds,
+            audit = self._guard("fastmcp/debug/recent_events", "system.read", Tag.DEBUG_EVENTS)
+            return await self._execute_audited(
+                audit,
+                debug.recent_events(
+                    self._buffer,
+                    limit=limit,
+                    event_types=event_types,
+                    id_filter=id_filter,
+                    since_seconds=since_seconds,
+                ),
             )
 
         async def event_buffer_stats() -> EventBufferStats:
-            self._guard("system.read", Tag.DEBUG_EVENTS)
-            return await debug.event_buffer_stats(self._buffer)
+            audit = self._guard("fastmcp/debug/event_buffer_stats", "system.read", Tag.DEBUG_EVENTS)
+            return await self._execute_audited(audit, debug.event_buffer_stats(self._buffer))
 
         async def health() -> HealthSummary:
-            self._guard("system.read", Tag.DEBUG_PROVIDERS)
-            return await debug.health(
-                self._mass,
-                buffer=self._buffer,
-                logs_enabled=Tag.DEBUG_LOGS in enabled_tags(self._config()),
-                dynamic_diagnostics_provider=self._diagnostics_provider,
+            audit = self._guard("fastmcp/debug/health", "system.read", Tag.DEBUG_PROVIDERS)
+            runtime_diagnostics = self._runtime_diagnostics()
+            return await self._execute_audited(
+                audit,
+                debug.health(
+                    self._mass,
+                    buffer=self._buffer,
+                    logs_enabled=self._capability_allowed(Tag.DEBUG_LOGS),
+                    dynamic_diagnostics_provider=lambda: runtime_diagnostics,
+                    policy_schema_version=int(runtime_diagnostics.get("policy_schema_version", 2)),
+                    policy_profile=self._effective_policy_profile(),
+                    token_resolution_failures=int(
+                        runtime_diagnostics.get("token_resolution_failures", 0)
+                    ),
+                ),
             )
 
         async def routes() -> RouteList:
-            self._guard("system.read", Tag.DEBUG_PROVIDERS)
-            return await debug.routes(self._mass)
+            audit = self._guard("fastmcp/debug/routes", "system.read", Tag.DEBUG_PROVIDERS)
+            return await self._execute_audited(audit, debug.routes(self._mass))
 
         async def packages() -> PackageVersions:
-            self._guard("system.read", Tag.DEBUG_PROVIDERS)
-            return await debug.packages()
+            audit = self._guard("fastmcp/debug/packages", "system.read", Tag.DEBUG_PROVIDERS)
+            return await self._execute_audited(audit, debug.packages())
 
         return (
             ProviderCommand(

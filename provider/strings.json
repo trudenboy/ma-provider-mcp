@@ -6,15 +6,11 @@
     },
     "require_auth": {
       "label": "Require authentication",
-      "description": "Fail closed when the MCP token is missing, invalid, or belongs to a disabled user. Disabling this compatibility toggle does not expose unified registry commands: they remain hidden or fail closed. Keep authentication enabled for supported operation."
+      "description": "Require a fresh, enabled Music Assistant user and token for MCP requests. Keep authentication enabled for normal operation."
     },
     "mount_path": {
       "label": "Mount path",
       "description": "HTTP path prefix where the MCP server is mounted on MA's webserver. Change only if it conflicts with another route."
-    },
-    "require_confirmation": {
-      "label": "Confirm destructive operations",
-      "description": "Ask the MCP client to confirm configured write commands discovered from MA's registry. Destructive queue clear/delete commands, safe batch removal, system commands, and impersonation keep mandatory confirmation regardless of this setting."
     },
     "enforce_audience": {
       "label": "Enforce token audience (RFC 8707)",
@@ -28,93 +24,25 @@
       "label": "Connect Wizard external URL (fallback)",
       "description": "Optional explicit base URL the Connect Wizard should open at (e.g. `https://ha.example.com/<addon-slug>` for Home Assistant add-on ingress). Used only when the wizard cannot auto-detect the external URL from the active client connection — set it if your reverse proxy strips the `X-Forwarded-Host` / `X-Ingress-Path` headers."
     },
-    "dynamic_api_read": {
-      "label": "Dynamic API: read commands",
-      "description": "Expose read-only commands discovered from Music Assistant's live API registry. Enabled by default. The client still sees only the three compact discovery tools."
-    },
-    "dynamic_api_control": {
-      "label": "Dynamic API: playback and device control",
-      "description": "Expose live MA commands that control players, queues and playback. Disabled by default."
-    },
-    "dynamic_api_write": {
-      "label": "Dynamic API: library and configuration writes",
-      "description": "Expose live MA commands that mutate library or user data. Disabled by default and subject to destructive-operation confirmation."
-    },
-    "dynamic_api_system": {
-      "label": "Dynamic API: system administration",
-      "description": "Expose system, authentication, diagnostics, task and configuration commands. Disabled by default; every invocation requires client confirmation."
-    },
     "trust_forwarded_proto": {
       "label": "Trust reverse-proxy forwarded scheme",
       "description": "Treat the Connect Wizard request as HTTPS when a trusted reverse proxy reports `X-Forwarded-Proto: https` (or `X-Forwarded-Scheme: https`), even though the proxy-to-MA hop is plain HTTP. Enable this only when MA sits behind a reverse proxy (nginx, Nginx Proxy Manager, Traefik, Caddy, ...) that terminates TLS and is configured to set this header and strip any client-supplied copy. Without it, the wizard refuses to mint credentials over the proxy because it sees plaintext HTTP from a non-loopback host. Leave OFF if MA is directly reachable — any LAN client could otherwise spoof the header."
     },
     "debug_event_buffer_capacity": {
       "label": "Debug: event buffer capacity",
-      "description": "Maximum number of recent events kept in memory when `Debug: read recent MA events` is enabled. Older events are dropped FIFO. Has no effect when events are off."
+      "description": "Maximum number of recent events retained while at least one resolvable policy grants or confirms `debug:events`. Older events are dropped FIFO."
     },
-    "query_library": {
-      "label": "Query library",
-      "description": "Search music, browse library, get artists/albums/tracks/playlists."
+    "policy_default": {
+      "label": "Default policy",
+      "description": "Policy used when a token has no explicit override. Missing v2 configuration defaults to Read-only."
     },
-    "query_queue": {
-      "label": "Query queue",
-      "description": "Read the current queue state for any player."
+    "policy_manual_token_ids": {
+      "label": "Manual MCP token IDs",
+      "description": "Optional Music Assistant token IDs to configure when they cannot be discovered for the current settings user. Token IDs are not bearer secrets."
     },
-    "query_players": {
-      "label": "Query players",
-      "description": "List players and read their state and capabilities."
-    },
-    "query_metadata": {
-      "label": "Query metadata",
-      "description": "Get lyrics, recommendations, and similar tracks."
-    },
-    "control_playback": {
-      "label": "Control playback",
-      "description": "Play, pause, stop, seek, next/previous, play media."
-    },
-    "control_volume": {
-      "label": "Control volume",
-      "description": "Set volume, volume up/down, mute, group volume."
-    },
-    "control_players": {
-      "label": "Control players",
-      "description": "Power players on/off, select source."
-    },
-    "control_media": {
-      "label": "Play announcements / mark played",
-      "description": "Send TTS announcements, mark items as played."
-    },
-    "edit_library": {
-      "label": "Add items to library",
-      "description": "Add tracks, albums, artists, or playlists to the library."
-    },
-    "edit_queue": {
-      "label": "Edit queue",
-      "description": "Enqueue media, move queue items, save queue as playlist."
-    },
-    "edit_playlists": {
-      "label": "Create / modify playlists",
-      "description": "Create playlists, add tracks, reorder."
-    },
-    "edit_favorites": {
-      "label": "Add to favorites",
-      "description": "Mark items as favorites."
-    },
-    "delete_library": {
-      "label": "Remove items from library",
-      "description": "Remove tracks, albums, artists, or playlists from the library."
-    },
-    "delete_queue": {
-      "label": "Clear queue / remove items",
-      "description": "Remove queue items or clear the queue."
-    },
-    "delete_playlists": {
-      "label": "Delete playlists / remove tracks",
-      "description": "Delete playlists, remove tracks from playlists."
-    },
-    "delete_favorites": {
-      "label": "Remove from favorites",
-      "description": "Remove items from favorites."
+    "policy_token_suffixes": {
+      "label": "Stored token policy references",
+      "description": "Internal non-reversible references that keep per-token policies available after restart. Bearer tokens and token IDs are never stored here."
     },
     "res_library": {
       "label": "Expose library:// resources",
@@ -128,54 +56,14 @@
       "label": "Expose canned prompts",
       "description": "Pre-defined prompts: find_and_play, party_playlist, now_playing_summary."
     },
-    "debug_inspect": {
-      "label": "Debug: inspect raw player/queue/provider state",
-      "description": "Exposes raw runtime state of players, queues, and providers via MCP. Intended for development and troubleshooting. Disable in production."
-    },
-    "debug_logs": {
-      "label": "Debug: tail musicassistant.log",
-      "description": "Allows MCP clients to read the tail of MA's log file with filters. Common token patterns are redacted. Intended for troubleshooting. Disable in production."
-    },
-    "debug_events": {
-      "label": "Debug: read recent MA events",
-      "description": "Subscribes to MA's event bus at provider startup and exposes a ring buffer over MCP. Memory cost is bounded by the buffer capacity. Intended for troubleshooting. Disable in production."
-    },
-    "debug_providers": {
-      "label": "Debug: inspect configured providers",
-      "description": "Exposes provider state, masked configuration, registered webserver routes, installed package versions, and a health summary roll-up. Intended for troubleshooting. Disable in production."
-    },
-    "config_read": {
-      "label": "Config: read core/provider/player settings",
-      "description": "Allows native MA config commands in the unified catalog to read core, provider, and player configuration (secrets stay masked). Disable in production unless needed."
-    },
-    "config_write_provider": {
-      "label": "Config: edit provider settings",
-      "description": "Allows native MA config commands to change provider configuration and trigger provider config actions. Changes may reload the provider and interrupt its streams. Disable in production."
-    },
-    "config_write_core": {
-      "label": "Config: edit core settings",
-      "description": "Allows native MA config commands to change core controller configuration (webserver, streams, cache, ...). Core changes may RESTART subsystems and interrupt ALL playback. Disable in production."
-    },
-    "config_write_player": {
-      "label": "Config: edit player settings",
-      "description": "Allows native MA config commands to change per-player configuration and DSP. Disable in production."
-    },
-    "config_write_secret": {
-      "label": "Config: allow writing secret values",
-      "description": "Required IN ADDITION to a category write flag before any SECURE_STRING (password/token) value can be written. With this off, secret writes are rejected while non-secret edits still work. Keep off unless deliberately rotating credentials."
-    },
     "connect_wizard_url": {
       "label": "Connect Wizard"
     }
   },
   "config_categories": {
-    "query_permissions": "Query Permissions",
-    "control_permissions": "Control Permissions",
-    "edit_permissions": "Edit Permissions",
-    "delete_permissions": "Delete Permissions",
+    "policy": "Permissions & confirmations",
     "mcp_resources": "MCP Resources",
-    "mcp_config": "Config",
-    "dynamic_api": "Unified MA API"
+    "mcp_config": "Config"
   },
   "setup_flow": {
     "connect": {

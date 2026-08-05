@@ -109,6 +109,9 @@ async def health(
     buffer: EventBuffer | None,
     logs_enabled: bool,
     dynamic_diagnostics_provider: Callable[[], Mapping[str, Any]] | None = None,
+    policy_schema_version: int = 2,
+    policy_profile: str = "Read-only",
+    token_resolution_failures: int = 0,
 ) -> HealthSummary:
     """Roll up provider, queue, event, and permitted log diagnostics."""
     providers = list(getattr(mass, "providers", []))
@@ -171,6 +174,10 @@ async def health(
             if dynamic_diagnostics_provider is not None
             else None
         ),
+        policy_schema_version=policy_schema_version,
+        policy_profile=policy_profile,
+        token_resolution_failures=token_resolution_failures,
+        event_buffer_active=stats is not None and stats.subscribed_since is not None,
     )
 
 

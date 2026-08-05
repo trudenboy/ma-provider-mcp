@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from music_assistant.models.setup_flow import SetupFlowError
 
@@ -15,12 +15,12 @@ from .constants import (
     CONF_TRUST_FORWARDED_PROTO,
     DEFAULT_MOUNT_PATH,
 )
-from .tags import CONFIG_TO_TAG
+from .tags import enabled_tags
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from music_assistant_models.config_entries import ConfigValueType
+    from music_assistant_models.config_entries import ConfigValueType, ProviderConfig
 
     from music_assistant.models.setup_flow import SetupSession
 
@@ -39,7 +39,7 @@ async def run_setup(session: SetupSession) -> None:
             session.mass,
             mount_path,
             enabled_tags_provider=lambda: [
-                str(tag) for key, tag in CONFIG_TO_TAG.items() if values.get(key)
+                str(tag) for tag in enabled_tags(cast("ProviderConfig", _ValuesConfig(values)))
             ],
             extra_origins_csv=str(values.get(CONF_EXTRA_ALLOWED_ORIGINS) or ""),
             trust_forwarded_proto=bool(values.get(CONF_TRUST_FORWARDED_PROTO)),
@@ -65,3 +65,14 @@ def _effective_values(session: SetupSession) -> dict[str, ConfigValueType]:
     values = {entry.key: entry.default_value for entry in entries}
     values.update(session.context.values)
     return values
+
+
+class _ValuesConfig:
+    """Minimal ProviderConfig-compatible view over setup-flow values."""
+
+    def __init__(self, values: dict[str, ConfigValueType]) -> None:
+        self._values = values
+
+    def get_value(self, key: str, default: ConfigValueType = None) -> ConfigValueType:
+        """Return one setup value or its caller-supplied default."""
+        return self._values.get(key, default)
