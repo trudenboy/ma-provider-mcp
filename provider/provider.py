@@ -45,7 +45,7 @@ class MCPServerProvider(PluginProvider):  # type: ignore[misc, unused-ignore]
             self.mass, str(self.get_config_value(CONF_MOUNT_PATH, DEFAULT_MOUNT_PATH))
         )
 
-    async def handle_config_action(self, action: str) -> tuple[ConfigEntry, ...]:
+    async def handle_config_action(self, action: str) -> tuple[ConfigEntry, ...] | None:
         """Handle a one-shot config action button press and re-render the entries."""
         if action == "open_connect":
             from ._init_helpers import _dispatch_open_connect  # noqa: PLC0415
