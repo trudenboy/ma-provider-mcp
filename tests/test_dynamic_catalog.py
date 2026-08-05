@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import inspect
+import json
 import sys
 from dataclasses import dataclass, replace
 from enum import StrEnum
@@ -423,6 +424,44 @@ async def test_persistent_catalog_churn_stops_after_three_attempts(
     assert str(exc_info.value) == "catalog changed during discovery; retry without a cursor"
     assert adapter.visible_calls == adapter.snapshot_calls == 3
     assert sleep.await_args_list == [call(0), call(0)]
+
+
+async def test_persistent_catalog_churn_has_consistent_tool_and_resource_guidance() -> None:
+    """Both public discovery routes tell clients to restart after live catalog churn."""
+
+    class _ChurningAdapter(_SnapshotAdapter):
+        def __init__(self) -> None:
+            super().__init__(_catalog_snapshot())
+            self.calls = 0
+
+        async def visible_catalog(self) -> CatalogView:
+            """Expose a catalog generation that changes before its snapshot is read."""
+            self.calls += 1
+            fingerprint = (1, "visible", (("music/search", self.calls),))
+            return CatalogView(fingerprint, self.snapshot.entries)
+
+        async def base_snapshot(self) -> CatalogSnapshot:
+            """Expose the next generation, modelling persistent registry churn."""
+            fingerprint = (1, "snapshot", (("music/search", self.calls),))
+            return CatalogSnapshot(fingerprint, self.snapshot.entries)
+
+    mcp: FastMCP = FastMCP(name="catalog-churn-test")
+    register_meta_discovery(
+        mcp,
+        allowed_tags_provider=set,
+        lookup_component_tags=build_tag_lookup(mcp),
+        dynamic_adapter=_ChurningAdapter(),
+    )
+
+    async with Client(mcp) as client:
+        with pytest.raises(ToolError) as tool_error:
+            await client.call_tool("search_tools", {"query": "music"})
+        with pytest.raises(McpError) as resource_error:
+            await client.read_resource("catalog://commands?limit=2")
+
+    for error in (tool_error.value, resource_error.value):
+        assert "catalog_changed" in str(error)
+        assert "retry without a cursor" in str(error)
 
 
 async def test_parallel_searches_contend_for_one_awaitable_index_build(
@@ -1105,6 +1144,176 @@ def test_large_search_envelope_keeps_mapping_shape_within_byte_budget() -> None:
     assert result["bytes"] <= 12_288
 
 
+def test_byte_fitting_balances_equal_sibling_lists_by_original_policy() -> None:
+    """Equal sibling lists lose suffix rows in traversal order, one row at a time."""
+    payload = {
+        "first": [f"a{index}:" + ("x" * 930) for index in range(10)],
+        "second": [f"b{index}:" + ("y" * 930) for index in range(10)],
+    }
+
+    result = DynamicAPIAdapter._bounded_envelope(
+        "ma_api:test",
+        payload,
+        response_mode="compact",
+        fields=None,
+        max_items=None,
+    )
+
+    assert result["data"] == {
+        "first": payload["first"][:6],
+        "second": payload["second"][:6],
+    }
+    assert result["truncated"] is True
+    assert result["returned_count"] == 1
+    assert result["bytes"] == DynamicAPIAdapter._encoded_size(result)
+    assert result["bytes"] <= 12_288
+
+
+def test_byte_fitting_measures_trials_with_truncation_metadata() -> None:
+    """The first fitting logical removal is retained at a one-byte boundary."""
+    envelope = {
+        "command": "ma_api:test",
+        "data": ["x", "x"],
+        "truncated": False,
+        "returned_count": 2,
+        "bytes": 0,
+        "applied": {"mode": "compact", "fields": [], "max_items": 25},
+    }
+
+    DynamicAPIAdapter._fit_bytes(envelope, 142)
+
+    assert envelope["data"] == ["x"]
+    assert envelope["returned_count"] == 1
+    assert envelope["truncated"] is True
+
+
+def test_nested_sibling_response_uses_logarithmic_byte_fitting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Many one-row nested siblings do not trigger a full encoding per removal."""
+    payload = {
+        f"group-{index:03}": [{"items": [f"row-{index}:" + ("x" * 500)]}] for index in range(200)
+    }
+    encoded_size = DynamicAPIAdapter._encoded_size
+    measurements = 0
+
+    def counted_size(value: Any) -> int:
+        nonlocal measurements
+        measurements += 1
+        return int(encoded_size(value))
+
+    monkeypatch.setattr(DynamicAPIAdapter, "_encoded_size", staticmethod(counted_size))
+
+    result = DynamicAPIAdapter._bounded_envelope(
+        "ma_api:test",
+        payload,
+        response_mode="full",
+        fields=None,
+        max_items=None,
+    )
+
+    remaining = [index for index, group in enumerate(result["data"].values()) if group]
+    assert remaining == list(range(81, 200))
+    assert list(result["data"]) == list(payload)
+    assert result["truncated"] is True
+    assert result["returned_count"] == 1
+    assert result["bytes"] == encoded_size(result)
+    assert result["bytes"] <= 65_536
+    assert measurements <= 16
+
+
+def test_large_top_level_response_uses_logarithmic_byte_fitting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A large bounded response does not serialize once per removed row."""
+    payload = [f"row-{index}:" + ("x" * 3000) for index in range(200)]
+    encoded_size = DynamicAPIAdapter._encoded_size
+    measurements = 0
+
+    def counted_size(value: Any) -> int:
+        nonlocal measurements
+        measurements += 1
+        return int(encoded_size(value))
+
+    monkeypatch.setattr(DynamicAPIAdapter, "_encoded_size", staticmethod(counted_size))
+
+    result = DynamicAPIAdapter._bounded_envelope(
+        "ma_api:test",
+        payload,
+        response_mode="full",
+        fields=None,
+        max_items=None,
+    )
+
+    assert result["bytes"] <= 65_536
+    assert result["data"]
+    assert result["data"] == payload[: len(result["data"])]
+    assert result["returned_count"] == len(result["data"])
+    assert result["truncated"] is True
+    assert result["bytes"] == encoded_size(result)
+    assert measurements <= 16
+
+
+@pytest.mark.parametrize(
+    ("response_mode", "field_width", "byte_cap"),
+    [("compact", 20_000, 12_288), ("full", 100_000, 65_536)],
+)
+def test_oversized_echoed_fields_use_a_bounded_shape_preserving_fallback(
+    response_mode: str,
+    field_width: int,
+    byte_cap: int,
+) -> None:
+    """Oversized optional metadata cannot make a success envelope exceed its cap."""
+    result = DynamicAPIAdapter._bounded_envelope(
+        "ma_api:test",
+        ["kept"],
+        response_mode=response_mode,
+        fields=["f" * field_width],
+        max_items=None,
+    )
+
+    assert result["data"] == []
+    assert result["applied"]["fields"] == []
+    assert "total_count" not in result
+    assert result["returned_count"] == 0
+    assert result["truncated"] is True
+    assert result["bytes"] == DynamicAPIAdapter._encoded_size(result)
+    assert result["bytes"] <= byte_cap
+
+
+def test_oversized_mapping_without_lists_uses_empty_mapping_fallback() -> None:
+    """A response with no reducible list retains its top-level JSON container type."""
+    payload = {f"key-{index}": "x" * 3_000 for index in range(10)}
+
+    result = DynamicAPIAdapter._bounded_envelope(
+        "ma_api:test",
+        payload,
+        response_mode="compact",
+        fields=None,
+        max_items=None,
+    )
+
+    assert result["data"] == {}
+    assert result["returned_count"] == 1
+    assert result["truncated"] is True
+    assert result["bytes"] == DynamicAPIAdapter._encoded_size(result)
+    assert result["bytes"] <= 12_288
+
+
+def test_unshrinkable_envelope_metadata_raises_short_tool_error() -> None:
+    """Required metadata that cannot fit is reported as an error, never as success."""
+    with pytest.raises(ToolError, match="Response exceeds the compact byte budget") as error:
+        DynamicAPIAdapter._bounded_envelope(
+            "x" * 20_000,
+            None,
+            response_mode="compact",
+            fields=None,
+            max_items=None,
+        )
+
+    assert len(str(error.value).encode()) < 200
+
+
 async def test_registry_incompatibility_is_reported_without_breaking_catalog() -> None:
     """Structural MA drift is isolated and leaves actionable diagnostics."""
 
@@ -1122,6 +1331,55 @@ async def test_registry_incompatibility_is_reported_without_breaking_catalog() -
     adapter.mass.command_handlers = []
     assert await adapter.visible_entries() == []
     assert adapter.diagnostics()["last_error"] == "mass.command_handlers is not a mapping"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "auth/future_dangerous_command",
+        "dashboard/register",
+        "dashboard/unregister",
+    ],
+)
+async def test_denied_handlers_are_omitted_from_dynamic_health_diagnostics(command: str) -> None:
+    """Intentional denylist exclusions do not look like MA compatibility failures."""
+
+    async def operation() -> None:
+        return None
+
+    adapter = _real_adapter(_handler(command, operation, scope="admin"))
+    adapter.mass.command_handlers["broken"] = SimpleNamespace(target=None)
+
+    assert await adapter.visible_entries() == []
+    assert adapter.diagnostics()["incompatible_handlers"] == ("broken",)
+    assert adapter.diagnostics()["last_error"] == "1 incompatible handler(s) skipped"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "auth/future_dangerous_command",
+        "dashboard/register",
+        "dashboard/unregister",
+    ],
+)
+async def test_denied_handlers_stay_denied_when_reauthorized(command: str) -> None:
+    """A cached entry cannot make an intentionally denied handler executable."""
+
+    async def operation() -> None:
+        return None
+
+    adapter = _real_adapter(_handler("music/read", operation), policy=DynamicPolicy(system=True))
+    entry = (await adapter.visible_entries())[0]
+    handler = _handler(command, operation, scope="admin")
+    adapter.mass.command_handlers = {command: handler}
+    stale_entry = replace(entry, name=f"ma_api:{command}", command=command, handler=handler)
+
+    with pytest.raises(ToolError, match="not found or not permitted"):
+        adapter._reauthorize_entry(
+            stale_entry,
+            (AccessToken(token="secret", client_id="u1", scopes=[]), MagicMock()),
+        )
 
 
 async def test_execution_sets_and_restores_ma_auth_context(
@@ -1223,6 +1481,59 @@ async def test_disabled_user_and_transport_commands_are_hidden() -> None:
     assert await adapter.visible_entries() == []
     transport = _real_adapter(_handler("dashboard/register", operation))
     assert await transport.visible_entries() == []
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "auth/token/create",
+        "auth/token/revoke",
+        "auth/tokens",
+        "auth/user/create",
+        "auth/join_codes",
+        "auth/future_dangerous_command",
+    ],
+)
+async def test_auth_command_prefix_is_never_discoverable(command: str) -> None:
+    """System access cannot expose current or future authentication commands."""
+
+    async def operation() -> None:
+        return None
+
+    handler = _handler(command, operation, scope="admin")
+    adapter = _real_adapter(handler, policy=DynamicPolicy(system=True))
+
+    assert await adapter.visible_entries() == []
+    assert await adapter.get_visible_entry(f"ma_api:{command}") is None
+
+
+async def test_denied_auth_command_cannot_be_called_directly() -> None:
+    """A cached auth command name cannot bypass catalog compilation."""
+    called = False
+
+    async def mint_token() -> str:
+        nonlocal called
+        called = True
+        return "full-scope-token"
+
+    adapter = _real_adapter(
+        _handler("auth/token/create", mint_token, scope="admin"),
+        policy=DynamicPolicy(system=True),
+    )
+    ctx = SimpleNamespace(
+        elicit=AsyncMock(return_value=SimpleNamespace(action="accept", data=True))
+    )
+
+    with pytest.raises(ToolError, match="not found or not permitted"):
+        await adapter.call(
+            "ma_api:auth/token/create",
+            {},
+            response_mode="compact",
+            fields=None,
+            max_items=None,
+            ctx=cast("Context", ctx),
+        )
+    assert called is False
 
 
 async def test_native_command_requires_its_live_permission_tag() -> None:
@@ -1832,6 +2143,91 @@ async def test_secret_tag_revoked_during_confirmation_prevents_config_execution(
             ctx=MagicMock(),
         )
     assert called is False
+
+
+@pytest.mark.parametrize(
+    ("command", "arguments", "getter_name", "getter_arguments"),
+    [
+        (
+            "config/providers/get_value",
+            {"instance_id": "demo--1", "key": "token"},
+            "get_provider_config_entries",
+            ("demo--1",),
+        ),
+        (
+            "config/core/get_value",
+            {"domain": "webserver", "key": "token"},
+            "get_core_config_entries",
+            ("webserver",),
+        ),
+        (
+            "config/players/get_value",
+            {"player_id": "kitchen", "key": "token"},
+            "get_player_config_entries",
+            ("kitchen",),
+        ),
+    ],
+)
+async def test_secure_config_value_is_reclassified_after_confirmation_before_serialization(
+    command: str,
+    arguments: dict[str, str],
+    getter_name: str,
+    getter_arguments: tuple[str, ...],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The refreshed config schema controls whether a native result is serialized masked."""
+    _bypass_ma_argument_parser(monkeypatch)
+    raw_secret = "super-secret-encrypted-token"
+    confirmed = False
+
+    async def get_value(
+        key: str,
+        instance_id: str | None = None,
+        domain: str | None = None,
+        player_id: str | None = None,
+    ) -> str:
+        assert {"instance_id": instance_id, "domain": domain, "player_id": player_id} == {
+            "instance_id": arguments.get("instance_id"),
+            "domain": arguments.get("domain"),
+            "player_id": arguments.get("player_id"),
+        }
+        assert key == "token"
+        return raw_secret
+
+    adapter = _real_adapter(
+        _handler(command, get_value, "config.read"),
+        allowed_tags={str(Tag.CONFIG_READ)},
+    )
+    schema_getter = AsyncMock(
+        side_effect=lambda *_args: [
+            ConfigEntry(
+                key="token",
+                type=(ConfigEntryType.SECURE_STRING if confirmed else ConfigEntryType.STRING),
+                label="Token",
+            )
+        ]
+    )
+    setattr(adapter.mass.config, getter_name, schema_getter)
+
+    async def confirm(*_args: Any, **_kwargs: Any) -> None:
+        nonlocal confirmed
+        confirmed = True
+
+    monkeypatch.setattr(adapter, "_confirm", AsyncMock(side_effect=confirm))
+
+    result = await adapter.call(
+        f"ma_api:{command}",
+        arguments,
+        response_mode="full",
+        fields=None,
+        max_items=None,
+        ctx=MagicMock(),
+    )
+
+    assert result["data"] == "this_value_is_encrypted"
+    assert raw_secret not in json.dumps(result)
+    assert schema_getter.await_count == 2
+    schema_getter.assert_has_awaits([call(*getter_arguments), call(*getter_arguments)])
 
 
 async def test_flow_category_revoked_during_confirmation_prevents_execution(

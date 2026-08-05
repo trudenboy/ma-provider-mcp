@@ -3,18 +3,22 @@
 from __future__ import annotations
 
 import inspect
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
 from fastmcp.exceptions import ToolError
+from music_assistant_models.constants import SECURE_STRING_SUBSTITUTE
+from music_assistant_models.enums import ConfigEntryType
 
 from .config_io.secret_handler import gate_secret_writes
 from .tags import Tag
 
 if TYPE_CHECKING:
     from .command_profiles import CommandProfile
+
+type ResultProjector = Callable[[Any], Any]
 
 
 class DynamicRisk(StrEnum):
@@ -251,7 +255,14 @@ def resolve_command_policy(
         else Confirmation.NEVER
     )
     preflight = (
-        "config_secret_write"
+        "config_secret_read"
+        if command
+        in {
+            "config/providers/get_value",
+            "config/core/get_value",
+            "config/players/get_value",
+        }
+        else "config_secret_write"
         if command
         in {
             "config/providers/save",
@@ -274,7 +285,7 @@ async def preflight_command(
     decision: CommandDecision,
     arguments: Mapping[str, Any],
     allowed_tags: set[str],
-) -> None:
+) -> ResultProjector | None:
     """
     Enforce request-dependent guards before confirmation and execution.
 
@@ -283,10 +294,12 @@ async def preflight_command(
     :param arguments: Strictly parsed command arguments.
     :param allowed_tags: Current provider permission tags.
     """
+    if decision.preflight == "config_secret_read":
+        return await _config_value_projector(mass, arguments)
     if decision.preflight == "config_secret_write":
         values = arguments.get("values")
         if not isinstance(values, Mapping):
-            return
+            return None
         getter_name, target = _config_entries_target(arguments)
         entries = getattr(mass.config, getter_name)(target)
         if inspect.isawaitable(entries):
@@ -298,6 +311,7 @@ async def preflight_command(
         )
     elif decision.preflight == "config_flow_submit":
         await _preflight_setup_flow_submit(mass, arguments, allowed_tags)
+    return None
 
 
 def command_tags_visible(decision: CommandDecision, allowed_tags: set[str]) -> bool:
@@ -398,6 +412,35 @@ def _config_entries_target(arguments: Mapping[str, Any]) -> tuple[str, str]:
     if "player_id" in arguments:
         return "get_player_config_entries", str(arguments["player_id"])
     raise ValueError("Config save arguments do not identify a target")
+
+
+async def _config_value_projector(
+    mass: Any,
+    arguments: Mapping[str, Any],
+) -> ResultProjector | None:
+    """Classify one live config value and mask it when its schema is secure."""
+    key = arguments.get("key")
+    if not isinstance(key, str) or not key:
+        raise ToolError("Unable to classify config value")
+    try:
+        if isinstance(instance_id := arguments.get("instance_id"), str) and instance_id:
+            entries = mass.config.get_provider_config_entries(instance_id)
+        elif isinstance(domain := arguments.get("domain"), str) and domain:
+            entries = mass.config.get_core_config_entries(domain)
+        elif isinstance(player_id := arguments.get("player_id"), str) and player_id:
+            entries = mass.config.get_player_config_entries(player_id)
+        else:
+            raise ValueError("Config value arguments do not identify a target")
+        if inspect.isawaitable(entries):
+            entries = await entries
+        entry = next((entry for entry in entries if entry.key == key), None)
+    except Exception as exc:
+        raise ToolError("Unable to classify config value") from exc
+    if entry is None:
+        raise ToolError("Unable to classify config value")
+    if entry.type is not ConfigEntryType.SECURE_STRING:
+        return None
+    return lambda result: None if result is None else SECURE_STRING_SUBSTITUTE
 
 
 async def _preflight_setup_flow_submit(
