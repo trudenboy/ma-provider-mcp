@@ -2,7 +2,7 @@
 id: "0027"
 title: "Token-aware permissions and per-call confirmations"
 size: L
-status: inprogress
+status: done
 priority: P0
 effort_minutes: 240
 feature_id:
