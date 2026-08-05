@@ -579,10 +579,12 @@ async def test_policy_revoked_during_preflight_is_rechecked_before_confirmation(
             config__write__secret=PolicyMode.ALLOW,
         )
     }
+    records: list[Any] = []
     adapter = _adapter(
         [_handler("config/providers/save", save, "config.providers.write")],
         current_token=[token],
         policies=policies,
+        audit_sink=records.append,
     )
 
     inspections = 0
@@ -609,6 +611,9 @@ async def test_policy_revoked_during_preflight_is_rechecked_before_confirmation(
             ctx=MagicMock(),
         )
     assert called is False
+    assert len(records) == 1
+    assert records[0].capability == str(Tag.CONFIG_WRITE_SECRET)
+    assert records[0].mode == "deny"
 
 
 async def test_secure_category_changed_during_final_auth_is_recomputed_and_audited() -> None:
@@ -762,7 +767,7 @@ async def test_auth_revoked_during_final_preflight_blocks_handler_execution() ->
     async def inspect_then_revoke_auth(_target: str) -> list[ConfigEntry]:
         nonlocal inspections
         inspections += 1
-        if inspections == 2:
+        if inspections == 3:
             adapter.mass.webserver.auth.authenticate_with_token = AsyncMock(return_value=None)
         return [ConfigEntry(key="token", type=ConfigEntryType.SECURE_STRING, label="Token")]
 
@@ -823,7 +828,7 @@ async def test_exact_identity_revoked_during_final_preflight_blocks_execution(
     async def inspect_then_revoke_identity(_target: str) -> list[ConfigEntry]:
         nonlocal inspections
         inspections += 1
-        if inspections == 2:
+        if inspections == 3:
             if revoked == "token_identity":
                 adapter.mass.webserver.auth.get_token_id_from_token = AsyncMock(
                     return_value="replacement"
@@ -1284,6 +1289,7 @@ async def test_flow_abort_requires_its_exact_category(
         called = True
 
     token = AccessToken(token="abort", client_id="id-abort", scopes=[])
+    records: list[Any] = []
     adapter = _adapter(
         [_handler("config/flows/abort", abort, "config.providers.write")],
         current_token=[token],
@@ -1293,6 +1299,7 @@ async def test_flow_abort_requires_its_exact_category(
                 {allowed_capability: PolicyMode.ALLOW},
             )
         },
+        audit_sink=records.append,
     )
     adapter.mass.config.get_setup_flow_required_scope = lambda _flow_id: flow_scope
 
@@ -1306,6 +1313,9 @@ async def test_flow_abort_requires_its_exact_category(
             ctx=MagicMock(),
         )
     assert called is False
+    assert len(records) == 1
+    assert records[0].capability == str(denied_capability)
+    assert records[0].mode == "deny"
 
 
 async def test_auth_off_uses_global_default_for_discovery_schema_and_execution() -> None:

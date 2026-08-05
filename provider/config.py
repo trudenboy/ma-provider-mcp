@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from collections.abc import Iterable
+import re
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -108,11 +109,56 @@ def policy_event_buffer_enabled(
     *,
     active_token_ids: Iterable[str] = (),
 ) -> bool:
-    """Return whether any configured resolvable policy can expose debug events."""
+    """
+    Return whether any configured policy can expose debug events.
+
+    Event retention is a conservative boolean decision, not request
+    authorization. Scan hashed token selectors already present in raw provider
+    config so activation never depends on which settings user happens to be
+    current during startup.
+    """
     resolver = build_policy_resolver(config, active_token_ids=active_token_ids)
     snapshots = [resolver.resolve(None)]
     snapshots.extend(resolver.resolve(token_id) for token_id in resolver.overrides)
-    return any(snapshot.mode(Tag.DEBUG_EVENTS) is not PolicyMode.DENY for snapshot in snapshots)
+    if any(snapshot.mode(Tag.DEBUG_EVENTS) is not PolicyMode.DENY for snapshot in snapshots):
+        return True
+
+    raw = _raw_config_values(config)
+    selector = re.compile(rf"^{re.escape(TOKEN_POLICY_KEY_PREFIX)}([0-9a-f]{{64}})$")
+    for key, value in raw.items():
+        match = selector.fullmatch(key)
+        if match is None:
+            continue
+        if value == INHERIT_POLICY:
+            continue
+        try:
+            profile = PolicyProfile(str(value))
+        except ValueError:
+            continue
+        if profile is PolicyProfile.CUSTOM:
+            mode_key = f"{TOKEN_POLICY_KEY_PREFIX}debug_events_{match.group(1)}"
+            try:
+                mode = PolicyMode(str(raw.get(mode_key, PolicyMode.DENY)))
+            except ValueError:
+                mode = PolicyMode.DENY
+        else:
+            from .policy import policy_snapshot  # noqa: PLC0415
+
+            mode = policy_snapshot(profile).mode(Tag.DEBUG_EVENTS)
+        if mode is not PolicyMode.DENY:
+            return True
+    return False
+
+
+def _raw_config_values(config: ProviderConfig) -> dict[str, Any]:
+    """Return context-free provider values without decrypting or user discovery."""
+    entries = getattr(config, "values", None)
+    if isinstance(entries, Mapping):
+        return {str(key): getattr(entry, "value", entry) for key, entry in entries.items()}
+    test_values = getattr(config, "_values", None)
+    if isinstance(test_values, Mapping):
+        return {str(key): value for key, value in test_values.items()}
+    return {}
 
 
 def build_config_entries(

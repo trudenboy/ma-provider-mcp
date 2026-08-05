@@ -227,21 +227,15 @@ async def test_restart_does_not_duplicate_event_subscription(
 async def test_auto_discovered_debug_override_activates_buffer_before_authentication(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Configured MCP-token overrides retain events from provider startup."""
+    """Hashed configured overrides retain events without a settings-user lookup."""
     mass = _LifecycleMass()
     token_id = "auto-token-id"
     mass.webserver = MagicMock()
     mass.webserver.auth.get_current_user_info = AsyncMock(
-        return_value=SimpleNamespace(user_id="user-1")
+        side_effect=AssertionError("startup must not depend on a current settings user")
     )
     mass.webserver.auth.get_user_tokens = AsyncMock(
-        return_value=[
-            SimpleNamespace(
-                user_id="user-1",
-                token_id=token_id,
-                name="MCP — desktop",
-            )
-        ]
+        side_effect=AssertionError("startup must not enumerate user tokens")
     )
     values = {
         CONF_DEFAULT_POLICY: "Read-only",
@@ -251,6 +245,7 @@ async def test_auto_discovered_debug_override_activates_buffer_before_authentica
     }
     config = MagicMock()
     config.get_value.side_effect = lambda key, default=None: values.get(key, default)
+    config.values = {key: SimpleNamespace(value=value) for key, value in values.items()}
     provider = _provider(mass, config)
 
     class Runtime:
@@ -267,6 +262,8 @@ async def test_auto_discovered_debug_override_activates_buffer_before_authentica
     await provider.handle_async_init()
 
     assert mass.subscribe.call_count == 1
+    mass.webserver.auth.get_current_user_info.assert_not_awaited()
+    mass.webserver.auth.get_user_tokens.assert_not_awaited()
     await provider.unload()
 
 

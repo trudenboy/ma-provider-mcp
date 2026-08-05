@@ -435,6 +435,41 @@ async def preflight_command(
     return CommandPreflight()
 
 
+def revalidate_preflight_command_sync(
+    mass: Any,
+    decision: CommandDecision,
+    arguments: Mapping[str, Any],
+    preflight: CommandPreflight,
+) -> CommandPreflight:
+    """
+    Reclassify request-dependent state synchronously after final authentication.
+
+    A live getter that only returns an awaitable cannot prove that its earlier
+    result survived the final authentication await. Such cases are classified
+    conservatively: reads remain masked and writes require the secret
+    capability. Setup-flow category is required to have a synchronous proof.
+    """
+    if decision.preflight == "config_secret_read":
+        secure = _config_value_is_secure_sync(mass, arguments)
+        return CommandPreflight(secure_config_value=True if secure is None else secure)
+    if decision.preflight == "config_secret_write":
+        values = arguments.get("values")
+        if not isinstance(values, Mapping):
+            return CommandPreflight()
+        entries = _config_entries_sync(mass, arguments)
+        requires_secret = entries is None or any(is_secret_key(entries, str(key)) for key in values)
+        return CommandPreflight(
+            additional_required=(
+                frozenset({str(Tag.CONFIG_WRITE_SECRET)}) if requires_secret else frozenset()
+            )
+        )
+    if decision.preflight == "config_flow_submit":
+        return _revalidate_setup_flow_submit_sync(mass, arguments)
+    if decision.preflight == "config_flow_abort":
+        return _revalidate_setup_flow_abort_sync(mass, arguments)
+    return preflight
+
+
 async def postflight_command(
     mass: Any,
     decision: CommandDecision,
@@ -546,6 +581,53 @@ def _config_entries_target(arguments: Mapping[str, Any]) -> tuple[str, str]:
     raise ValueError("Config save arguments do not identify a target")
 
 
+def _close_awaitable(value: Any) -> None:
+    """Dispose an unawaited coroutine created only to test synchronous proof."""
+    close = getattr(value, "close", None)
+    if callable(close):
+        close()
+
+
+def _config_entries_sync(mass: Any, arguments: Mapping[str, Any]) -> Any | None:
+    """Return live config entries only when the getter can prove state synchronously."""
+    try:
+        getter_name, target = _config_entries_target(arguments)
+        entries = getattr(mass.config, getter_name)(target)
+    except Exception:
+        return None
+    if inspect.isawaitable(entries):
+        _close_awaitable(entries)
+        return None
+    return entries
+
+
+def _config_value_is_secure_sync(
+    mass: Any,
+    arguments: Mapping[str, Any],
+) -> bool | None:
+    """Classify one value without awaiting, or return unknown for fail-closed masking."""
+    key = arguments.get("key")
+    if not isinstance(key, str) or not key:
+        return None
+    entries = _config_entries_sync(mass, arguments)
+    if entries is None:
+        return None
+    try:
+        entry = next((entry for entry in entries if entry.key == key), None)
+        if entry is None:
+            return None
+        entry_type = ConfigEntryType(entry.type)
+    except TypeError, ValueError:
+        return None
+    return (
+        True
+        if entry_type is ConfigEntryType.SECURE_STRING
+        else None
+        if entry_type is ConfigEntryType.UNKNOWN
+        else False
+    )
+
+
 async def _config_value_is_secure(
     mass: Any,
     arguments: Mapping[str, Any],
@@ -611,6 +693,73 @@ async def _preflight_setup_flow_submit(
     if any(is_secret_key(entries, str(key)) for key in values):
         required.add(str(Tag.CONFIG_WRITE_SECRET))
     return CommandPreflight(additional_required=frozenset(required))
+
+
+def _setup_flow_scope_sync(mass: Any, flow_id: str) -> Any:
+    """Return a live setup-flow scope only when it is synchronously provable."""
+    getter = getattr(mass.config, "get_setup_flow_required_scope", None)
+    if not callable(getter):
+        raise ToolError("Unable to authorize setup flow")
+    scope = getter(flow_id)
+    if inspect.isawaitable(scope):
+        _close_awaitable(scope)
+        raise ToolError("Unable to synchronously authorize setup flow")
+    return scope
+
+
+def _setup_flow_step_sync(mass: Any, flow_id: str) -> Any | None:
+    """Read a current step synchronously, including MA's in-memory flow registry."""
+    getter = getattr(mass.config, "get_setup_flow", None)
+    if callable(getter):
+        try:
+            step = getter(flow_id)
+        except Exception:
+            step = None
+        if inspect.isawaitable(step):
+            _close_awaitable(step)
+        elif step is not None:
+            return step
+    flows = getattr(mass.config, "_setup_flows", None)
+    if isinstance(flows, Mapping) and (flow := flows.get(flow_id)) is not None:
+        session = getattr(flow, "session", None)
+        return getattr(session, "current_step", None)
+    return None
+
+
+def _revalidate_setup_flow_submit_sync(
+    mass: Any,
+    arguments: Mapping[str, Any],
+) -> CommandPreflight:
+    """Seal live flow category synchronously and conservatively classify secrets."""
+    flow_id = arguments.get("flow_id")
+    values = arguments.get("values")
+    if not isinstance(flow_id, str) or not flow_id or not isinstance(values, Mapping):
+        raise ToolError("Invalid setup flow submission")
+    required_tag = _setup_flow_write_tag(_setup_flow_scope_sync(mass, flow_id))
+    if required_tag is None:
+        raise ToolError("Unknown setup flow or unsupported setup flow scope")
+    required = {str(required_tag)}
+    step = _setup_flow_step_sync(mass, flow_id)
+    entries = getattr(step, "entries", None) if step is not None else None
+    if not isinstance(entries, list | tuple) or any(
+        is_secret_key(entries, str(key)) for key in values
+    ):
+        required.add(str(Tag.CONFIG_WRITE_SECRET))
+    return CommandPreflight(additional_required=frozenset(required))
+
+
+def _revalidate_setup_flow_abort_sync(
+    mass: Any,
+    arguments: Mapping[str, Any],
+) -> CommandPreflight:
+    """Seal the exact live category of one flow abort synchronously."""
+    flow_id = arguments.get("flow_id")
+    if not isinstance(flow_id, str) or not flow_id:
+        raise ToolError("Invalid setup flow abort")
+    required_tag = _setup_flow_write_tag(_setup_flow_scope_sync(mass, flow_id))
+    if required_tag is None:
+        raise ToolError("Unknown setup flow or unsupported setup flow scope")
+    return CommandPreflight(additional_required=frozenset({str(required_tag)}))
 
 
 async def _preflight_setup_flow_abort(

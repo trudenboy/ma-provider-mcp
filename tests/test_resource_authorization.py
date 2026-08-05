@@ -112,6 +112,77 @@ async def test_resource_authorization_rejects_changed_exact_token_identity_once(
     assert audits[0].outcome == "authorization.denied"
 
 
+async def test_resource_policy_allow_to_deny_during_auth_uses_live_denial() -> None:
+    """The request policy is resolved only after all authentication awaits."""
+    user = _user()
+    policies = [
+        _policy(**{str(Tag.QUERY_PLAYERS): PolicyMode.ALLOW}),
+    ]
+    bearer = AccessToken(token="bearer", client_id="token-id", scopes=[])
+    identities = TokenIdentityRegistry()
+    identities.bind("bearer", user_id="user-1", token_id="token-id")
+
+    async def authenticate_then_revoke(_bearer: str) -> Any:
+        policies[0] = _policy(**{str(Tag.QUERY_PLAYERS): PolicyMode.DENY})
+        return user
+
+    audits: list[AuditRecord] = []
+    authorizer = ResourceAuthorizer(
+        SimpleNamespace(
+            webserver=SimpleNamespace(
+                auth=SimpleNamespace(
+                    authenticate_with_token=authenticate_then_revoke,
+                    get_token_id_from_token=AsyncMock(return_value="token-id"),
+                )
+            )
+        ),
+        auth_required_provider=lambda: True,
+        token_provider=lambda: bearer,
+        identity_provider=identities.lookup,
+        policy_provider=lambda _token: policies[0],
+        default_policy_provider=lambda: _policy(),
+        scope_checker=lambda _user, _scope: True,
+        audit_sink=audits.append,
+    )
+
+    with pytest.raises(ResourceError, match="request policy"):
+        await authorizer.authorize("player://player-1", {str(Tag.QUERY_PLAYERS)})
+    assert len(audits) == 1
+    assert audits[0].mode == "deny"
+
+
+async def test_resource_user_disabled_during_token_id_lookup_is_denied() -> None:
+    """Enabled-user state is synchronously sealed after the final identity await."""
+    user = _user()
+    bearer = AccessToken(token="bearer", client_id="token-id", scopes=[])
+    identities = TokenIdentityRegistry()
+    identities.bind("bearer", user_id="user-1", token_id="token-id")
+
+    async def lookup_then_disable(_bearer: str) -> str:
+        user.enabled = False
+        return "token-id"
+
+    authorizer = ResourceAuthorizer(
+        SimpleNamespace(
+            webserver=SimpleNamespace(
+                auth=SimpleNamespace(
+                    authenticate_with_token=AsyncMock(return_value=user),
+                    get_token_id_from_token=lookup_then_disable,
+                )
+            )
+        ),
+        auth_required_provider=lambda: True,
+        token_provider=lambda: bearer,
+        identity_provider=identities.lookup,
+        policy_provider=lambda _token: _policy(**{str(Tag.QUERY_PLAYERS): PolicyMode.ALLOW}),
+        default_policy_provider=lambda: _policy(),
+        scope_checker=lambda _user, _scope: True,
+    )
+
+    with pytest.raises(ResourceError, match="Authentication is required"):
+        await authorizer.authorize("player://player-1", {str(Tag.QUERY_PLAYERS)})
+
+
 async def test_unknown_resource_denial_uses_fixed_redacted_audit_fields() -> None:
     """Caller-controlled URI values never enter the resource audit boundary."""
     audits: list[AuditRecord] = []

@@ -908,6 +908,34 @@ def test_authenticated_discovered_token_policy_activates_event_buffer() -> None:
     assert mass.unsubscribed == 0
 
 
+def test_hashed_token_override_hot_update_activates_event_buffer_without_identity() -> None:
+    """A raw auto-token override starts retention on the config hot-update itself."""
+    mass = CommandRegistry()
+    token_id = "never-authenticated-token-id"
+
+    def configured(debug_mode: str | None) -> MagicMock:
+        values = {
+            CONF_DEFAULT_POLICY: "Read-only",
+            "debug_event_buffer_capacity": 100,
+        }
+        if debug_mode is not None:
+            values[token_policy_key(token_id)] = "Custom"
+            values[policy_mode_key(Tag.DEBUG_EVENTS, token_id)] = debug_mode
+        config = MagicMock()
+        config.get_value.side_effect = lambda key, default=None: values.get(key, default)
+        config.values = {key: SimpleNamespace(value=value) for key, value in values.items()}
+        return config
+
+    disabled = configured(None)
+    command_set = ProviderCommandSet(mass, disabled)
+    command_set.start()
+    assert mass.subscribed == 0
+
+    command_set.update_config(configured("confirm"))
+
+    assert mass.subscribed == 1
+
+
 def test_stop_attempts_all_unregistrations_then_raises_first_error() -> None:
     """A bad unregister callback cannot leave later commands registered forever."""
     mass = CommandRegistry()

@@ -2382,11 +2382,15 @@ async def test_flow_category_revoked_during_confirmation_prevents_execution(
         *({str(Tag.CONFIG_WRITE_PROVIDER)} if state["provider"] else set()),
     }
     adapter.mass.config.get_setup_flow_required_scope = lambda _flow_id: "config.providers.write"
-    adapter.mass.config.get_setup_flow = AsyncMock(
-        return_value=SimpleNamespace(
-            entries=[ConfigEntry(key="name", type=ConfigEntryType.STRING, label="Name")]
-        )
+    step = SimpleNamespace(
+        entries=[ConfigEntry(key="name", type=ConfigEntryType.STRING, label="Name")]
     )
+    adapter.mass.config.get_setup_flow = AsyncMock(return_value=step)
+    adapter.mass.config._setup_flows = {
+        "provider-flow": SimpleNamespace(
+            session=SimpleNamespace(current_step=step),
+        )
+    }
 
     async def revoke_provider_category(*_args: Any, **_kwargs: Any) -> None:
         state["provider"] = False
@@ -2422,11 +2426,13 @@ async def test_player_only_tag_executes_a_player_setup_flow(
         allowed_tags={str(Tag.CONFIG_WRITE_PLAYER)},
     )
     adapter.mass.config.get_setup_flow_required_scope = lambda _flow_id: "config.players.write"
-    adapter.mass.config.get_setup_flow = AsyncMock(
-        return_value=SimpleNamespace(
-            entries=[ConfigEntry(key="name", type=ConfigEntryType.STRING, label="Name")]
-        )
+    step = SimpleNamespace(
+        entries=[ConfigEntry(key="name", type=ConfigEntryType.STRING, label="Name")]
     )
+    adapter.mass.config.get_setup_flow = AsyncMock(return_value=step)
+    adapter.mass.config._setup_flows = {
+        "player-flow": SimpleNamespace(session=SimpleNamespace(current_step=step))
+    }
 
     await adapter.call(
         "ma_api:config/flows/submit",

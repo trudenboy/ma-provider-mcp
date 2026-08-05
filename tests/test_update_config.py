@@ -21,6 +21,7 @@ from __future__ import annotations
 import logging
 import sys
 import types
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -162,7 +163,6 @@ async def test_non_hot_swappable_change_triggers_full_restart(
         new_config,
         provider.logger,
         policy_change_callback=provider._apply_policy_token_ids,
-        active_token_ids=frozenset(),
     )
     rebuilt.start.assert_awaited_once()
     assert provider._runtime is rebuilt
@@ -170,11 +170,11 @@ async def test_non_hot_swappable_change_triggers_full_restart(
 
 
 @pytest.mark.asyncio
-async def test_runtime_replacement_clears_stale_event_buffer_token_ids(
+async def test_runtime_replacement_preserves_raw_event_buffer_override(
     mock_mass: MagicMock,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A new empty registry deactivates retention enabled by the old runtime's token IDs."""
+    """A new empty registry still honors the context-free hashed config override."""
     token_id = "discovered-token-id"
     values = {
         CONF_DEFAULT_POLICY: "Read-only",
@@ -186,6 +186,7 @@ async def test_runtime_replacement_clears_stale_event_buffer_token_ids(
     def config() -> MagicMock:
         result = MagicMock()
         result.get_value.side_effect = lambda key, default=None: values.get(key, default)
+        result.values = {key: SimpleNamespace(value=value) for key, value in values.items()}
         return result
 
     old_config = config()
@@ -206,7 +207,7 @@ async def test_runtime_replacement_clears_stale_event_buffer_token_ids(
 
     await provider.update_config(new_config, changed_keys={"values/mount_path"})
 
-    unsubscribe.assert_called_once_with()
+    unsubscribe.assert_not_called()
 
 
 @pytest.mark.asyncio

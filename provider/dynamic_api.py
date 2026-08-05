@@ -35,6 +35,7 @@ from .command_policy import (
     postflight_command,
     preflight_command,
     resolve_command_policy,
+    revalidate_preflight_command_sync,
 )
 from .command_profiles import (
     COMMAND_PROFILES,
@@ -112,8 +113,8 @@ class AuthorizedInvocation:
     policy: PolicySnapshot
 
 
-class _FinalAuthorizationError(ToolError):
-    """Carry the recomputed final seal into the single denial audit path."""
+class _InvocationAuthorizationError(ToolError):
+    """Carry the actual request seal into the single denial audit path."""
 
     def __init__(self, message: str, invocation: AuthorizedInvocation) -> None:
         super().__init__(message)
@@ -388,7 +389,9 @@ class DynamicAPIAdapter:
                     )
                 except ToolError as exc:
                     denied_invocation = (
-                        exc.invocation if isinstance(exc, _FinalAuthorizationError) else invocation
+                        exc.invocation
+                        if isinstance(exc, _InvocationAuthorizationError)
+                        else invocation
                     )
                     self._audit_invocation(
                         denied_invocation,
@@ -844,7 +847,15 @@ class DynamicAPIAdapter:
                 arguments,
                 impersonated=impersonated,
             )
-        except ToolError:
+        except ToolError as exc:
+            if isinstance(exc, _InvocationAuthorizationError):
+                invocation = exc.invocation
+                self._audit_invocation(
+                    invocation,
+                    "authorization.denied",
+                    impersonating=impersonated is not None,
+                )
+                raise
             policy = self._request_policy(auth)
             decision = entry.decision or resolve_command_policy(
                 entry.command,
@@ -884,19 +895,7 @@ class DynamicAPIAdapter:
             decision = resolve_command_policy(entry.command, entry.required_scope, entry.profile)
         preflight = await self._preflight(decision, arguments, auth)
         policy = self._request_policy(auth)
-        entry = self._reauthorize_entry(entry, auth, policy)
-        if impersonated_user is not None:
-            if getattr(impersonated_user, "enabled", True) is False:
-                raise ToolError("Unable to impersonate requested user")
-            self._enforce_target_filters(impersonated_user, arguments)
-        elif auth is not None:
-            self._enforce_target_filters(auth[1], arguments)
-        decision = entry.decision or decision
-        if decision.effective_mode(policy, preflight.additional_required) is PolicyMode.DENY:
-            denied = self._denied_capability(decision, preflight, policy)
-            suffix = f" (requires {denied})" if denied is not None else ""
-            raise ToolError(f"Tool {entry.name!r} not found or not permitted{suffix}")
-        return AuthorizedInvocation(
+        actual_invocation = AuthorizedInvocation(
             entry=entry,
             arguments=dict(arguments),
             auth=auth,
@@ -904,6 +903,23 @@ class DynamicAPIAdapter:
             preflight=preflight,
             policy=policy,
         )
+        try:
+            entry = self._reauthorize_entry(entry, auth, policy)
+            if impersonated_user is not None:
+                if getattr(impersonated_user, "enabled", True) is False:
+                    raise ToolError("Unable to impersonate requested user")
+                self._enforce_target_filters(impersonated_user, arguments)
+            elif auth is not None:
+                self._enforce_target_filters(auth[1], arguments)
+            decision = entry.decision or decision
+            actual_invocation = dataclasses.replace(actual_invocation, entry=entry)
+            if decision.effective_mode(policy, preflight.additional_required) is PolicyMode.DENY:
+                denied = self._denied_capability(decision, preflight, policy)
+                suffix = f" (requires {denied})" if denied is not None else ""
+                raise ToolError(f"Tool {entry.name!r} not found or not permitted{suffix}")
+        except ToolError as exc:
+            raise _InvocationAuthorizationError(str(exc), actual_invocation) from exc
+        return actual_invocation
 
     async def _finalize_invocation(
         self,
@@ -917,61 +933,65 @@ class DynamicAPIAdapter:
             if impersonated
             else None
         )
+        decision = invocation.entry.decision
+        if decision is None:
+            raise ToolError(f"Tool {invocation.entry.name!r} not found or not permitted")
+        preflight = await self._preflight(decision, invocation.arguments, invocation.auth)
         auth = (
             await self._authentication(revalidate=True) if self._auth_required_provider() else None
         )
-        if auth is None and self._auth_required_provider():
-            raise ToolError("Authentication is required")
-
-        policy = self._request_policy(auth)
-        entry = self._reauthorize_entry(invocation.entry, auth, policy)
-        decision = entry.decision
-        if decision is None:
-            raise ToolError(f"Tool {entry.name!r} not found or not permitted")
-        preflight = await self._preflight(decision, invocation.arguments, auth)
-        # The preflight inspection itself may await live MA state. Resolve the
-        # policy and entry again synchronously so the returned seal contains
-        # the actual request-dependent capabilities and current modes.
-        policy = self._request_policy(auth)
-        entry = self._reauthorize_entry(entry, auth, policy)
-        if impersonated_user is not None:
-            caller = auth[1] if auth is not None else None
-            caller_id = getattr(caller, "user_id", None)
-            target_id = getattr(impersonated_user, "user_id", None)
-            if (
-                not isinstance(caller_id, str)
-                or not caller_id
-                or not isinstance(target_id, str)
-                or not target_id
-                or (
-                    caller_id != target_id
-                    and not self._scope_is_allowed(caller, Scope.USERS_IMPERSONATE)
-                )
-            ):
-                raise ToolError("Unable to impersonate requested user")
-            if getattr(impersonated_user, "enabled", True) is False:
-                raise ToolError("Unable to impersonate requested user")
-            self._enforce_target_filters(impersonated_user, invocation.arguments)
-        elif auth is not None:
-            self._enforce_target_filters(auth[1], invocation.arguments)
-        decision = entry.decision
-        if decision is None:
-            raise ToolError(f"Tool {entry.name!r} not found or not permitted")
+        # No authorization-sensitive await is permitted below this point.
+        preflight = revalidate_preflight_command_sync(
+            self.mass,
+            decision,
+            invocation.arguments,
+            preflight,
+        )
+        policy = self._request_policy(auth or invocation.auth)
         final_invocation = dataclasses.replace(
             invocation,
-            entry=entry,
-            auth=auth,
+            auth=auth or invocation.auth,
             impersonated_user=impersonated_user,
             preflight=preflight,
             policy=policy,
         )
-        if decision.effective_mode(policy, preflight.additional_required) is PolicyMode.DENY:
-            denied = self._denied_capability(decision, preflight, policy)
-            suffix = f" (requires {denied})" if denied is not None else ""
-            raise _FinalAuthorizationError(
-                f"Tool {entry.name!r} not found or not permitted{suffix}",
+        if auth is None and self._auth_required_provider():
+            raise _InvocationAuthorizationError(
+                "Authentication is required",
                 final_invocation,
             )
+        try:
+            entry = self._reauthorize_entry(invocation.entry, auth, policy)
+            final_invocation = dataclasses.replace(final_invocation, entry=entry)
+            if impersonated_user is not None:
+                caller = auth[1] if auth is not None else None
+                caller_id = getattr(caller, "user_id", None)
+                target_id = getattr(impersonated_user, "user_id", None)
+                if (
+                    not isinstance(caller_id, str)
+                    or not caller_id
+                    or not isinstance(target_id, str)
+                    or not target_id
+                    or (
+                        caller_id != target_id
+                        and not self._scope_is_allowed(caller, Scope.USERS_IMPERSONATE)
+                    )
+                ):
+                    raise ToolError("Unable to impersonate requested user")
+                if getattr(impersonated_user, "enabled", True) is False:
+                    raise ToolError("Unable to impersonate requested user")
+                self._enforce_target_filters(impersonated_user, invocation.arguments)
+            elif auth is not None:
+                self._enforce_target_filters(auth[1], invocation.arguments)
+            decision = entry.decision
+            if decision is None:
+                raise ToolError(f"Tool {entry.name!r} not found or not permitted")
+            if decision.effective_mode(policy, preflight.additional_required) is PolicyMode.DENY:
+                denied = self._denied_capability(decision, preflight, policy)
+                suffix = f" (requires {denied})" if denied is not None else ""
+                raise ToolError(f"Tool {entry.name!r} not found or not permitted{suffix}")
+        except ToolError as exc:
+            raise _InvocationAuthorizationError(str(exc), final_invocation) from exc
         return final_invocation
 
     async def _audit_denied_name(self, name: str) -> None:
@@ -1221,8 +1241,10 @@ class DynamicAPIAdapter:
         policy: PolicySnapshot,
     ) -> str | None:
         """Name one denied capability that blocked request-specific authorization."""
-        required = decision.required_capabilities | preflight.additional_required
-        for capability in sorted(required):
+        for capability in sorted(preflight.additional_required):
+            if policy.mode(capability) is PolicyMode.DENY:
+                return capability
+        for capability in sorted(decision.required_capabilities):
             if policy.mode(capability) is PolicyMode.DENY:
                 return capability
         if decision.alternative_capabilities and all(

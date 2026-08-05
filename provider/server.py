@@ -55,7 +55,6 @@ class MCPServerRuntime:
         config: ProviderConfig,
         logger: logging.Logger,
         policy_change_callback: Callable[[frozenset[str]], None] | None = None,
-        active_token_ids: frozenset[str] = frozenset(),
     ) -> None:
         """
         Hold the shared dependencies; nothing is started here.
@@ -68,7 +67,6 @@ class MCPServerRuntime:
         self._config = config
         self._logger = logger
         self._policy_change_callback = policy_change_callback
-        self._configured_token_ids = active_token_ids
         raw_path = str(config.get_value(CONF_MOUNT_PATH) or DEFAULT_MOUNT_PATH)
         self._mount_path: str = "/" + raw_path.strip("/")
         self._mcp: Any = None
@@ -82,7 +80,7 @@ class MCPServerRuntime:
         self._token_identities = TokenIdentityRegistry(on_change=self._refresh_policy_resolver)
         self._request_policies = AuthenticatedPolicyResolver(
             self._token_identities,
-            build_policy_resolver(config, active_token_ids=active_token_ids),
+            build_policy_resolver(config),
         )
 
     @property
@@ -355,14 +353,12 @@ class MCPServerRuntime:
         """Compile and atomically install a resolver for known and manual token IDs."""
         resolver = build_policy_resolver(
             self._config,
-            active_token_ids=self._configured_token_ids | self._token_identities.token_ids(),
+            active_token_ids=self._token_identities.token_ids(),
         )
         if hasattr(self, "_request_policies"):
             self._request_policies.replace(resolver)
             if self._policy_change_callback is not None:
-                self._policy_change_callback(
-                    self._configured_token_ids | self._token_identities.token_ids()
-                )
+                self._policy_change_callback(self._token_identities.token_ids())
 
 
 async def _tag_lookup(mcp: Any, kind: str, key: str) -> set[str] | None:

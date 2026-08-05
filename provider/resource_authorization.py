@@ -88,6 +88,15 @@ class AuthorizedResourceRequest:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class _AuthenticationEvidence:
+    """Awaited MA authentication facts awaiting one synchronous final seal."""
+
+    user: Any
+    live_token_id: Any = None
+    token_id_lookup_failed: bool = False
+
+
 class ResourceAuthorizer:
     """Enforce exact-bearer MA and v2 policy bounds for every resource request."""
 
@@ -124,9 +133,19 @@ class ResourceAuthorizer:
         capability = _resource_capability(tags)
         command = _COMMAND_BY_TAG.get(capability, "resource:unknown")
         token = self._token()
+        evidence = await self._authentication_evidence(token) if self._auth_required() else None
+        # No authorization-sensitive await is permitted below this point. Re-read
+        # every mutable boundary synchronously and resolve the live policy last.
+        user = (
+            evidence.user
+            if evidence is not None and self._authentication_is_valid(token, evidence)
+            else None
+        )
+        access_error = self._ma_denial(uri, capability, user, token)
+        # Resolve the request policy after every other live synchronous bound,
+        # immediately before constructing the returned request seal.
         policy = self._policy(token.token) if token is not None else self._default_policy()
         mode = policy.mode(capability) if capability in _SCOPE_BY_TAG else PolicyMode.DENY
-        user = await self._authenticate(token) if self._auth_required() else None
         request = AuthorizedResourceRequest(
             user=user,
             token=token,
@@ -135,7 +154,11 @@ class ResourceAuthorizer:
             command=command,
             audit_sink=self._audit_sink,
         )
-        error = self._denial(uri, capability, mode, user, token)
+        error = (
+            "Resource is not permitted by request policy"
+            if mode is not PolicyMode.ALLOW
+            else access_error
+        )
         if error is None:
             return request
         if audit_denial:
@@ -143,45 +166,60 @@ class ResourceAuthorizer:
             raise ResourceError(error)
         return None
 
-    async def _authenticate(self, token: AccessToken | None) -> Any:
+    async def _authentication_evidence(
+        self,
+        token: AccessToken | None,
+    ) -> _AuthenticationEvidence:
+        """Perform every MA authentication await without sealing mutable state."""
         if token is None:
-            return None
+            return _AuthenticationEvidence(None)
         try:
             user = await self.mass.webserver.auth.authenticate_with_token(token.token)
         except Exception:
-            return None
-        if user is None or getattr(user, "enabled", True) is False:
-            return None
-        identity = self._identity(token.token)
-        if identity is None:
-            if token.client_id != LOOKUP_FAILURE_CLIENT_ID:
-                return None
-            try:
-                await self.mass.webserver.auth.get_token_id_from_token(token.token)
-            except Exception:
-                return user
-            return None
-        if str(getattr(user, "user_id", "")) != identity.user_id:
-            return None
-        expected = identity.token_id or LEGACY_TOKEN_CLIENT_ID
-        if token.client_id != expected:
-            return None
+            return _AuthenticationEvidence(None)
+        if user is None:
+            return _AuthenticationEvidence(None)
         try:
             live_token_id = await self.mass.webserver.auth.get_token_id_from_token(token.token)
         except Exception:
-            return None
-        return user if live_token_id == identity.token_id else None
+            return _AuthenticationEvidence(user, token_id_lookup_failed=True)
+        return _AuthenticationEvidence(user, live_token_id=live_token_id)
 
-    def _denial(
+    def _authentication_is_valid(
+        self,
+        token: AccessToken | None,
+        evidence: _AuthenticationEvidence,
+    ) -> bool:
+        """Seal enabled user, request bearer, and exact token binding synchronously."""
+        user = evidence.user
+        if token is None or user is None or getattr(user, "enabled", True) is False:
+            return False
+        current_token = self._token()
+        if (
+            current_token is None
+            or current_token.token != token.token
+            or current_token.client_id != token.client_id
+        ):
+            return False
+        identity = self._identity(token.token)
+        if identity is None:
+            return token.client_id == LOOKUP_FAILURE_CLIENT_ID and evidence.token_id_lookup_failed
+        if str(getattr(user, "user_id", "")) != identity.user_id:
+            return False
+        expected = identity.token_id or LEGACY_TOKEN_CLIENT_ID
+        return (
+            token.client_id == expected
+            and not evidence.token_id_lookup_failed
+            and evidence.live_token_id == identity.token_id
+        )
+
+    def _ma_denial(
         self,
         uri: str,
         capability: str,
-        mode: PolicyMode,
         user: Any,
         token: AccessToken | None,
     ) -> str | None:
-        if mode is not PolicyMode.ALLOW:
-            return "Resource is not permitted by request policy"
         if not self._auth_required():
             return None
         if token is None or user is None:
