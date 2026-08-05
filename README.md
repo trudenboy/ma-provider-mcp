@@ -147,7 +147,6 @@ use the persisted development instance in `.ma-data/`. Start Docker, mint a
 dedicated MA user token, and supply it only through your shell:
 
 ```bash
-MA_SERVER_ROOT=/Users/renso/Projects/ma-server \
 docker compose -f docker-compose.dev.yml up -d --build
 docker compose -f docker-compose.dev.yml exec -T ma \
   /app/venv/bin/python -c 'import music_assistant; import music_assistant.providers.fastmcp_server as p; print(music_assistant.__file__); print(p.__file__)'
@@ -165,12 +164,14 @@ docker compose -f docker-compose.dev.yml exec -T \
 
 Set `MA_DATA_DIR=/absolute/path/to/.ma-data` on `docker compose` when a worktree
 should reuse an already configured development instance without copying its data.
-`MA_SERVER_ROOT` defaults to `/Users/renso/Projects/ma-server`; Compose mounts that
-checkout at `/ma-server`, overlays this provider inside it, and refuses startup unless
-the imported MA package and `fastmcp_server` provider paths both begin with
-`/ma-server/`. The test command cuts conftest discovery at the integration
-directory, so it does not load the repository's unit-test fixtures (which import
-the source-root `provider` package).
+`MA_SERVER_ROOT` defaults to the neighboring `../ma-server` checkout. A provider
+worktree should set it to an explicit compatible MA checkout, for example
+`MA_SERVER_ROOT=/absolute/path/to/ma-server`. Compose mounts that checkout at
+`/ma-server`, overlays this provider inside it, and refuses startup unless the
+imported MA package and `fastmcp_server` provider paths both begin with `/ma-server/`.
+The test command cuts conftest discovery at the integration directory, so it does
+not load the repository's unit-test fixtures (which import the source-root
+`provider` package).
 `.superpowers/sdd/2026-07-30-native-ma-command-catalog/run-ma-tests.sh` runs the
 implementation suite in the same complete Linux MA virtual environment.
 
@@ -178,6 +179,38 @@ implementation suite in the same complete Linux MA virtual environment.
 test. Choose a dedicated player with an active queue; the test refuses unsafe rows
 and removes only the item it adds. The suite is skipped unless both MCP URL and token
 are explicitly provided.
+
+### Release synchronization preflight
+
+Before changing `provider/VERSION`, fetch the source and integration branch, require
+their provider trees to match, and run the shared transform-aware guard against the
+canonical Music Assistant `dev` branch:
+
+```bash
+ma_server_root=${MA_SERVER_ROOT:-../ma-server}
+provider_tools_root=${MA_PROVIDER_TOOLS_ROOT:-../ma-provider-tools}
+git fetch origin dev --tags
+git -C "$ma_server_root" fetch origin integration/dev
+provider_tree=$(git rev-parse origin/dev:provider)
+integration_tree=$(git -C "$ma_server_root" rev-parse \
+  origin/integration/dev:music_assistant/providers/fastmcp_server)
+test "$provider_tree" = "$integration_tree"
+python3 "$provider_tools_root/scripts/check_upstream_ahead.py" \
+  --domain fastmcp_server \
+  --provider-path provider/ \
+  --provider-dir .
+```
+
+If the integration comparison fails, wait for or repair its ordinary synchronization.
+If the upstream guard fails, reverse-sync the upstream changes before releasing. A
+one-time `ack_upstream_ahead=true` dispatch is allowed only after recording which
+upstream PRs are already superseded by a reviewed provider PR and re-running their
+targeted tests; never use it merely to make the pipeline green. After a stable
+release, rebuild `upstream/fastmcp_server` from the current canonical `dev` with the
+`upstream-pr` workflow's `reset_branch=true` option, then review the resulting diff.
+A release is complete only after the top-level pipeline, both sync jobs, the
+published GitHub release, the upstream PR update, and the connected Docker MCP smoke
+test succeed.
 
 ## License
 

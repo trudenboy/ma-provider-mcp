@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   JSON limits before byte fitting, preventing recursive or oversized payloads
   from bypassing the configured response bounds.
 
+### Changed
+- The development Compose runtime now defaults to a neighboring Music Assistant
+  checkout and documents a fail-closed synchronization preflight for releases.
+
 ## [1.0.1] - 2026-08-05
 
 ### Changed
