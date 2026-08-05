@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 from collections.abc import Callable
 from types import SimpleNamespace
@@ -10,6 +11,7 @@ from typing import TYPE_CHECKING, Any, cast, get_type_hints
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fastmcp.exceptions import ToolError
 from fastmcp.server.auth import AccessToken
 from music_assistant_models.auth import Scope, User, UserRole
 from music_assistant_models.errors import AuthenticationRequired, InsufficientPermissions
@@ -538,6 +540,145 @@ async def test_dispatcher_confirmation_context_is_scoped_and_not_remembered(
     monkeypatch.setattr(authorization, "get_current_token", lambda: "bearer")
     with pytest.raises(InsufficientPermissions, match="elicitation-capable client"):
         await native_handler()
+
+
+async def test_dispatcher_confirmation_rejects_copied_child_tasks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A copied child context cannot consume its parent's confirmation grant."""
+    mass = CommandRegistry()
+    user = _user()
+    policy = policy_snapshot(
+        PolicyProfile.CUSTOM,
+        {Tag.DEBUG_PROVIDERS: PolicyMode.CONFIRM},
+    )
+    command_set = ProviderCommandSet(
+        mass,
+        _config(Tag.DEBUG_PROVIDERS),
+        policy_provider=lambda _bearer: policy,
+    )
+    command_set.start()
+    command = "fastmcp/debug/packages"
+    native_handler = mass.handlers[command]
+    mass.command_handlers = {command: APICommandHandler.parse(command, native_handler)}
+    mass.webserver = SimpleNamespace(
+        auth=SimpleNamespace(
+            authenticate_with_token=AsyncMock(return_value=user),
+            get_token_id_from_token=AsyncMock(return_value="token-id"),
+        )
+    )
+    adapter = DynamicAPIAdapter(
+        mass,
+        auth_required_provider=lambda: True,
+        token_provider=lambda: AccessToken(token="bearer", client_id="token-id", scopes=[]),
+        policy_provider=lambda _bearer: policy,
+        identity_provider=lambda _bearer: TokenIdentity("u1", "token-id"),
+    )
+    release_delayed = asyncio.Event()
+    owner_task = asyncio.current_task()
+    delayed_task: asyncio.Task[PackageVersions] | None = None
+    immediate_denied = False
+
+    async def delayed_direct_call() -> PackageVersions:
+        await release_delayed.wait()
+        return cast("PackageVersions", await native_handler())
+
+    async def packages() -> PackageVersions:
+        nonlocal delayed_task, immediate_denied
+        if asyncio.current_task() is owner_task:
+            immediate_task = asyncio.create_task(native_handler())
+            try:
+                await immediate_task
+            except InsufficientPermissions:
+                immediate_denied = True
+            delayed_task = asyncio.create_task(delayed_direct_call())
+        return PackageVersions(packages={})
+
+    monkeypatch.setattr(debug_commands, "packages", packages)
+    ctx = SimpleNamespace(
+        elicit=AsyncMock(return_value=SimpleNamespace(action="accept", data=True))
+    )
+
+    await adapter.call(
+        f"ma_api:{command}",
+        {},
+        response_mode="compact",
+        fields=None,
+        max_items=None,
+        ctx=cast("Context", ctx),
+    )
+    assert immediate_denied is True
+    assert delayed_task is not None
+    release_delayed.set()
+    with pytest.raises(InsufficientPermissions, match="elicitation-capable client"):
+        await delayed_task
+
+
+async def test_dispatcher_confirmation_revokes_copied_context_when_handler_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exceptional dispatcher cleanup revokes grants already copied by child tasks."""
+    mass = CommandRegistry()
+    user = _user()
+    policy = policy_snapshot(
+        PolicyProfile.CUSTOM,
+        {Tag.DEBUG_PROVIDERS: PolicyMode.CONFIRM},
+    )
+    command_set = ProviderCommandSet(
+        mass,
+        _config(Tag.DEBUG_PROVIDERS),
+        policy_provider=lambda _bearer: policy,
+    )
+    command_set.start()
+    command = "fastmcp/debug/packages"
+    native_handler = mass.handlers[command]
+    mass.command_handlers = {command: APICommandHandler.parse(command, native_handler)}
+    mass.webserver = SimpleNamespace(
+        auth=SimpleNamespace(
+            authenticate_with_token=AsyncMock(return_value=user),
+            get_token_id_from_token=AsyncMock(return_value="token-id"),
+        )
+    )
+    adapter = DynamicAPIAdapter(
+        mass,
+        auth_required_provider=lambda: True,
+        token_provider=lambda: AccessToken(token="bearer", client_id="token-id", scopes=[]),
+        policy_provider=lambda _bearer: policy,
+        identity_provider=lambda _bearer: TokenIdentity("u1", "token-id"),
+    )
+    release_child = asyncio.Event()
+    owner_task = asyncio.current_task()
+    child_task: asyncio.Task[PackageVersions] | None = None
+
+    async def delayed_direct_call() -> PackageVersions:
+        await release_child.wait()
+        return cast("PackageVersions", await native_handler())
+
+    async def packages() -> PackageVersions:
+        nonlocal child_task
+        if asyncio.current_task() is owner_task:
+            child_task = asyncio.create_task(delayed_direct_call())
+            raise RuntimeError("provider handler failed")
+        return PackageVersions(packages={})
+
+    monkeypatch.setattr(debug_commands, "packages", packages)
+    ctx = SimpleNamespace(
+        elicit=AsyncMock(return_value=SimpleNamespace(action="accept", data=True))
+    )
+
+    with pytest.raises(ToolError, match="provider handler failed"):
+        await adapter.call(
+            f"ma_api:{command}",
+            {},
+            response_mode="compact",
+            fields=None,
+            max_items=None,
+            ctx=cast("Context", ctx),
+        )
+    assert child_task is not None
+    release_child.set()
+    with pytest.raises(InsufficientPermissions, match="elicitation-capable client"):
+        await child_task
 
 
 def test_event_buffer_survives_event_hot_toggles_and_resizes_before_restart() -> None:

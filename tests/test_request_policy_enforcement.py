@@ -581,6 +581,172 @@ async def test_impersonation_revoked_during_final_preflight_blocks_execution() -
     assert called is False
 
 
+async def test_bearer_revoked_during_final_impersonation_lookup_blocks_execution() -> None:
+    """The final impersonation await cannot leave exact bearer identity stale."""
+    called = False
+
+    async def save(
+        provider_domain: str,
+        values: dict[str, Any],
+        instance_id: str | None = None,
+    ) -> None:
+        nonlocal called
+        del provider_domain, values, instance_id
+        called = True
+
+    token = AccessToken(token="config", client_id="id-config", scopes=[])
+    adapter = _adapter(
+        [
+            _handler(
+                "config/providers/save",
+                save,
+                "config.providers.write",
+                allow_impersonation=True,
+            )
+        ],
+        current_token=[token],
+        policies={
+            "config": _custom(
+                config__write__provider=PolicyMode.ALLOW,
+                config__write__secret=PolicyMode.ALLOW,
+            )
+        },
+    )
+    adapter.mass.config.get_provider_config_entries = AsyncMock(
+        return_value=[ConfigEntry(key="token", type=ConfigEntryType.SECURE_STRING, label="Token")]
+    )
+    impersonated_user = SimpleNamespace(
+        user_id="target",
+        enabled=True,
+        role="admin",
+        player_filter=[],
+        provider_filter=[],
+    )
+    resolutions = 0
+
+    async def resolve_and_revoke_bearer(_auth: Any, _requested: str) -> Any:
+        nonlocal resolutions
+        resolutions += 1
+        if resolutions == 3:
+            adapter.mass.webserver.auth.get_token_id_from_token = AsyncMock(
+                return_value="replacement"
+            )
+        return impersonated_user
+
+    cast("Any", adapter)._resolve_impersonated_user = resolve_and_revoke_bearer
+    ctx = SimpleNamespace(
+        elicit=AsyncMock(return_value=SimpleNamespace(action="accept", data=True))
+    )
+
+    with pytest.raises(ToolError, match="Authentication is required"):
+        await adapter.call(
+            "ma_api:config/providers/save",
+            {
+                "provider_domain": "demo",
+                "instance_id": "demo--1",
+                "values": {"token": "new-secret"},
+                "user": "target",
+            },
+            response_mode="compact",
+            fields=None,
+            max_items=None,
+            ctx=cast("Context", ctx),
+        )
+    assert resolutions == 3
+    assert called is False
+
+
+async def test_final_auth_user_after_impersonation_lookup_is_used_for_execution() -> None:
+    """Execution context uses the user returned by the last exact authentication."""
+    initial_user = SimpleNamespace(
+        user_id="same-user",
+        enabled=True,
+        role="admin",
+        player_filter=[],
+        provider_filter=[],
+    )
+    fresh_user = SimpleNamespace(
+        user_id="same-user",
+        enabled=True,
+        role="admin",
+        player_filter=[],
+        provider_filter=[],
+    )
+    execution_user: Any = None
+
+    async def save(
+        provider_domain: str,
+        values: dict[str, Any],
+        instance_id: str | None = None,
+    ) -> None:
+        nonlocal execution_user
+        del provider_domain, values, instance_id
+        from music_assistant.controllers.webserver.helpers import (  # noqa: PLC0415
+            auth_middleware,
+        )
+
+        execution_user = auth_middleware.current_user.get()
+
+    token = AccessToken(token="config", client_id="id-config", scopes=[])
+    adapter = _adapter(
+        [
+            _handler(
+                "config/providers/save",
+                save,
+                "config.providers.write",
+                allow_impersonation=True,
+            )
+        ],
+        current_token=[token],
+        policies={
+            "config": _custom(
+                config__write__provider=PolicyMode.ALLOW,
+                config__write__secret=PolicyMode.ALLOW,
+            )
+        },
+        user=initial_user,
+    )
+    adapter.mass.config.get_provider_config_entries = AsyncMock(
+        return_value=[ConfigEntry(key="token", type=ConfigEntryType.SECURE_STRING, label="Token")]
+    )
+    impersonated_user = SimpleNamespace(
+        user_id="target",
+        enabled=True,
+        role="admin",
+        player_filter=[],
+        provider_filter=[],
+    )
+    resolutions = 0
+
+    async def resolve_and_replace_user(_auth: Any, _requested: str) -> Any:
+        nonlocal resolutions
+        resolutions += 1
+        if resolutions == 3:
+            adapter.mass.webserver.auth.authenticate_with_token = AsyncMock(return_value=fresh_user)
+        return impersonated_user
+
+    cast("Any", adapter)._resolve_impersonated_user = resolve_and_replace_user
+    ctx = SimpleNamespace(
+        elicit=AsyncMock(return_value=SimpleNamespace(action="accept", data=True))
+    )
+
+    await adapter.call(
+        "ma_api:config/providers/save",
+        {
+            "provider_domain": "demo",
+            "instance_id": "demo--1",
+            "values": {"token": "new-secret"},
+            "user": "target",
+        },
+        response_mode="compact",
+        fields=None,
+        max_items=None,
+        ctx=cast("Context", ctx),
+    )
+    assert resolutions == 3
+    assert execution_user is fresh_user
+
+
 async def test_final_revalidation_cannot_reuse_confirmation_for_a_new_capability() -> None:
     """A prompt for one capability cannot bless a different final Confirm requirement."""
     called = False

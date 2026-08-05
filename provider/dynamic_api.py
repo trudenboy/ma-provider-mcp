@@ -794,14 +794,16 @@ class DynamicAPIAdapter:
         impersonated: Any,
     ) -> AuthorizedInvocation:
         """Revalidate awaited identities, then synchronously seal authorization."""
+        impersonated_user = (
+            await self._resolve_impersonated_user(invocation.auth, str(impersonated))
+            if impersonated
+            else None
+        )
         auth = (
             await self._authentication(revalidate=True) if self._auth_required_provider() else None
         )
         if auth is None and self._auth_required_provider():
             raise ToolError("Authentication is required")
-        impersonated_user = (
-            await self._resolve_impersonated_user(auth, str(impersonated)) if impersonated else None
-        )
 
         policy = self._request_policy(auth)
         entry = self._reauthorize_entry(invocation.entry, auth, policy)
