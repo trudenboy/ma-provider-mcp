@@ -3,9 +3,9 @@
 
 from __future__ import annotations
 
-import importlib
 import inspect
 from collections.abc import Callable
+from types import SimpleNamespace
 from typing import Any, get_type_hints
 from unittest.mock import AsyncMock, MagicMock
 
@@ -16,6 +16,7 @@ from music_assistant_models.errors import AuthenticationRequired, InsufficientPe
 from music_assistant.helpers.api import APICommandHandler, parse_arguments
 from provider.commands import ProviderCommandSet, authorization
 from provider.commands import debug as debug_commands
+from provider.commands import registry as command_registry
 from provider.commands.authorization import authorize_extension, scope_allowed
 from provider.dynamic_signatures import compile_signature
 from provider.models import (
@@ -99,18 +100,6 @@ class CommandRegistry:
         return unsubscribe
 
 
-class LegacyCommandRegistry(CommandRegistry):
-    """Older MA surface without the required_scope keyword."""
-
-    def register_api_command(  # type: ignore[override]
-        self,
-        command: str,
-        handler: Callable[..., Any],
-        authenticated: bool = True,
-    ) -> Callable[[], None]:
-        return super().register_api_command(command, handler, authenticated)
-
-
 def _config(*enabled: Tag) -> MagicMock:
     config = MagicMock()
     allowed = {str(tag) for tag in enabled}
@@ -142,7 +131,7 @@ def test_authorization_rejects_wrong_scope_and_disabled_provider_tag(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """MA scope and provider config permissions are independent gates."""
-    monkeypatch.setattr(authorization, "_ma_has_scope", None)
+    monkeypatch.setattr(authorization, "has_scope", lambda _user, _scope: False, raising=False)
     monkeypatch.setattr(authorization, "get_current_user", lambda: _user(UserRole.USER))
     with pytest.raises(InsufficientPermissions, match=r"system\.read"):
         authorize_extension(
@@ -152,6 +141,7 @@ def test_authorization_rejects_wrong_scope_and_disabled_provider_tag(
         )
 
     monkeypatch.setattr(authorization, "get_current_user", lambda: _user())
+    monkeypatch.setattr(authorization, "has_scope", lambda _user, _scope: True, raising=False)
     with pytest.raises(InsufficientPermissions, match="debug:logs"):
         authorize_extension(
             _config(),
@@ -160,17 +150,23 @@ def test_authorization_rejects_wrong_scope_and_disabled_provider_tag(
         )
 
 
-def test_scope_fallback_is_role_based_and_fail_closed(
+def test_scope_allowed_delegates_to_current_ma_scope_helper(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Older role-only MA builds grant only the documented minimum roles."""
-    monkeypatch.setattr(authorization, "_ma_has_scope", None)
-    assert scope_allowed(_user(UserRole.ADMIN), "system.read") is True
-    assert scope_allowed(_user(UserRole.USER), "system.read") is False
-    assert scope_allowed(_user(UserRole.USER), "queues.control") is True
-    assert scope_allowed(_user(UserRole.GUEST), "queues.control") is False
+    """Scope decisions use MA's live helper and short-circuit disabled users."""
+    checked: list[tuple[User, Scope]] = []
+
+    def check(user: User, scope: Scope) -> bool:
+        checked.append((user, scope))
+        return scope is Scope.QUEUES_CONTROL
+
+    monkeypatch.setattr(authorization, "has_scope", check, raising=False)
+    user = _user(UserRole.USER)
+
+    assert scope_allowed(user, "queues.control") is True
+    assert scope_allowed(user, "system.read") is False
     assert scope_allowed(_user(UserRole.ADMIN, enabled=False), "queues.control") is False
-    assert scope_allowed(_user(UserRole.SERVICE), "future.scope") is False
+    assert checked == [(user, Scope.QUEUES_CONTROL), (user, Scope.SYSTEM_READ)]
 
 
 def test_start_registers_exact_command_set_with_native_scopes() -> None:
@@ -183,6 +179,21 @@ def test_start_registers_exact_command_set_with_native_scopes() -> None:
     assert set(mass.handlers) == COMMANDS
     assert all(options["authenticated"] is True for options in mass.options.values())
     assert all(isinstance(options["required_scope"], Scope) for options in mass.options.values())
+
+
+def test_registration_uses_current_ma_contract_without_signature_reflection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Native scopes are passed directly without feature-detecting MA internals."""
+    reflection = SimpleNamespace(
+        signature=MagicMock(side_effect=AssertionError("signature reflection is forbidden"))
+    )
+    monkeypatch.setattr(command_registry, "inspect", reflection, raising=False)
+    mass = CommandRegistry()
+
+    ProviderCommandSet(mass, _config(*Tag)).start()
+
+    assert all(options["required_scope"] is not None for options in mass.options.values())
 
 
 async def test_registered_handlers_keep_native_parseable_signatures_and_result_types(
@@ -270,7 +281,7 @@ async def test_registered_handlers_keep_native_parseable_signatures_and_result_t
     assert parsed_recent["event_types"] == ["player_updated"]
     assert parsed_recent["id_filter"] == "kitchen"
 
-    monkeypatch.setattr(authorization, "_ma_has_scope", None)
+    monkeypatch.setattr(authorization, "has_scope", lambda _user, _scope: True, raising=False)
     monkeypatch.setattr(authorization, "get_current_user", lambda: _user())
     plain_tail = AsyncMock(
         return_value=LogTailResult(log_path="x", lines=[], bytes_scanned=0, truncated=False)
@@ -279,20 +290,6 @@ async def test_registered_handlers_keep_native_parseable_signatures_and_result_t
     result = await tail(**parsed)
     assert result.log_path == "x"
     plain_tail.assert_awaited_once_with(mass, **parsed)
-
-
-async def test_legacy_registration_stays_protected_inside_handler(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Missing required_scope support cannot bypass current-user authorization."""
-    mass = LegacyCommandRegistry()
-    command_set = ProviderCommandSet(mass, _config(*Tag))
-    command_set.start()
-    monkeypatch.setattr(authorization, "get_current_user", lambda: None)
-
-    with pytest.raises(AuthenticationRequired):
-        awaitable = mass.handlers["fastmcp/debug/packages"]()
-        await awaitable
 
 
 def test_partial_start_rolls_back_in_reverse_and_can_retry() -> None:
@@ -334,7 +331,7 @@ async def test_stop_is_idempotent_and_update_config_is_live(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Handlers see updated config and repeated stop never double-unregisters."""
-    mass = LegacyCommandRegistry()
+    mass = CommandRegistry()
     command_set = ProviderCommandSet(mass, _config())
     command_set.start()
     monkeypatch.setattr(authorization, "get_current_user", lambda: _user())
@@ -413,22 +410,3 @@ def test_stop_attempts_all_unregistrations_then_raises_first_error() -> None:
     assert mass.handlers == {}
     assert mass.unsubscribed == 1
     command_set.stop()
-
-
-def test_partial_auth_import_keeps_real_current_user_and_role_fallback(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Old MA exports get_current_user even when its has_scope helper is absent."""
-    auth_module = importlib.import_module(
-        "music_assistant.controllers.webserver.helpers.auth_middleware"
-    )
-    real_current_user = auth_module.get_current_user
-    monkeypatch.delattr(auth_module, "has_scope")
-    reloaded = importlib.reload(authorization)
-    try:
-        assert reloaded.get_current_user is real_current_user
-        assert reloaded._ma_has_scope is None
-        assert reloaded.scope_allowed(_user(UserRole.USER), "queues.control") is True
-    finally:
-        monkeypatch.undo()
-        importlib.reload(reloaded)

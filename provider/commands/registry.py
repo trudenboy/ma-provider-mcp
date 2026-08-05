@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import inspect
 from collections.abc import Callable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass
@@ -42,19 +41,20 @@ class ProviderCommand:
 
 
 def _scope(value: str) -> Scope:
-    """Build the MA Scope representation while keeping compatibility centralized."""
+    """Build the current MA Scope representation."""
     return Scope(value)
 
 
 def _register(mass: Any, definition: ProviderCommand) -> Callable[[], None]:
-    """Register on old and new MA releases, retaining an unregister callback."""
-    supported = inspect.signature(mass.register_api_command).parameters
-    options: dict[str, Any] = {"authenticated": True}
-    if "required_scope" in supported:
-        options["required_scope"] = _scope(definition.required_scope)
+    """Register one current-MA command and retain its unregister callback."""
     return cast(
         "Callable[[], None]",
-        mass.register_api_command(definition.command, definition.handler, **options),
+        mass.register_api_command(
+            definition.command,
+            definition.handler,
+            authenticated=True,
+            required_scope=_scope(definition.required_scope),
+        ),
     )
 
 
