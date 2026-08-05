@@ -162,6 +162,7 @@ async def test_non_hot_swappable_change_triggers_full_restart(
         new_config,
         provider.logger,
         policy_change_callback=provider._apply_policy_token_ids,
+        active_token_ids=frozenset(),
     )
     rebuilt.start.assert_awaited_once()
     assert provider._runtime is rebuilt

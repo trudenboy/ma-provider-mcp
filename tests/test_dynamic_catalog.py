@@ -2228,9 +2228,14 @@ async def test_secure_config_value_is_reclassified_after_confirmation_before_ser
 
     assert result["data"] == "this_value_is_encrypted"
     assert raw_secret not in json.dumps(result)
-    assert schema_getter.await_count == 3
+    assert schema_getter.await_count == 4
     schema_getter.assert_has_awaits(
-        [call(*getter_arguments), call(*getter_arguments), call(*getter_arguments)]
+        [
+            call(*getter_arguments),
+            call(*getter_arguments),
+            call(*getter_arguments),
+            call(*getter_arguments),
+        ]
     )
 
 
@@ -2276,7 +2281,7 @@ async def test_secure_config_value_is_reclassified_after_execution_before_serial
 
     assert result["data"] == "this_value_is_encrypted"
     assert raw_secret not in json.dumps(result)
-    assert schema_getter.await_count == 3
+    assert schema_getter.await_count == 4
 
 
 async def test_config_value_that_stops_being_secure_during_execution_stays_masked(

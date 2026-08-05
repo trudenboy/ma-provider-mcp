@@ -55,6 +55,7 @@ class MCPServerRuntime:
         config: ProviderConfig,
         logger: logging.Logger,
         policy_change_callback: Callable[[frozenset[str]], None] | None = None,
+        active_token_ids: frozenset[str] = frozenset(),
     ) -> None:
         """
         Hold the shared dependencies; nothing is started here.
@@ -67,6 +68,7 @@ class MCPServerRuntime:
         self._config = config
         self._logger = logger
         self._policy_change_callback = policy_change_callback
+        self._configured_token_ids = active_token_ids
         raw_path = str(config.get_value(CONF_MOUNT_PATH) or DEFAULT_MOUNT_PATH)
         self._mount_path: str = "/" + raw_path.strip("/")
         self._mcp: Any = None
@@ -80,7 +82,7 @@ class MCPServerRuntime:
         self._token_identities = TokenIdentityRegistry(on_change=self._refresh_policy_resolver)
         self._request_policies = AuthenticatedPolicyResolver(
             self._token_identities,
-            build_policy_resolver(config),
+            build_policy_resolver(config, active_token_ids=active_token_ids),
         )
 
     @property
@@ -320,6 +322,7 @@ class MCPServerRuntime:
         from fastmcp.server.dependencies import get_access_token  # noqa: PLC0415
 
         from .middleware import TagFilterMiddleware  # noqa: PLC0415
+        from .resource_authorization import ResourceAuthorizer  # noqa: PLC0415
 
         # Snapshot tags into the closure-captured set declared in __init__.
         # apply_permission_change mutates the same set later, so the
@@ -337,6 +340,14 @@ class MCPServerRuntime:
                 lambda: self._allowed_tags,
                 build_tag_lookup(mcp),
                 policy_provider=request_policy,
+                resource_authorizer=ResourceAuthorizer(
+                    self._mass,
+                    auth_required_provider=lambda: bool(self._config.get_value(CONF_REQUIRE_AUTH)),
+                    token_provider=get_access_token,
+                    identity_provider=self._token_identities.lookup,
+                    policy_provider=self.resolve_policy,
+                    default_policy_provider=lambda: self.policy_resolver.resolve(None),
+                ),
             )
         )
 
@@ -344,12 +355,14 @@ class MCPServerRuntime:
         """Compile and atomically install a resolver for known and manual token IDs."""
         resolver = build_policy_resolver(
             self._config,
-            active_token_ids=self._token_identities.token_ids(),
+            active_token_ids=self._configured_token_ids | self._token_identities.token_ids(),
         )
         if hasattr(self, "_request_policies"):
             self._request_policies.replace(resolver)
             if self._policy_change_callback is not None:
-                self._policy_change_callback(self._token_identities.token_ids())
+                self._policy_change_callback(
+                    self._configured_token_ids | self._token_identities.token_ids()
+                )
 
 
 async def _tag_lookup(mcp: Any, kind: str, key: str) -> set[str] | None:

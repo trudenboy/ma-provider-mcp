@@ -94,8 +94,13 @@ class MCPServerProvider(PluginProvider):  # type: ignore[misc, unused-ignore]
             ),
         )
         try:
+            active_token_ids = await self._discover_policy_token_ids()
+            self._commands.update_config(
+                self.config,
+                active_token_ids=active_token_ids,
+            )
             self._commands.start()
-            await self._start_runtime(self.config)
+            await self._start_runtime(self.config, active_token_ids=active_token_ids)
         except BaseException:
             try:
                 if self._runtime is not None:
@@ -146,17 +151,25 @@ class MCPServerProvider(PluginProvider):  # type: ignore[misc, unused-ignore]
             self._runtime = None
             await self._start_runtime(config)
 
-    async def _start_runtime(self, config: ProviderConfig) -> None:
+    async def _start_runtime(
+        self,
+        config: ProviderConfig,
+        *,
+        active_token_ids: frozenset[str] | None = None,
+    ) -> None:
         """Create and start a runtime, leaving no failed instance attached."""
         from .server import MCPServerRuntime  # noqa: PLC0415
 
+        if active_token_ids is None:
+            active_token_ids = await self._discover_policy_token_ids()
         if self._commands is not None:
-            self._commands.update_config(config, active_token_ids=frozenset())
+            self._commands.update_config(config, active_token_ids=active_token_ids)
         runtime = MCPServerRuntime(
             self.mass,
             config,
             self.logger,
             policy_change_callback=self._apply_policy_token_ids,
+            active_token_ids=active_token_ids,
         )
         resolve_policy = getattr(
             runtime,
@@ -174,6 +187,12 @@ class MCPServerProvider(PluginProvider):  # type: ignore[misc, unused-ignore]
             with suppress(BaseException):
                 await runtime.stop()
             raise
+
+    async def _discover_policy_token_ids(self) -> frozenset[str]:
+        """Resolve configured MCP token overrides before serving any request."""
+        from .config import current_user_mcp_tokens  # noqa: PLC0415
+
+        return frozenset(token.token_id for token in await current_user_mcp_tokens(self.mass))
 
     def _apply_policy_token_ids(self, token_ids: frozenset[str]) -> None:
         """Refresh event retention when authenticated token identities change."""

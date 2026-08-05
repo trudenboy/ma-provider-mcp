@@ -39,6 +39,7 @@ async def test_runtime_has_three_tools_and_preserves_resources_and_prompts(
 
     # ``register_dynamic_route`` must return a callable; the smoke test does not
     # need real HTTP transport — Client(mcp) talks to the in-memory FastMCP root.
+    mock_config._values["require_auth"] = False
     runtime = MCPServerRuntime(mock_mass, mock_config, _stub_logger())
     # Pretend the bridge mounted; we exercise the FastMCP root directly via in-memory Client.
     await runtime.start()

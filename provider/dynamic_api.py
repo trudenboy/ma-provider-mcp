@@ -112,6 +112,14 @@ class AuthorizedInvocation:
     policy: PolicySnapshot
 
 
+class _FinalAuthorizationError(ToolError):
+    """Carry the recomputed final seal into the single denial audit path."""
+
+    def __init__(self, message: str, invocation: AuthorizedInvocation) -> None:
+        super().__init__(message)
+        self.invocation = invocation
+
+
 @dataclass(frozen=True, slots=True)
 class CatalogSnapshot:
     """Compiled descriptors for one live command-registry generation."""
@@ -378,9 +386,12 @@ class DynamicAPIAdapter:
                         invocation,
                         impersonated=impersonated,
                     )
-                except ToolError:
+                except ToolError as exc:
+                    denied_invocation = (
+                        exc.invocation if isinstance(exc, _FinalAuthorizationError) else invocation
+                    )
                     self._audit_invocation(
-                        invocation,
+                        denied_invocation,
                         "authorization.denied",
                         impersonating=impersonating,
                     )
@@ -914,6 +925,15 @@ class DynamicAPIAdapter:
 
         policy = self._request_policy(auth)
         entry = self._reauthorize_entry(invocation.entry, auth, policy)
+        decision = entry.decision
+        if decision is None:
+            raise ToolError(f"Tool {entry.name!r} not found or not permitted")
+        preflight = await self._preflight(decision, invocation.arguments, auth)
+        # The preflight inspection itself may await live MA state. Resolve the
+        # policy and entry again synchronously so the returned seal contains
+        # the actual request-dependent capabilities and current modes.
+        policy = self._request_policy(auth)
+        entry = self._reauthorize_entry(entry, auth, policy)
         if impersonated_user is not None:
             caller = auth[1] if auth is not None else None
             caller_id = getattr(caller, "user_id", None)
@@ -937,20 +957,22 @@ class DynamicAPIAdapter:
         decision = entry.decision
         if decision is None:
             raise ToolError(f"Tool {entry.name!r} not found or not permitted")
-        if (
-            decision.effective_mode(policy, invocation.preflight.additional_required)
-            is PolicyMode.DENY
-        ):
-            denied = self._denied_capability(decision, invocation.preflight, policy)
-            suffix = f" (requires {denied})" if denied is not None else ""
-            raise ToolError(f"Tool {entry.name!r} not found or not permitted{suffix}")
-        return dataclasses.replace(
+        final_invocation = dataclasses.replace(
             invocation,
             entry=entry,
             auth=auth,
             impersonated_user=impersonated_user,
+            preflight=preflight,
             policy=policy,
         )
+        if decision.effective_mode(policy, preflight.additional_required) is PolicyMode.DENY:
+            denied = self._denied_capability(decision, preflight, policy)
+            suffix = f" (requires {denied})" if denied is not None else ""
+            raise _FinalAuthorizationError(
+                f"Tool {entry.name!r} not found or not permitted{suffix}",
+                final_invocation,
+            )
+        return final_invocation
 
     async def _audit_denied_name(self, name: str) -> None:
         """Record a denied canonical name without exposing request inputs."""
@@ -1063,6 +1085,9 @@ class DynamicAPIAdapter:
         decision = invocation.entry.decision
         if decision is None:
             return "unknown"
+        denied = cls._denied_capability(decision, invocation.preflight, invocation.policy)
+        if denied is not None:
+            return denied
         required = sorted(decision.required_capabilities | invocation.preflight.additional_required)
         if required:
             return required[0]

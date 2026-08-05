@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
@@ -14,7 +15,7 @@ from music_assistant_models.enums import ConfigEntryType
 from music_assistant.models.plugin import PluginProvider
 from provider import _init_helpers, server
 from provider.commands import ProviderCommandSet
-from provider.config import policy_mode_key
+from provider.config import policy_mode_key, token_policy_key
 from provider.constants import CONF_DEFAULT_POLICY
 from provider.provider import MCPServerProvider
 from provider.server import MCPServerRuntime
@@ -29,6 +30,7 @@ class _LifecycleMass:
         self.registered: dict[str, Callable[..., Any]] = {}
         self.register_api_command = MagicMock(side_effect=self._register)
         self.subscribe = MagicMock(side_effect=self._subscribe)
+        self.webserver: Any = None
 
     def _register(
         self, command: str, handler: Callable[..., Any], **_kwargs: Any
@@ -216,6 +218,53 @@ async def test_restart_does_not_duplicate_event_subscription(
 
     await provider.handle_async_init()
     await provider.update_config(_config(debug_events=True), {"mount_path"})
+
+    assert mass.subscribe.call_count == 1
+    await provider.unload()
+
+
+@pytest.mark.asyncio
+async def test_auto_discovered_debug_override_activates_buffer_before_authentication(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Configured MCP-token overrides retain events from provider startup."""
+    mass = _LifecycleMass()
+    token_id = "auto-token-id"
+    mass.webserver = MagicMock()
+    mass.webserver.auth.get_current_user_info = AsyncMock(
+        return_value=SimpleNamespace(user_id="user-1")
+    )
+    mass.webserver.auth.get_user_tokens = AsyncMock(
+        return_value=[
+            SimpleNamespace(
+                user_id="user-1",
+                token_id=token_id,
+                name="MCP — desktop",
+            )
+        ]
+    )
+    values = {
+        CONF_DEFAULT_POLICY: "Read-only",
+        token_policy_key(token_id): "Custom",
+        policy_mode_key(Tag.DEBUG_EVENTS, token_id): "allow",
+        "debug_event_buffer_capacity": 100,
+    }
+    config = MagicMock()
+    config.get_value.side_effect = lambda key, default=None: values.get(key, default)
+    provider = _provider(mass, config)
+
+    class Runtime:
+        def __init__(self, *_args: Any, **_kwargs: Any) -> None:
+            pass
+
+        async def start(self) -> None:
+            pass
+
+        async def stop(self) -> None:
+            pass
+
+    monkeypatch.setattr(server, "MCPServerRuntime", Runtime)
+    await provider.handle_async_init()
 
     assert mass.subscribe.call_count == 1
     await provider.unload()
