@@ -928,17 +928,12 @@ class DynamicAPIAdapter:
         impersonated: Any,
     ) -> AuthorizedInvocation:
         """Revalidate awaited identities, then synchronously seal authorization."""
-        impersonated_user = (
-            await self._resolve_impersonated_user(invocation.auth, str(impersonated))
-            if impersonated
-            else None
-        )
         decision = invocation.entry.decision
         if decision is None:
             raise ToolError(f"Tool {invocation.entry.name!r} not found or not permitted")
         preflight = await self._preflight(decision, invocation.arguments, invocation.auth)
-        auth = (
-            await self._authentication(revalidate=True) if self._auth_required_provider() else None
+        auth, impersonated_user = await self._final_authentication(
+            impersonated=impersonated,
         )
         # No authorization-sensitive await is permitted below this point.
         preflight = revalidate_preflight_command_sync(
@@ -961,9 +956,12 @@ class DynamicAPIAdapter:
                 final_invocation,
             )
         try:
+            if not self._authentication_is_still_exact(auth):
+                raise ToolError("Authentication is required")
             entry = self._reauthorize_entry(invocation.entry, auth, policy)
             final_invocation = dataclasses.replace(final_invocation, entry=entry)
             if impersonated_user is not None:
+                previous_target_id = getattr(invocation.impersonated_user, "user_id", None)
                 caller = auth[1] if auth is not None else None
                 caller_id = getattr(caller, "user_id", None)
                 target_id = getattr(impersonated_user, "user_id", None)
@@ -972,6 +970,7 @@ class DynamicAPIAdapter:
                     or not caller_id
                     or not isinstance(target_id, str)
                     or not target_id
+                    or target_id != previous_target_id
                     or (
                         caller_id != target_id
                         and not self._scope_is_allowed(caller, Scope.USERS_IMPERSONATE)
@@ -993,6 +992,47 @@ class DynamicAPIAdapter:
         except ToolError as exc:
             raise _InvocationAuthorizationError(str(exc), final_invocation) from exc
         return final_invocation
+
+    async def _final_authentication(
+        self,
+        *,
+        impersonated: Any,
+    ) -> tuple[tuple[AccessToken, Any] | None, Any | None]:
+        """
+        Refresh the caller, then resolve the target as the authoritative final await.
+
+        MA exposes independent async caller and target reads rather than a
+        transactional pair snapshot. Keeping both inside this final authorization
+        coroutine, with the target read last, is the strongest available ordering.
+        """
+        auth = (
+            await self._authentication(revalidate=True) if self._auth_required_provider() else None
+        )
+        if auth is None or not impersonated:
+            return auth, None
+        target = await self._resolve_impersonated_user(auth, str(impersonated))
+        return auth, target
+
+    def _authentication_is_still_exact(
+        self,
+        auth: tuple[AccessToken, Any] | None,
+    ) -> bool:
+        """Re-read request-local exact identity synchronously after target lookup."""
+        if auth is None:
+            return not self._auth_required_provider()
+        token, user = auth
+        if getattr(user, "enabled", True) is False:
+            return False
+        current = self._token_provider()
+        if current is None or current.token != token.token or current.client_id != token.client_id:
+            return False
+        if self._identity_provider is None:
+            return True
+        identity = self._identity_provider(token.token)
+        if identity is None:
+            return token.client_id == LOOKUP_FAILURE_CLIENT_ID
+        expected = identity.token_id or LEGACY_TOKEN_CLIENT_ID
+        return str(getattr(user, "user_id", "")) == identity.user_id and token.client_id == expected
 
     async def _audit_denied_name(self, name: str) -> None:
         """Record a denied canonical name without exposing request inputs."""

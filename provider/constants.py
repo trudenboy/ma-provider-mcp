@@ -15,6 +15,7 @@ DEFAULT_MOUNT_PATH = "/mcp/v1"
 # Permissions & Confirmations v2 policy settings.
 CONF_DEFAULT_POLICY = "policy_default"
 CONF_MANUAL_TOKEN_IDS = "policy_manual_token_ids"
+CONF_POLICY_TOKEN_SUFFIXES = "policy_token_suffixes"
 POLICY_MODE_KEY_PREFIX = "policy_mode_"
 TOKEN_POLICY_KEY_PREFIX = "policy_token_"
 
@@ -27,7 +28,9 @@ CONF_RES_PROMPTS = "res_prompts"
 CONF_DEBUG_EVENT_BUFFER_CAPACITY = "debug_event_buffer_capacity"
 
 RESOURCE_KEYS: frozenset[str] = frozenset({CONF_RES_LIBRARY, CONF_RES_PLAYER, CONF_RES_PROMPTS})
-POLICY_KEYS: frozenset[str] = frozenset({CONF_DEFAULT_POLICY, CONF_MANUAL_TOKEN_IDS})
+POLICY_KEYS: frozenset[str] = frozenset(
+    {CONF_DEFAULT_POLICY, CONF_MANUAL_TOKEN_IDS, CONF_POLICY_TOKEN_SUFFIXES}
+)
 
 
 def is_policy_key(key: str) -> bool:

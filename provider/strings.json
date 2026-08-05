@@ -40,6 +40,10 @@
       "label": "Manual MCP token IDs",
       "description": "Optional Music Assistant token IDs to configure when they cannot be discovered for the current settings user. Token IDs are not bearer secrets."
     },
+    "policy_token_suffixes": {
+      "label": "Stored token policy references",
+      "description": "Internal non-reversible references that keep per-token policies available after restart. Bearer tokens and token IDs are never stored here."
+    },
     "res_library": {
       "label": "Expose library:// resources",
       "description": "URI-addressable read-only views of artists, albums, tracks, playlists."

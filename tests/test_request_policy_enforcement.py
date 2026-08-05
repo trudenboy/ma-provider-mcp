@@ -854,9 +854,21 @@ async def test_exact_identity_revoked_during_final_preflight_blocks_execution(
     assert called is False
 
 
-async def test_impersonation_revoked_during_final_preflight_blocks_execution() -> None:
-    """The impersonated identity is resolved again after the final inspection."""
+@pytest.mark.parametrize(
+    ("final_target", "permitted"),
+    [
+        ("retained", True),
+        ("disabled", False),
+        ("replaced", False),
+    ],
+)
+async def test_impersonation_target_is_fresh_after_final_preflight(
+    final_target: str,
+    permitted: bool,
+) -> None:
+    """Retain only the exact enabled target resolved after the final preflight."""
     called = False
+    inspections = 0
 
     async def save(
         provider_domain: str,
@@ -885,49 +897,66 @@ async def test_impersonation_revoked_during_final_preflight_blocks_execution() -
             )
         },
     )
-    adapter.mass.config.get_provider_config_entries = AsyncMock(
-        return_value=[ConfigEntry(key="token", type=ConfigEntryType.SECURE_STRING, label="Token")]
-    )
-    impersonated_user = SimpleNamespace(
+    original_target = SimpleNamespace(
         user_id="target",
         enabled=True,
         role="admin",
         player_filter=[],
         provider_filter=[],
     )
+    live_target = [original_target]
+
+    async def final_preflight_mutation(_target: str) -> list[ConfigEntry]:
+        nonlocal inspections
+        inspections += 1
+        if inspections == 3:
+            if final_target == "disabled":
+                live_target[0] = SimpleNamespace(**{**vars(original_target), "enabled": False})
+            elif final_target == "replaced":
+                live_target[0] = SimpleNamespace(
+                    **{**vars(original_target), "user_id": "replacement"}
+                )
+            else:
+                live_target[0] = SimpleNamespace(**vars(original_target))
+        return [ConfigEntry(key="token", type=ConfigEntryType.SECURE_STRING, label="Token")]
+
+    adapter.mass.config.get_provider_config_entries = final_preflight_mutation
     resolutions = 0
 
-    async def resolve_then_revoke(_auth: Any, _requested: str) -> Any:
+    async def resolve_live_target(_auth: Any, _requested: str) -> Any:
         nonlocal resolutions
         resolutions += 1
-        if resolutions == 3:
-            raise ToolError("Unable to impersonate requested user")
-        return impersonated_user
+        return original_target if resolutions < 3 else live_target[0]
 
-    cast("Any", adapter)._resolve_impersonated_user = resolve_then_revoke
+    cast("Any", adapter)._resolve_impersonated_user = resolve_live_target
     ctx = SimpleNamespace(
         elicit=AsyncMock(return_value=SimpleNamespace(action="accept", data=True))
     )
-    with pytest.raises(ToolError, match="Unable to impersonate requested user"):
-        await adapter.call(
-            "ma_api:config/providers/save",
-            {
-                "provider_domain": "demo",
-                "instance_id": "demo--1",
-                "values": {"token": "new-secret"},
-                "user": "target",
-            },
-            response_mode="compact",
-            fields=None,
-            max_items=None,
-            ctx=cast("Context", ctx),
-        )
+    call = adapter.call(
+        "ma_api:config/providers/save",
+        {
+            "provider_domain": "demo",
+            "instance_id": "demo--1",
+            "values": {"token": "new-secret"},
+            "user": "target",
+        },
+        response_mode="compact",
+        fields=None,
+        max_items=None,
+        ctx=cast("Context", ctx),
+    )
+    if permitted:
+        await call
+    else:
+        with pytest.raises(ToolError, match="Unable to impersonate requested user"):
+            await call
+    assert inspections == 3
     assert resolutions == 3
-    assert called is False
+    assert called is permitted
 
 
 async def test_bearer_revoked_during_final_impersonation_lookup_blocks_execution() -> None:
-    """The final impersonation await cannot leave exact bearer identity stale."""
+    """Request-local exact bearer replacement during target lookup is sealed out."""
     called = False
 
     async def save(
@@ -940,6 +969,7 @@ async def test_bearer_revoked_during_final_impersonation_lookup_blocks_execution
         called = True
 
     token = AccessToken(token="config", client_id="id-config", scopes=[])
+    current_token = [token]
     adapter = _adapter(
         [
             _handler(
@@ -949,7 +979,7 @@ async def test_bearer_revoked_during_final_impersonation_lookup_blocks_execution
                 allow_impersonation=True,
             )
         ],
-        current_token=[token],
+        current_token=current_token,
         policies={
             "config": _custom(
                 config__write__provider=PolicyMode.ALLOW,
@@ -973,8 +1003,10 @@ async def test_bearer_revoked_during_final_impersonation_lookup_blocks_execution
         nonlocal resolutions
         resolutions += 1
         if resolutions == 3:
-            adapter.mass.webserver.auth.get_token_id_from_token = AsyncMock(
-                return_value="replacement"
+            current_token[0] = AccessToken(
+                token="replacement",
+                client_id="replacement-id",
+                scopes=[],
             )
         return impersonated_user
 
@@ -1051,9 +1083,16 @@ async def test_final_auth_user_after_impersonation_lookup_is_used_for_execution(
         },
         user=initial_user,
     )
-    adapter.mass.config.get_provider_config_entries = AsyncMock(
-        return_value=[ConfigEntry(key="token", type=ConfigEntryType.SECURE_STRING, label="Token")]
-    )
+    inspections = 0
+
+    async def preflight_then_replace_caller(_target: str) -> list[ConfigEntry]:
+        nonlocal inspections
+        inspections += 1
+        if inspections == 3:
+            adapter.mass.webserver.auth.authenticate_with_token = AsyncMock(return_value=fresh_user)
+        return [ConfigEntry(key="token", type=ConfigEntryType.SECURE_STRING, label="Token")]
+
+    adapter.mass.config.get_provider_config_entries = preflight_then_replace_caller
     impersonated_user = SimpleNamespace(
         user_id="target",
         enabled=True,
@@ -1066,15 +1105,12 @@ async def test_final_auth_user_after_impersonation_lookup_is_used_for_execution(
     async def resolve_and_replace_user(_auth: Any, _requested: str) -> Any:
         nonlocal resolutions
         resolutions += 1
-        if resolutions == 3:
-            adapter.mass.webserver.auth.authenticate_with_token = AsyncMock(return_value=fresh_user)
         return impersonated_user
 
     cast("Any", adapter)._resolve_impersonated_user = resolve_and_replace_user
     ctx = SimpleNamespace(
         elicit=AsyncMock(return_value=SimpleNamespace(action="accept", data=True))
     )
-
     await adapter.call(
         "ma_api:config/providers/save",
         {
@@ -1088,6 +1124,7 @@ async def test_final_auth_user_after_impersonation_lookup_is_used_for_execution(
         max_items=None,
         ctx=cast("Context", ctx),
     )
+    assert inspections == 3
     assert resolutions == 3
     assert execution_user is fresh_user
 

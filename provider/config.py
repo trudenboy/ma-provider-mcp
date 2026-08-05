@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -20,6 +20,7 @@ from .constants import (
     CONF_EXTRA_ALLOWED_ORIGINS,
     CONF_MANUAL_TOKEN_IDS,
     CONF_MOUNT_PATH,
+    CONF_POLICY_TOKEN_SUFFIXES,
     CONF_REQUIRE_AUTH,
     CONF_RES_LIBRARY,
     CONF_RES_PLAYER,
@@ -54,6 +55,11 @@ class PolicyToken:
 def policy_token_suffix(token_id: str) -> str:
     """Return a deterministic non-reversible suffix for one MA token ID."""
     return hashlib.sha256(token_id.encode()).hexdigest()
+
+
+def _valid_policy_token_suffix(value: object) -> bool:
+    """Return whether a stored policy suffix has the exact SHA-256 hex shape."""
+    return isinstance(value, str) and bool(re.fullmatch(r"[0-9a-f]{64}", value))
 
 
 def token_policy_key(token_id: str) -> str:
@@ -92,13 +98,24 @@ def build_policy_resolver(
     config: ProviderConfig,
     *,
     active_token_ids: Iterable[str] = (),
+    raw_value_provider: Callable[[str], Any] | None = None,
 ) -> PolicyResolver:
     """Compile raw provider values into an immutable fail-closed policy resolver."""
-    default = _parse_selection(config, token_id=None, allow_inherit=False)
+    default = _parse_selection(
+        config,
+        token_id=None,
+        allow_inherit=False,
+        raw_value_provider=raw_value_provider,
+    )
     token_ids = set(_manual_token_ids(config.get_value(CONF_MANUAL_TOKEN_IDS)))
     token_ids.update(str(token_id) for token_id in active_token_ids if str(token_id))
     overrides = {
-        token_id: _parse_selection(config, token_id=token_id, allow_inherit=True)
+        token_id: _parse_selection(
+            config,
+            token_id=token_id,
+            allow_inherit=True,
+            raw_value_provider=raw_value_provider,
+        )
         for token_id in sorted(token_ids)
     }
     return PolicyResolver(default=default, overrides=overrides)
@@ -108,6 +125,7 @@ def policy_event_buffer_enabled(
     config: ProviderConfig,
     *,
     active_token_ids: Iterable[str] = (),
+    raw_value_provider: Callable[[str], Any] | None = None,
 ) -> bool:
     """
     Return whether any configured policy can expose debug events.
@@ -117,18 +135,22 @@ def policy_event_buffer_enabled(
     config so activation never depends on which settings user happens to be
     current during startup.
     """
-    resolver = build_policy_resolver(config, active_token_ids=active_token_ids)
+    resolver = build_policy_resolver(
+        config,
+        active_token_ids=active_token_ids,
+        raw_value_provider=raw_value_provider,
+    )
     snapshots = [resolver.resolve(None)]
     snapshots.extend(resolver.resolve(token_id) for token_id in resolver.overrides)
     if any(snapshot.mode(Tag.DEBUG_EVENTS) is not PolicyMode.DENY for snapshot in snapshots):
         return True
 
-    raw = _raw_config_values(config)
-    selector = re.compile(rf"^{re.escape(TOKEN_POLICY_KEY_PREFIX)}([0-9a-f]{{64}})$")
-    for key, value in raw.items():
-        match = selector.fullmatch(key)
-        if match is None:
-            continue
+    suffixes = _manual_token_suffixes(
+        _policy_value(config, CONF_POLICY_TOKEN_SUFFIXES, raw_value_provider)
+    )
+    for suffix in suffixes:
+        key = f"{TOKEN_POLICY_KEY_PREFIX}{suffix}"
+        value = _policy_value(config, key, raw_value_provider)
         if value == INHERIT_POLICY:
             continue
         try:
@@ -136,9 +158,11 @@ def policy_event_buffer_enabled(
         except ValueError:
             continue
         if profile is PolicyProfile.CUSTOM:
-            mode_key = f"{TOKEN_POLICY_KEY_PREFIX}debug_events_{match.group(1)}"
+            mode_key = f"{TOKEN_POLICY_KEY_PREFIX}debug_events_{suffix}"
             try:
-                mode = PolicyMode(str(raw.get(mode_key, PolicyMode.DENY)))
+                mode = PolicyMode(
+                    str(_policy_value(config, mode_key, raw_value_provider) or PolicyMode.DENY)
+                )
             except ValueError:
                 mode = PolicyMode.DENY
         else:
@@ -150,15 +174,21 @@ def policy_event_buffer_enabled(
     return False
 
 
-def _raw_config_values(config: ProviderConfig) -> dict[str, Any]:
-    """Return context-free provider values without decrypting or user discovery."""
-    entries = getattr(config, "values", None)
-    if isinstance(entries, Mapping):
-        return {str(key): getattr(entry, "value", entry) for key, entry in entries.items()}
-    test_values = getattr(config, "_values", None)
-    if isinstance(test_values, Mapping):
-        return {str(key): value for key, value in test_values.items()}
-    return {}
+def _policy_value(
+    config: ProviderConfig,
+    key: str,
+    raw_value_provider: Callable[[str], Any] | None,
+) -> Any:
+    """Read a parsed value, falling back to MA's sanctioned raw config store."""
+    value = config.get_value(key)
+    return raw_value_provider(key) if value is None and raw_value_provider is not None else value
+
+
+def _manual_token_suffixes(raw: object) -> tuple[str, ...]:
+    """Parse the permanent non-reversible token-policy index."""
+    if not isinstance(raw, list | tuple | set | frozenset):
+        return ()
+    return tuple(sorted({str(value) for value in raw if _valid_policy_token_suffix(value)}))
 
 
 def build_config_entries(
@@ -167,6 +197,7 @@ def build_config_entries(
     *,
     tokens: Iterable[Any] = (),
     manual_token_ids: Iterable[str] = (),
+    stored_value_provider: Callable[[str], Any] | None = None,
 ) -> tuple[ConfigEntry, ...]:
     """Return endpoint, resource, prompt, and dynamic v2 policy entries."""
     base_url = mass.webserver.base_url.rstrip("/")
@@ -237,6 +268,20 @@ def build_config_entries(
             required=False,
         ),
         _policy_selector(CONF_DEFAULT_POLICY, None, allow_inherit=False),
+        ConfigEntry(
+            key=CONF_POLICY_TOKEN_SUFFIXES,
+            type=ConfigEntryType.STRING,
+            default_value=[],
+            multi_value=True,
+            hidden=True,
+            category="policy",
+            required=False,
+            value=(
+                stored_value_provider(CONF_POLICY_TOKEN_SUFFIXES)
+                if stored_value_provider is not None
+                else None
+            ),
+        ),
     ]
     entries.extend(_custom_matrix(CONF_DEFAULT_POLICY))
     entries.append(
@@ -260,8 +305,15 @@ def build_config_entries(
         rendered.setdefault(token_id, PolicyToken(token_id, f"Manual MCP token ·{token_id[-8:]}"))
     for token in sorted(rendered.values(), key=lambda value: (value.name, value.token_id)):
         selector = token_policy_key(token.token_id)
-        entries.append(_policy_selector(selector, token.name, allow_inherit=True))
-        entries.extend(_custom_matrix(selector, token.token_id))
+        selector_entry = _policy_selector(selector, token.name, allow_inherit=True)
+        if stored_value_provider is not None:
+            selector_entry.value = stored_value_provider(selector)
+        entries.append(selector_entry)
+        matrix = _custom_matrix(selector, token.token_id)
+        if stored_value_provider is not None:
+            for entry in matrix:
+                entry.value = stored_value_provider(entry.key)
+        entries.extend(matrix)
 
     entries.extend(
         (
@@ -332,10 +384,11 @@ def _parse_selection(
     *,
     token_id: str | None,
     allow_inherit: bool,
+    raw_value_provider: Callable[[str], Any] | None = None,
 ) -> PolicySelection:
     """Parse one selector and fail closed on every malformed raw value."""
     key = CONF_DEFAULT_POLICY if token_id is None else token_policy_key(token_id)
-    raw = config.get_value(key)
+    raw = _policy_value(config, key, raw_value_provider)
     if raw is None:
         return (
             PolicySelection.inherit()
@@ -353,7 +406,13 @@ def _parse_selection(
     if profile is not PolicyProfile.CUSTOM:
         return PolicySelection.profile(profile)
     modes = {
-        str(capability): _parse_mode(config.get_value(policy_mode_key(capability, token_id)))
+        str(capability): _parse_mode(
+            _policy_value(
+                config,
+                policy_mode_key(capability, token_id),
+                raw_value_provider,
+            )
+        )
         for capability in Tag
     }
     return PolicySelection.custom(modes)

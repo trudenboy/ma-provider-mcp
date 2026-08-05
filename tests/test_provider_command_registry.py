@@ -22,8 +22,13 @@ from provider.commands import debug as debug_commands
 from provider.commands import queue as queue_commands
 from provider.commands import registry as command_registry
 from provider.commands.authorization import authorize_extension, scope_allowed
-from provider.config import policy_mode_key, token_policy_key
-from provider.constants import CONF_DEFAULT_POLICY, CONF_MANUAL_TOKEN_IDS, CONF_REQUIRE_AUTH
+from provider.config import policy_mode_key, policy_token_suffix, token_policy_key
+from provider.constants import (
+    CONF_DEFAULT_POLICY,
+    CONF_MANUAL_TOKEN_IDS,
+    CONF_POLICY_TOKEN_SUFFIXES,
+    CONF_REQUIRE_AUTH,
+)
 from provider.dynamic_api import DynamicAPIAdapter
 from provider.dynamic_signatures import compile_signature
 from provider.models import (
@@ -919,6 +924,7 @@ def test_hashed_token_override_hot_update_activates_event_buffer_without_identit
             "debug_event_buffer_capacity": 100,
         }
         if debug_mode is not None:
+            values[CONF_POLICY_TOKEN_SUFFIXES] = [policy_token_suffix(token_id)]
             values[token_policy_key(token_id)] = "Custom"
             values[policy_mode_key(Tag.DEBUG_EVENTS, token_id)] = debug_mode
         config = MagicMock()

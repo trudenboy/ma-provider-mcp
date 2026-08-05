@@ -80,7 +80,7 @@ class MCPServerRuntime:
         self._token_identities = TokenIdentityRegistry(on_change=self._refresh_policy_resolver)
         self._request_policies = AuthenticatedPolicyResolver(
             self._token_identities,
-            build_policy_resolver(config),
+            build_policy_resolver(config, raw_value_provider=self._raw_policy_value),
         )
 
     @property
@@ -354,11 +354,21 @@ class MCPServerRuntime:
         resolver = build_policy_resolver(
             self._config,
             active_token_ids=self._token_identities.token_ids(),
+            raw_value_provider=self._raw_policy_value,
         )
         if hasattr(self, "_request_policies"):
             self._request_policies.replace(resolver)
             if self._policy_change_callback is not None:
                 self._policy_change_callback(self._token_identities.token_ids())
+
+    def _raw_policy_value(self, key: str) -> object:
+        """Read one preserved policy value through MA's sanctioned raw API."""
+        instance_id = str(getattr(self._config, "instance_id", ""))
+        config_controller = getattr(self._mass, "config", None)
+        getter = getattr(config_controller, "get_raw_provider_config_value", None)
+        if not instance_id or not callable(getter):
+            return None
+        return getter(instance_id, key, None)
 
 
 async def _tag_lookup(mcp: Any, kind: str, key: str) -> set[str] | None:

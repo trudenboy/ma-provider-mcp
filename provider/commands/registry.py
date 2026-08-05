@@ -95,6 +95,7 @@ class ProviderCommandSet:
         policy_provider: Callable[[str | None], PolicySnapshot] | None = None,
         audit_sink: AuditSink | None = None,
         audit_client_id_provider: Callable[[str | None], str] | None = None,
+        raw_policy_value_provider: Callable[[str], Any] | None = None,
     ) -> None:
         """Bind MA state and lazy providers for configuration and diagnostics."""
         self._mass = mass
@@ -110,6 +111,7 @@ class ProviderCommandSet:
         self._policy_provider = policy_provider
         self._audit_sink = audit_sink or emit_audit_record
         self._audit_client_id_provider = audit_client_id_provider
+        self._raw_policy_value_provider = raw_policy_value_provider
         self._buffer: EventBuffer | None = EventBuffer(
             self._mass, capacity=self._event_buffer_capacity(self._config())
         )
@@ -186,6 +188,7 @@ class ProviderCommandSet:
         enabled = policy_event_buffer_enabled(
             config,
             active_token_ids=self._active_policy_token_ids,
+            raw_value_provider=self._raw_policy_value_provider,
         )
         capacity = self._event_buffer_capacity(config)
         if self._buffer is None or self._buffer.stats().capacity != capacity:

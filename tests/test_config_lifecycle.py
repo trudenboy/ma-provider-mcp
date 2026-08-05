@@ -15,8 +15,8 @@ from music_assistant_models.enums import ConfigEntryType
 from music_assistant.models.plugin import PluginProvider
 from provider import _init_helpers, server
 from provider.commands import ProviderCommandSet
-from provider.config import policy_mode_key, token_policy_key
-from provider.constants import CONF_DEFAULT_POLICY
+from provider.config import policy_mode_key, policy_token_suffix, token_policy_key
+from provider.constants import CONF_DEFAULT_POLICY, CONF_POLICY_TOKEN_SUFFIXES
 from provider.provider import MCPServerProvider
 from provider.server import MCPServerRuntime
 from provider.tags import Tag
@@ -239,6 +239,7 @@ async def test_auto_discovered_debug_override_activates_buffer_before_authentica
     )
     values = {
         CONF_DEFAULT_POLICY: "Read-only",
+        CONF_POLICY_TOKEN_SUFFIXES: [policy_token_suffix(token_id)],
         token_policy_key(token_id): "Custom",
         policy_mode_key(Tag.DEBUG_EVENTS, token_id): "allow",
         "debug_event_buffer_capacity": 100,

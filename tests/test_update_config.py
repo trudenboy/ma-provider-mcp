@@ -27,8 +27,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from provider.commands import ProviderCommandSet
-from provider.config import policy_mode_key, token_policy_key
-from provider.constants import CONF_DEFAULT_POLICY
+from provider.config import policy_mode_key, policy_token_suffix, token_policy_key
+from provider.constants import CONF_DEFAULT_POLICY, CONF_POLICY_TOKEN_SUFFIXES
 from provider.tags import Tag
 
 
@@ -117,6 +117,38 @@ def _provider_with_mock_runtime(mock_mass: MagicMock, mock_config: MagicMock) ->
 
 
 @pytest.mark.asyncio
+async def test_token_policy_hot_update_persists_non_secret_suffix_index(
+    mock_mass: MagicMock,
+) -> None:
+    """A rendered auto-token edit makes its exact policy durable for cold starts."""
+    token_id = "auto-token-secret-identifier"
+    suffix = policy_token_suffix(token_id)
+    config = MagicMock()
+    config.instance_id = "mcp_server--1"
+    config.get_value.side_effect = lambda key, default=None: {
+        CONF_POLICY_TOKEN_SUFFIXES: [],
+    }.get(key, default)
+    config.values = {
+        CONF_POLICY_TOKEN_SUFFIXES: SimpleNamespace(value=[]),
+    }
+    provider = _provider_with_mock_runtime(mock_mass, config)
+
+    await provider.update_config(
+        config,
+        changed_keys={f"values/{token_policy_key(token_id)}"},
+    )
+
+    mock_mass.config.set_raw_provider_config_value.assert_called_once_with(
+        "mcp_server--1",
+        CONF_POLICY_TOKEN_SUFFIXES,
+        [suffix],
+        immediate=True,
+    )
+    assert config.values[CONF_POLICY_TOKEN_SUFFIXES].value == [suffix]
+    assert token_id not in repr(mock_mass.config.set_raw_provider_config_value.call_args)
+
+
+@pytest.mark.asyncio
 async def test_hot_swappable_change_takes_hot_swap_path(
     mock_mass: MagicMock, mock_config: MagicMock
 ) -> None:
@@ -178,6 +210,7 @@ async def test_runtime_replacement_preserves_raw_event_buffer_override(
     token_id = "discovered-token-id"
     values = {
         CONF_DEFAULT_POLICY: "Read-only",
+        CONF_POLICY_TOKEN_SUFFIXES: [policy_token_suffix(token_id)],
         token_policy_key(token_id): "Custom",
         policy_mode_key(Tag.DEBUG_EVENTS, token_id): "allow",
         "debug_event_buffer_capacity": 100,

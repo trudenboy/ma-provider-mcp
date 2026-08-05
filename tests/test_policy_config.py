@@ -4,20 +4,26 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from music_assistant_models.config_entries import ProviderConfig
+from music_assistant_models.enums import ProviderType
 
 from provider.config import (
     build_config_entries,
     build_policy_resolver,
     current_user_mcp_tokens,
+    policy_event_buffer_enabled,
     policy_mode_key,
+    policy_token_suffix,
     token_policy_key,
 )
 from provider.constants import (
     CONF_DEFAULT_POLICY,
     CONF_MANUAL_TOKEN_IDS,
+    CONF_POLICY_TOKEN_SUFFIXES,
     DEFAULT_MOUNT_PATH,
 )
 from provider.policy import PolicyMode, PolicyProfile
@@ -125,19 +131,29 @@ def test_dynamic_entries_have_conditional_matrices_and_hashed_token_keys(
 ) -> None:
     """Each selector controls exactly one 26-capability Custom matrix."""
     raw_id = "token-id-must-not-appear"
+    selector_key = token_policy_key(raw_id)
+    debug_key = policy_mode_key(Tag.DEBUG_EVENTS, raw_id)
+    stored_values = {
+        CONF_POLICY_TOKEN_SUFFIXES: [policy_token_suffix(raw_id)],
+        selector_key: "Custom",
+        debug_key: "confirm",
+    }
     entries = build_config_entries(
         mock_mass,
         DEFAULT_MOUNT_PATH,
         tokens=(SimpleNamespace(token_id=raw_id, name="MCP — Claude"),),
         manual_token_ids=("manual-foreign-id",),
+        stored_value_provider=stored_values.get,
     )
     by_key = {entry.key: entry for entry in entries}
-    selector_key = token_policy_key(raw_id)
 
     assert CONF_DEFAULT_POLICY in by_key
     assert CONF_MANUAL_TOKEN_IDS in by_key
     assert by_key[CONF_MANUAL_TOKEN_IDS].multi_value is True
     assert selector_key in by_key
+    assert by_key[selector_key].value == "Custom"
+    assert by_key[debug_key].value == "confirm"
+    assert by_key[CONF_POLICY_TOKEN_SUFFIXES].value == [policy_token_suffix(raw_id)]
     assert [option.value for option in by_key[CONF_DEFAULT_POLICY].options] == [
         "Read-only",
         "Home control",
@@ -184,3 +200,67 @@ def test_v1_entries_are_removed_even_if_stored_values_exist(mock_mass: MagicMock
         "dynamic_api_read",
         "require_confirmation",
     }.isdisjoint(keys)
+
+
+def test_actual_provider_config_roundtrip_preserves_exact_cold_token_policies(
+    mock_mass: MagicMock,
+) -> None:
+    """A permanent suffix index makes undeclared hashed overrides cold-start durable."""
+    readonly_id = "auto-readonly-token"
+    debug_id = "auto-debug-token"
+    replacement_id = "replacement-token"
+    readonly_suffix = policy_token_suffix(readonly_id)
+    debug_suffix = policy_token_suffix(debug_id)
+    raw_values = {
+        CONF_DEFAULT_POLICY: "Trusted",
+        CONF_POLICY_TOKEN_SUFFIXES: [readonly_suffix, debug_suffix],
+        token_policy_key(readonly_id): "Read-only",
+        token_policy_key(debug_id): "Custom",
+        policy_mode_key(Tag.DEBUG_EVENTS, debug_id): "allow",
+    }
+    raw = {
+        "values": raw_values,
+        "type": ProviderType.PLUGIN.value,
+        "domain": "mcp_server",
+        "instance_id": "mcp_server--1",
+        "enabled": True,
+    }
+    first_entries = build_config_entries(
+        mock_mass,
+        DEFAULT_MOUNT_PATH,
+        tokens=(
+            SimpleNamespace(token_id=readonly_id, name="MCP — restricted"),
+            SimpleNamespace(token_id=debug_id, name="MCP — debug"),
+        ),
+    )
+    first = cast("ProviderConfig", ProviderConfig.parse(first_entries, raw))
+    persisted = first.to_raw()
+
+    # A context-free cold parse cannot render either user's token rows. Only
+    # the permanent hidden index survives on the ProviderConfig itself; exact
+    # hashed values remain in MA's sanctioned raw store.
+    cold = cast(
+        "ProviderConfig",
+        ProviderConfig.parse(
+            build_config_entries(mock_mass, DEFAULT_MOUNT_PATH),
+            persisted,
+        ),
+    )
+    stored = dict(raw_values)
+    stored.update(persisted["values"])
+
+    def raw_value(key: str) -> object:
+        return stored.get(key)
+
+    resolver = build_policy_resolver(
+        cold,
+        active_token_ids={readonly_id, replacement_id},
+        raw_value_provider=raw_value,
+    )
+
+    assert cold.get_value(CONF_POLICY_TOKEN_SUFFIXES) == [readonly_suffix, debug_suffix]
+    assert resolver.resolve(readonly_id).profile is PolicyProfile.READ_ONLY
+    assert resolver.resolve(replacement_id).profile is PolicyProfile.TRUSTED
+    assert policy_event_buffer_enabled(cold, raw_value_provider=raw_value) is True
+    assert readonly_id not in repr(persisted)
+    assert debug_id not in repr(persisted)
