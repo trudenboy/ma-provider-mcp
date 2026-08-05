@@ -14,6 +14,7 @@ from provider.auth import (
     LOOKUP_FAILURE_CLIENT_ID,
     MASTokenVerifier,
 )
+from provider.token_identity import TokenIdentityRegistry
 
 
 def _make_jwt(payload: dict[str, object]) -> str:
@@ -88,6 +89,24 @@ async def test_non_authoritative_client_ids_do_not_use_user_or_application_ident
     assert legacy.client_id == LEGACY_TOKEN_CLIENT_ID
     assert failed.client_id == LOOKUP_FAILURE_CLIENT_ID
     assert {legacy.client_id, failed.client_id}.isdisjoint({"u1", "music-assistant"})
+
+
+@pytest.mark.asyncio
+async def test_token_resolution_failures_are_counted_without_identity_details(
+    mock_mass: MagicMock, mock_user: MagicMock
+) -> None:
+    """Lookup exceptions and malformed IDs increment one aggregate diagnostic counter."""
+    registry = TokenIdentityRegistry()
+    mock_mass.webserver.auth.authenticate_with_token = AsyncMock(return_value=mock_user)
+    mock_mass.webserver.auth.get_token_id_from_token = AsyncMock(
+        side_effect=[RuntimeError("secret lookup detail"), "invalid token id with spaces"]
+    )
+    verifier = MASTokenVerifier(mock_mass, identity_registry=registry)
+
+    assert await verifier.verify_token("first-secret-bearer") is not None
+    assert await verifier.verify_token("second-secret-bearer") is not None
+
+    assert registry.token_resolution_failures == 2
 
 
 @pytest.mark.asyncio

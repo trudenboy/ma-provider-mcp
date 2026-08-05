@@ -54,6 +54,11 @@ def current_bearer_token() -> str | None:
     return get_current_token()
 
 
+def current_user() -> User | None:
+    """Return the current Music Assistant request user."""
+    return get_current_user()
+
+
 def authorize_extension(
     config: ProviderConfig,
     *,

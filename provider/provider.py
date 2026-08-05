@@ -165,6 +165,7 @@ class MCPServerProvider(PluginProvider):  # type: ignore[misc, unused-ignore]
         )
         if self._commands is not None and callable(resolve_policy):
             self._commands.set_policy_provider(resolve_policy)
+            self._commands.set_audit_client_id_provider(runtime.audit_client_id)
         self._runtime = runtime
         try:
             await runtime.start()

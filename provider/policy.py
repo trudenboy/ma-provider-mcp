@@ -9,6 +9,8 @@ from types import MappingProxyType
 
 from .tags import Tag
 
+POLICY_SCHEMA_VERSION = 2
+
 
 class PolicyMode(StrEnum):
     """One effective capability behavior."""

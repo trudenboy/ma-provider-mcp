@@ -19,6 +19,7 @@ from music_assistant_models.errors import AuthenticationRequired, InsufficientPe
 from music_assistant.helpers.api import APICommandHandler, parse_arguments
 from provider.commands import ProviderCommandSet, authorization
 from provider.commands import debug as debug_commands
+from provider.commands import queue as queue_commands
 from provider.commands import registry as command_registry
 from provider.commands.authorization import authorize_extension, scope_allowed
 from provider.config import policy_mode_key, token_policy_key
@@ -400,6 +401,144 @@ async def test_provider_debug_guard_uses_exact_request_policy_not_global_config(
     assert len(mass.removed) == 8
 
 
+@pytest.mark.parametrize("failure", [False, True])
+async def test_provider_owned_privileged_execution_audits_once_without_payloads(
+    failure: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Direct provider-owned writes emit one controlled, value-free execution outcome."""
+    mass = CommandRegistry()
+    records: list[Any] = []
+    policy = policy_snapshot(
+        PolicyProfile.CUSTOM,
+        {Tag.DELETE_QUEUE: PolicyMode.ALLOW},
+    )
+    command_set = ProviderCommandSet(
+        mass,
+        _config(Tag.DELETE_QUEUE),
+        policy_provider=lambda _bearer: policy,
+        audit_sink=records.append,
+        audit_client_id_provider=lambda _bearer: "exact-token-id",
+    )
+    command_set.start()
+    monkeypatch.setattr(authorization, "get_current_user", lambda: _user())
+    monkeypatch.setattr(authorization, "get_current_token", lambda: "raw-provider-bearer")
+
+    async def remove_items(_mass: Any, _queue_id: str, _item_ids: list[str]) -> Any:
+        if failure:
+            raise RuntimeError("exception-secret-must-not-appear")
+        return RemoveFromQueueResult()
+
+    monkeypatch.setattr(queue_commands, "remove_items_safe", remove_items)
+    call = mass.handlers["fastmcp/queue/remove_items_safe"](
+        "secret-queue-argument", ["secret-item-argument"]
+    )
+    if failure:
+        with pytest.raises(RuntimeError):
+            await call
+    else:
+        await call
+
+    assert len(records) == 1
+    record = records[0]
+    assert record.outcome == ("execution.failed" if failure else "execution.succeeded")
+    assert (
+        record.user_id,
+        record.client_id,
+        record.command,
+        record.capability,
+        record.mode,
+    ) == ("u1", "exact-token-id", "fastmcp/queue/remove_items_safe", "delete:queue", "allow")
+    emitted = repr(records)
+    for forbidden in (
+        "raw-provider-bearer",
+        "secret-queue-argument",
+        "secret-item-argument",
+        "exception-secret-must-not-appear",
+    ):
+        assert forbidden not in emitted
+
+
+async def test_provider_owned_denial_audits_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A direct provider-owned policy denial emits one authorization record."""
+    mass = CommandRegistry()
+    records: list[Any] = []
+    command_set = ProviderCommandSet(
+        mass,
+        _config(),
+        policy_provider=lambda _bearer: policy_snapshot(PolicyProfile.READ_ONLY),
+        audit_sink=records.append,
+        audit_client_id_provider=lambda _bearer: "exact-token-id",
+    )
+    command_set.start()
+    monkeypatch.setattr(authorization, "get_current_user", lambda: _user())
+    monkeypatch.setattr(authorization, "get_current_token", lambda: "raw-provider-bearer")
+
+    with pytest.raises(InsufficientPermissions):
+        await mass.handlers["fastmcp/debug/packages"]()
+
+    assert len(records) == 1
+    assert records[0].outcome == "authorization.denied"
+    assert records[0].capability == "debug:providers"
+    assert records[0].mode == "deny"
+
+
+async def test_dynamic_provider_execution_is_not_double_counted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The provider-owned wrapper, not the outer dynamic dispatcher, owns execution audit."""
+    mass = CommandRegistry()
+    records: list[Any] = []
+    user = _user()
+    policy = policy_snapshot(
+        PolicyProfile.CUSTOM,
+        {Tag.DELETE_QUEUE: PolicyMode.ALLOW},
+    )
+    command_set = ProviderCommandSet(
+        mass,
+        _config(Tag.DELETE_QUEUE),
+        policy_provider=lambda _bearer: policy,
+        audit_sink=records.append,
+        audit_client_id_provider=lambda _bearer: "token-id",
+    )
+    command_set.start()
+    command = "fastmcp/queue/remove_items_safe"
+    native_handler = mass.handlers[command]
+    mass.command_handlers = {command: APICommandHandler.parse(command, native_handler)}
+    mass.webserver = SimpleNamespace(
+        auth=SimpleNamespace(
+            authenticate_with_token=AsyncMock(return_value=user),
+            get_token_id_from_token=AsyncMock(return_value="token-id"),
+        )
+    )
+    monkeypatch.setattr(
+        queue_commands,
+        "remove_items_safe",
+        AsyncMock(return_value=RemoveFromQueueResult()),
+    )
+    adapter = DynamicAPIAdapter(
+        mass,
+        auth_required_provider=lambda: True,
+        token_provider=lambda: AccessToken(token="bearer", client_id="token-id", scopes=[]),
+        policy_provider=lambda _bearer: policy,
+        identity_provider=lambda _bearer: TokenIdentity("u1", "token-id"),
+        audit_sink=records.append,
+    )
+
+    await adapter.call(
+        f"ma_api:{command}",
+        {"queue_id": "queue", "item_ids": ["item"]},
+        response_mode="compact",
+        fields=None,
+        max_items=None,
+        ctx=cast("Context", MagicMock()),
+    )
+
+    assert [record.outcome for record in records] == ["execution.succeeded"]
+
+
 async def test_debug_health_uses_request_policy_for_optional_log_diagnostics(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -424,6 +563,9 @@ async def test_debug_health_uses_request_policy_for_optional_log_diagnostics(
 
     assert health.await_args is not None
     assert health.await_args.kwargs["logs_enabled"] is False
+    assert health.await_args.kwargs["policy_schema_version"] == 2
+    assert health.await_args.kwargs["policy_profile"] == "Custom"
+    assert health.await_args.kwargs["token_resolution_failures"] == 0
 
 
 async def test_direct_provider_confirm_requires_dispatcher_confirmation_context(

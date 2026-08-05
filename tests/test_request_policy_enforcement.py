@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import inspect
+import logging
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
@@ -60,6 +62,7 @@ def _adapter(
     current_token: list[AccessToken],
     policies: dict[str, PolicySnapshot],
     user: Any | None = None,
+    audit_sink: Any | None = None,
 ) -> DynamicAPIAdapter:
     """Build an adapter whose token and policy can change during one request."""
     mass = MagicMock()
@@ -73,7 +76,7 @@ def _adapter(
     )
     mass.webserver.auth.authenticate_with_token = AsyncMock(return_value=user)
     mass.webserver.auth.get_token_id_from_token = AsyncMock(
-        side_effect=lambda bearer: f"id-{bearer}"
+        side_effect=lambda _bearer: current_token[0].client_id
     )
     return DynamicAPIAdapter(
         mass,
@@ -81,8 +84,223 @@ def _adapter(
         token_provider=lambda: current_token[0],
         scope_checker=lambda _user, _scope: True,
         policy_provider=lambda bearer: policies[bearer],
-        identity_provider=lambda bearer: TokenIdentity("same-user", f"id-{bearer}"),
+        identity_provider=lambda _bearer: TokenIdentity("same-user", current_token[0].client_id),
+        audit_sink=audit_sink,
     )
+
+
+@pytest.mark.parametrize(
+    ("elicitation", "expected_outcome", "raises"),
+    [
+        (SimpleNamespace(action="accept", data=True), "confirmation.accepted", False),
+        (SimpleNamespace(action="decline", data=False), "confirmation.declined", True),
+        (NotImplementedError(), "confirmation.unsupported", True),
+    ],
+)
+async def test_confirmation_audit_records_controlled_outcomes(
+    elicitation: object,
+    expected_outcome: str,
+    raises: bool,
+) -> None:
+    """Each elicitation attempt records requested plus one controlled terminal outcome."""
+
+    async def search() -> str:
+        return "ok"
+
+    records: list[Any] = []
+    token = AccessToken(token="raw-bearer-must-not-appear", client_id="exact-token-id", scopes=[])
+    adapter = _adapter(
+        [_handler("music/search", search)],
+        current_token=[token],
+        policies={"raw-bearer-must-not-appear": _custom(query__library=PolicyMode.CONFIRM)},
+        audit_sink=records.append,
+    )
+    elicit = (
+        AsyncMock(side_effect=elicitation)
+        if isinstance(elicitation, BaseException)
+        else AsyncMock(return_value=elicitation)
+    )
+    call = adapter.call(
+        "ma_api:music/search",
+        {},
+        response_mode="compact",
+        fields=None,
+        max_items=None,
+        ctx=cast("Context", SimpleNamespace(elicit=elicit)),
+    )
+    if raises:
+        with pytest.raises(ToolError):
+            await call
+    else:
+        await call
+
+    assert [record.outcome for record in records] == [
+        "confirmation.requested",
+        expected_outcome,
+    ]
+    assert {
+        (
+            record.user_id,
+            record.client_id,
+            record.command,
+            record.capability,
+            record.mode,
+        )
+        for record in records
+    } == {("same-user", "exact-token-id", "music/search", "query:library", "confirm")}
+    assert "raw-bearer-must-not-appear" not in repr(records)
+
+
+@pytest.mark.parametrize("failure", [False, True])
+async def test_privileged_dynamic_execution_audits_success_or_controlled_failure(
+    failure: bool,
+) -> None:
+    """Privileged execution records omit arguments, secrets, and exception details."""
+
+    async def update_metadata(uri: str) -> str:
+        del uri
+        if failure:
+            raise RuntimeError("exception-secret-must-not-appear")
+        return "ok"
+
+    records: list[Any] = []
+    bearer = "raw-bearer-must-not-appear"
+    token = AccessToken(token=bearer, client_id="exact-token-id", scopes=[])
+    adapter = _adapter(
+        [_handler("metadata/update_metadata", update_metadata)],
+        current_token=[token],
+        policies={bearer: _custom(edit__library=PolicyMode.ALLOW)},
+        audit_sink=records.append,
+    )
+    call = adapter.call(
+        "ma_api:metadata/update_metadata",
+        {"uri": "secret-argument-must-not-appear"},
+        response_mode="compact",
+        fields=None,
+        max_items=None,
+        ctx=cast("Context", MagicMock()),
+    )
+    if failure:
+        with pytest.raises(ToolError):
+            await call
+    else:
+        await call
+
+    assert len(records) == 1
+    record = records[0]
+    assert record.outcome == ("execution.failed" if failure else "execution.succeeded")
+    assert (
+        record.user_id,
+        record.client_id,
+        record.command,
+        record.capability,
+        record.mode,
+    ) == ("same-user", "exact-token-id", "metadata/update_metadata", "edit:library", "allow")
+    emitted = repr(records)
+    for forbidden in (
+        bearer,
+        "secret-argument-must-not-appear",
+        "exception-secret-must-not-appear",
+    ):
+        assert forbidden not in emitted
+
+
+async def test_dynamic_denial_is_audited_once() -> None:
+    """A denied visible-name call emits one denial record and no execution record."""
+
+    async def search() -> str:
+        return "unreachable"
+
+    records: list[Any] = []
+    bearer = "denied-bearer"
+    adapter = _adapter(
+        [_handler("music/search", search)],
+        current_token=[AccessToken(token=bearer, client_id="exact-token-id", scopes=[])],
+        policies={bearer: _custom()},
+        audit_sink=records.append,
+    )
+
+    with pytest.raises(ToolError, match="not permitted"):
+        await adapter.call(
+            "ma_api:music/search",
+            {},
+            response_mode="compact",
+            fields=None,
+            max_items=None,
+            ctx=cast("Context", MagicMock()),
+        )
+
+    assert len(records) == 1
+    assert records[0].outcome == "authorization.denied"
+    assert records[0].capability == "query:library"
+    assert records[0].mode == "deny"
+
+
+async def test_unknown_denial_uses_fixed_command_sentinel() -> None:
+    """Caller-controlled unknown names cannot enter the structured audit fields."""
+
+    async def search() -> str:
+        return "unreachable"
+
+    records: list[Any] = []
+    bearer = "known-bearer"
+    adapter = _adapter(
+        [_handler("music/search", search)],
+        current_token=[AccessToken(token=bearer, client_id="exact-token-id", scopes=[])],
+        policies={bearer: _custom(query__library=PolicyMode.ALLOW)},
+        audit_sink=records.append,
+    )
+
+    with pytest.raises(ToolError, match="not permitted"):
+        await adapter.call(
+            "ma_api:secret-name-must-not-appear",
+            {},
+            response_mode="compact",
+            fields=None,
+            max_items=None,
+            ctx=cast("Context", MagicMock()),
+        )
+
+    assert len(records) == 1
+    assert records[0].command == "unknown"
+    assert "secret-name-must-not-appear" not in repr(records)
+
+
+async def test_default_audit_log_excludes_bearer_fingerprint_secret_and_exception(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The production logger boundary emits only the fixed redacted record fields."""
+    bearer = "raw-bearer-must-not-appear"
+
+    async def update_metadata(uri: str) -> None:
+        del uri
+        raise RuntimeError("exception-secret-must-not-appear")
+
+    adapter = _adapter(
+        [_handler("metadata/update_metadata", update_metadata)],
+        current_token=[AccessToken(token=bearer, client_id="exact-token-id", scopes=[])],
+        policies={bearer: _custom(edit__library=PolicyMode.ALLOW)},
+    )
+
+    with caplog.at_level(logging.INFO, logger="provider.audit"), pytest.raises(ToolError):
+        await adapter.call(
+            "ma_api:metadata/update_metadata",
+            {"uri": "secret-argument-must-not-appear"},
+            response_mode="compact",
+            fields=None,
+            max_items=None,
+            ctx=cast("Context", MagicMock()),
+        )
+
+    assert len(caplog.records) == 1
+    rendered = repr(caplog.records[0].__dict__)
+    for forbidden in (
+        bearer,
+        hashlib.sha256(bearer.encode()).hexdigest(),
+        "secret-argument-must-not-appear",
+        "exception-secret-must-not-appear",
+    ):
+        assert forbidden not in rendered
 
 
 async def test_two_tokens_for_one_user_get_distinct_discovery_modes() -> None:

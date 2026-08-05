@@ -18,7 +18,6 @@ from fastmcp import Client, Context, FastMCP
 from fastmcp.exceptions import ToolError
 from fastmcp.server.auth import AccessToken
 from mcp.shared.exceptions import McpError
-from mcp.types import INVALID_REQUEST, METHOD_NOT_FOUND, ErrorData
 from music_assistant_models.auth import Scope
 from music_assistant_models.config_entries import ConfigEntry
 from music_assistant_models.enums import ConfigEntryType
@@ -39,7 +38,6 @@ from provider.dynamic_api import (
     CatalogView,
     DynamicAPIAdapter,
     DynamicEntry,
-    confirm_or_raise,
 )
 from provider.meta_discovery import DynamicAdapter, register_meta_discovery
 from provider.policy import PolicyMode
@@ -671,6 +669,7 @@ def _real_adapter(
     scope_checker: Any = None,
     allowed_tags: set[str] | None = None,
     user: Any = None,
+    audit_sink: Any = None,
 ) -> DynamicAPIAdapter:
     """Build an authenticated adapter around one fake MA handler."""
     mass = MagicMock()
@@ -687,19 +686,8 @@ def _real_adapter(
         allowed_tags_provider=lambda: (
             allowed_tags if allowed_tags is not None else {str(tag) for tag in Tag}
         ),
+        audit_sink=audit_sink,
     )
-
-
-class _UnsupportedElicitationContext:
-    """Raise the configured protocol-level unsupported elicitation result."""
-
-    def __init__(self, error: Exception) -> None:
-        self.error = error
-
-    async def elicit(self, _prompt: str, *, response_type: type[bool]) -> None:
-        """Simulate a client that cannot receive elicitation requests."""
-        del response_type
-        raise self.error
 
 
 def _bypass_ma_argument_parser(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -708,52 +696,6 @@ def _bypass_ma_argument_parser(monkeypatch: pytest.MonkeyPatch) -> None:
         "provider.dynamic_api.CompiledSignature.parse",
         lambda _signature, arguments: dict(arguments),
     )
-
-
-async def test_required_confirmation_rejects_missing_context() -> None:
-    """Mandatory confirmation fails closed when no MCP context is available."""
-    with pytest.raises(ToolError, match="confirmation is required"):
-        await confirm_or_raise(None, "Confirm", required=True)
-
-
-@pytest.mark.parametrize(
-    "error",
-    [
-        NotImplementedError(),
-        McpError(ErrorData(code=INVALID_REQUEST, message="unsupported")),
-        McpError(ErrorData(code=METHOD_NOT_FOUND, message="unsupported")),
-    ],
-)
-async def test_required_confirmation_rejects_unsupported_elicitation(error: Exception) -> None:
-    """Mandatory confirmation cannot silently skip unsupported client elicitation."""
-    with pytest.raises(ToolError, match="confirmation is required"):
-        await confirm_or_raise(
-            cast("Context", _UnsupportedElicitationContext(error)),
-            "Confirm",
-            required=True,
-        )
-
-
-@pytest.mark.parametrize(
-    "error",
-    [
-        NotImplementedError(),
-        McpError(ErrorData(code=INVALID_REQUEST, message="unsupported")),
-        McpError(ErrorData(code=METHOD_NOT_FOUND, message="unsupported")),
-    ],
-)
-async def test_configured_confirmation_skips_unsupported_elicitation(error: Exception) -> None:
-    """Configured prompts retain compatibility with clients without elicitation."""
-    await confirm_or_raise(
-        cast("Context", _UnsupportedElicitationContext(error)),
-        "Confirm",
-        required=False,
-    )
-
-
-async def test_configured_confirmation_skips_missing_context() -> None:
-    """Configured prompts retain compatibility when no elicitation context is injected."""
-    await confirm_or_raise(None, "Confirm", required=False)
 
 
 async def test_adapter_discovers_handler_and_compiles_schema() -> None:
@@ -1796,12 +1738,8 @@ async def test_impersonation_keeps_discovery_conservatively_confirm() -> None:
     assert entry.policy_mode is PolicyMode.CONFIRM
 
 
-async def test_queue_delete_has_no_classifier_owned_confirmation(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_queue_delete_has_no_classifier_owned_confirmation() -> None:
     """Delete execution is governed by its capability, not a mandatory classifier prompt."""
-    confirmation = AsyncMock()
-    monkeypatch.setattr("provider.dynamic_api.confirm_or_raise", confirmation)
     called = False
 
     async def clear(queue_id: str) -> None:
@@ -1824,16 +1762,11 @@ async def test_queue_delete_has_no_classifier_owned_confirmation(
         max_items=None,
         ctx=MagicMock(),
     )
-    confirmation.assert_not_awaited()
     assert called is True
 
 
-async def test_playlist_provider_alias_is_filtered_before_confirmation(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_playlist_provider_alias_is_filtered_before_confirmation() -> None:
     """Profile alias conversion cannot bypass a restricted provider filter."""
-    confirmation = AsyncMock()
-    monkeypatch.setattr("provider.dynamic_api.confirm_or_raise", confirmation)
     called = False
 
     async def create_playlist(name: str, provider_instance_or_domain: str) -> dict[str, str]:
@@ -1867,17 +1800,14 @@ async def test_playlist_provider_alias_is_filtered_before_confirmation(
             max_items=None,
             ctx=MagicMock(),
         )
-    confirmation.assert_not_awaited()
     assert called is False
 
 
 @pytest.mark.parametrize("revoked", ["tag", "scope"])
 async def test_native_live_authorization_revocation_prevents_elicitation(
-    revoked: str, monkeypatch: pytest.MonkeyPatch
+    revoked: str,
 ) -> None:
     """Native live capability and scope revocation fail before execution."""
-    confirmation = AsyncMock()
-    monkeypatch.setattr("provider.dynamic_api.confirm_or_raise", confirmation)
     called = False
     tag_checks = 0
     scope_checks = 0
@@ -1912,7 +1842,6 @@ async def test_native_live_authorization_revocation_prevents_elicitation(
             max_items=None,
             ctx=MagicMock(),
         )
-    confirmation.assert_not_awaited()
     assert called is False
 
 
@@ -2015,6 +1944,7 @@ async def test_revoked_bearer_token_after_confirmation_prevents_execution(
     """Post-confirm authorization rejects a token that MA no longer accepts."""
     _bypass_ma_argument_parser(monkeypatch)
     called = False
+    audit_records: list[Any] = []
 
     async def reload_provider() -> None:
         nonlocal called
@@ -2023,9 +1953,9 @@ async def test_revoked_bearer_token_after_confirmation_prevents_execution(
     adapter = _real_adapter(
         _handler("config/providers/reload", reload_provider, "config.providers.write"),
         allowed_tags={str(Tag.CONFIG_WRITE_PROVIDER)},
+        audit_sink=audit_records.append,
     )
     adapter.mass.webserver.auth.authenticate_with_token = AsyncMock(return_value=None)
-    monkeypatch.setattr("provider.dynamic_api.confirm_or_raise", AsyncMock())
 
     with pytest.raises(ToolError, match="Authentication is required"):
         await adapter.call(
@@ -2037,6 +1967,7 @@ async def test_revoked_bearer_token_after_confirmation_prevents_execution(
             ctx=MagicMock(),
         )
     adapter.mass.webserver.auth.authenticate_with_token.assert_awaited_once_with("secret")
+    assert [record.outcome for record in audit_records] == ["authorization.denied"]
     assert called is False
 
 
@@ -2057,7 +1988,6 @@ async def test_valid_bearer_revalidation_uses_the_fresh_user_after_confirmation(
         allowed_tags={str(Tag.CONFIG_WRITE_PROVIDER)},
     )
     adapter.mass.webserver.auth.authenticate_with_token = AsyncMock(return_value=fresh_user)
-    monkeypatch.setattr("provider.dynamic_api.confirm_or_raise", AsyncMock())
 
     await adapter.call(
         "ma_api:config/providers/reload",
@@ -2092,7 +2022,6 @@ async def test_post_confirmation_revalidation_rejects_a_different_user(
     adapter.mass.webserver.auth.authenticate_with_token = AsyncMock(
         return_value=SimpleNamespace(user_id="other-user", enabled=True, role="admin")
     )
-    monkeypatch.setattr("provider.dynamic_api.confirm_or_raise", AsyncMock())
 
     with pytest.raises(ToolError, match="Authentication is required"):
         await adapter.call(
@@ -2493,7 +2422,6 @@ async def test_player_only_tag_executes_a_player_setup_flow(
             entries=[ConfigEntry(key="name", type=ConfigEntryType.STRING, label="Name")]
         )
     )
-    monkeypatch.setattr("provider.dynamic_api.confirm_or_raise", AsyncMock())
 
     await adapter.call(
         "ma_api:config/flows/submit",
@@ -2511,7 +2439,6 @@ async def test_provider_setup_flow_rejects_player_only_tag_before_confirmation(
 ) -> None:
     """Catalog visibility does not let a player tag invoke a provider flow."""
     _bypass_ma_argument_parser(monkeypatch)
-    confirmation = AsyncMock()
 
     async def submit_flow(flow_id: str, values: dict[str, Any]) -> None:
         del flow_id, values
@@ -2526,7 +2453,6 @@ async def test_provider_setup_flow_rejects_player_only_tag_before_confirmation(
             entries=[ConfigEntry(key="name", type=ConfigEntryType.STRING, label="Name")]
         )
     )
-    monkeypatch.setattr("provider.dynamic_api.confirm_or_raise", confirmation)
 
     with pytest.raises(ToolError, match="config:write:provider"):
         await adapter.call(
@@ -2537,15 +2463,10 @@ async def test_provider_setup_flow_rejects_player_only_tag_before_confirmation(
             max_items=None,
             ctx=MagicMock(),
         )
-    confirmation.assert_not_awaited()
 
 
-async def test_native_config_secret_denial_precedes_confirmation_and_target(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_native_config_secret_denial_precedes_confirmation_and_target() -> None:
     """Native config secret preflight rejects before elicitation or mutation."""
-    confirmation = AsyncMock()
-    monkeypatch.setattr("provider.dynamic_api.confirm_or_raise", confirmation)
     called = False
 
     async def save_provider_config(
@@ -2581,16 +2502,11 @@ async def test_native_config_secret_denial_precedes_confirmation_and_target(
             max_items=None,
             ctx=MagicMock(),
         )
-    confirmation.assert_not_awaited()
     assert called is False
 
 
-async def test_impersonation_is_authorized_before_confirmation_and_execution(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_impersonation_is_authorized_before_confirmation_and_execution() -> None:
     """A caller without impersonation scope cannot elicit or run as another user."""
-    confirmation = AsyncMock()
-    monkeypatch.setattr("provider.dynamic_api.confirm_or_raise", confirmation)
     called = False
 
     async def operation() -> None:
@@ -2629,5 +2545,4 @@ async def test_impersonation_is_authorized_before_confirmation_and_execution(
             max_items=None,
             ctx=MagicMock(),
         )
-    confirmation.assert_not_awaited()
     assert called is False

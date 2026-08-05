@@ -309,7 +309,11 @@ def test_runtime_exposes_dynamic_diagnostics_without_adapter_leak(
     runtime = MCPServerRuntime(mock_mass, mock_config, logger=MagicMock())
     runtime._dynamic_adapter = MagicMock(diagnostics=MagicMock(return_value={"available": True}))
 
-    assert runtime.dynamic_diagnostics() == {"available": True}
+    assert runtime.dynamic_diagnostics() == {
+        "available": True,
+        "policy_schema_version": 2,
+        "token_resolution_failures": 0,
+    }
 
 
 async def test_config_server_mounted_and_visible(

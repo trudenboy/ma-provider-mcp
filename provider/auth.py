@@ -156,6 +156,7 @@ class MASTokenVerifier(TokenVerifier):
             token_id = await self._mass.webserver.auth.get_token_id_from_token(token)
         except Exception:
             self._identity_registry.discard(token)
+            self._identity_registry.record_resolution_failure()
             LOGGER.error("MA token identity lookup raised; using Read-only policy")
         else:
             if token_id is None:
@@ -174,6 +175,7 @@ class MASTokenVerifier(TokenVerifier):
                 client_id = token_id
             else:
                 self._identity_registry.discard(token)
+                self._identity_registry.record_resolution_failure()
                 LOGGER.error(
                     "MA token identity lookup returned invalid data; using Read-only policy"
                 )

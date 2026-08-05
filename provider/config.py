@@ -190,7 +190,7 @@ def build_config_entries(
             advanced=True,
             required=False,
         ),
-        _policy_selector(CONF_DEFAULT_POLICY, "Default policy", allow_inherit=False),
+        _policy_selector(CONF_DEFAULT_POLICY, None, allow_inherit=False),
     ]
     entries.extend(_custom_matrix(CONF_DEFAULT_POLICY))
     entries.append(
@@ -199,9 +199,7 @@ def build_config_entries(
             type=ConfigEntryType.STRING,
             default_value=[],
             multi_value=True,
-            label="Manual MCP token IDs",
             category="policy",
-            category_label="Permissions & confirmations",
             required=False,
             advanced=True,
         )
@@ -248,7 +246,7 @@ def _bool(key: str, default: bool, category: str) -> ConfigEntry:
     )
 
 
-def _policy_selector(key: str, label: str, *, allow_inherit: bool) -> ConfigEntry:
+def _policy_selector(key: str, label: str | None, *, allow_inherit: bool) -> ConfigEntry:
     """Build one profile selector."""
     values = ([INHERIT_POLICY] if allow_inherit else []) + [
         profile.value for profile in PolicyProfile
@@ -260,7 +258,6 @@ def _policy_selector(key: str, label: str, *, allow_inherit: bool) -> ConfigEntr
         options=[ConfigValueOption(value=value, title=value) for value in values],
         label=label,
         category="policy",
-        category_label="Permissions & confirmations",
         required=False,
     )
 
@@ -278,7 +275,6 @@ def _custom_matrix(selector_key: str, token_id: str | None = None) -> list[Confi
             depends_on_value=PolicyProfile.CUSTOM.value,
             label=str(capability),
             category="policy",
-            category_label="Permissions & confirmations",
             required=False,
         )
         for capability in Tag

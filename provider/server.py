@@ -6,6 +6,8 @@ import contextlib
 import logging
 from typing import TYPE_CHECKING, Any
 
+from .audit import NO_TOKEN_CLIENT_ID
+from .auth import LEGACY_TOKEN_CLIENT_ID, LOOKUP_FAILURE_CLIENT_ID
 from .config import build_policy_resolver
 from .constants import (
     CONF_ENFORCE_AUDIENCE,
@@ -16,6 +18,7 @@ from .constants import (
     DEFAULT_MOUNT_PATH,
     is_policy_key,
 )
+from .policy import POLICY_SCHEMA_VERSION
 from .tags import Tag, enabled_tags
 from .token_identity import AuthenticatedPolicyResolver, TokenIdentityRegistry
 
@@ -101,6 +104,15 @@ class MCPServerRuntime:
             return self.policy_resolver.resolve(None)
         return self.resolve_policy(bearer_token)
 
+    def audit_client_id(self, bearer_token: str | None) -> str:
+        """Return an exact token ID or a safe non-authoritative client label."""
+        if bearer_token is None:
+            return NO_TOKEN_CLIENT_ID
+        identity = self._token_identities.lookup(bearer_token)
+        if identity is None:
+            return LOOKUP_FAILURE_CLIENT_ID
+        return identity.token_id or LEGACY_TOKEN_CLIENT_ID
+
     async def start(self) -> None:
         """
         Build the FastMCP server and mount it into the MA webserver.
@@ -175,9 +187,16 @@ class MCPServerRuntime:
 
     def dynamic_diagnostics(self) -> dict[str, Any]:
         """Return a public snapshot of dynamic-command health without exposing its adapter."""
-        if self._dynamic_adapter is None:
-            return {"available": False, "last_error": "catalog not initialized"}
-        return dict(self._dynamic_adapter.diagnostics())
+        diagnostics = (
+            {"available": False, "last_error": "catalog not initialized"}
+            if self._dynamic_adapter is None
+            else dict(self._dynamic_adapter.diagnostics())
+        )
+        diagnostics.update(
+            policy_schema_version=POLICY_SCHEMA_VERSION,
+            token_resolution_failures=self._token_identities.token_resolution_failures,
+        )
+        return diagnostics
 
     async def _start_impl(self) -> None:
         """Mount the runtime; see :meth:`start` for the public-facing wrapper."""

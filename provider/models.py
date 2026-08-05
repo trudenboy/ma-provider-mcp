@@ -191,3 +191,7 @@ class HealthSummary:
     log_errors_last_5min: int | None
     disabled_capabilities: list[str]
     dynamic_catalog: dict[str, Any] | None = None
+    policy_schema_version: int = 2
+    policy_profile: str = "Read-only"
+    token_resolution_failures: int = 0
+    event_buffer_active: bool = False

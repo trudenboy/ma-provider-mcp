@@ -77,3 +77,25 @@ def test_deliteralized_entries_have_strings(mock_mass: MagicMock) -> None:
         text = config_entries[entry.key]
         assert text.get("label"), f"empty label for {entry.key!r}"
         assert text.get("description"), f"empty description for {entry.key!r}"
+
+
+def test_strings_expose_only_v2_policy_configuration_contract() -> None:
+    """The breaking release publishes v2 policy help without dormant v1 controls."""
+    data = _load_strings()
+    entries = data["config_entries"]
+
+    assert entries.keys() >= {"policy_default", "policy_manual_token_ids"}
+    assert set(entries).isdisjoint(
+        {
+            "require_confirmation",
+            "dynamic_api_read",
+            "dynamic_api_control",
+            "dynamic_api_write",
+            "dynamic_api_system",
+            "query_library",
+            "control_playback",
+            "edit_library",
+            "delete_library",
+        }
+    )
+    assert data["config_categories"]["policy"] == "Permissions & confirmations"

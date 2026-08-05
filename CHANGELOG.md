@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] - 2026-08-05
+
+### Added
+- Five named permission profiles, per-token overrides, and a 26-capability Custom
+  matrix with `Deny`, `Allow`, and per-call `Confirm` modes.
+- Value-free structured security audit records for confirmations, denials, and
+  privileged execution outcomes, plus policy and token-resolution health diagnostics.
+
+### Changed
+- Discovery, resources, dynamic commands, and provider-owned commands now resolve one
+  immutable policy for the exact authenticated Music Assistant token and revalidate it
+  after elicitation and immediately before execution.
+- Clients without elicitation receive an actionable capability-specific error and can
+  be configured with a narrow `Allow` override when an operator accepts prompt-free use.
+
+### Removed
+- V1 permission booleans, dynamic API gates, the global confirmation toggle, and their
+  parsing, warning, fallback, and compatibility behavior. Stored values are ignored.
+
+### Security
+- Authentication, enabled-user state, Music Assistant scopes, target filters, secret
+  guards, hard-denied command families, and impersonation remain authoritative upper
+  bounds regardless of configured policy.
+- Audit and diagnostic output excludes bearer values and fingerprints, submitted
+  secrets and arguments, unmasked secure configuration, and exception details.
+
 ## [1.0.2] - 2026-08-05
 
 ### Security

@@ -225,7 +225,14 @@ async def test_health_rolls_up_state_and_respects_disabled_log_access() -> None:
         SimpleNamespace(state="error", available=False),
     ]
 
-    result = await health(mass, buffer=None, logs_enabled=False)
+    result = await health(
+        mass,
+        buffer=None,
+        logs_enabled=False,
+        policy_schema_version=2,
+        policy_profile="Interactive admin",
+        token_resolution_failures=3,
+    )
 
     assert result.providers_loaded == 1
     assert result.providers_disabled == 1
@@ -235,6 +242,33 @@ async def test_health_rolls_up_state_and_respects_disabled_log_access() -> None:
     assert result.queues_with_errors == 1
     assert result.log_errors_last_5min is None
     assert result.disabled_capabilities == ["DEBUG_EVENTS", "DEBUG_LOGS"]
+    assert result.policy_schema_version == 2
+    assert result.policy_profile == "Interactive admin"
+    assert result.token_resolution_failures == 3
+    assert result.event_buffer_active is False
+
+
+async def test_health_reports_actual_active_event_buffer_state() -> None:
+    """Event-buffer diagnostics follow the live subscription, not policy intent."""
+    mass = MagicMock()
+    mass.providers = []
+    mass.player_queues.all.return_value = []
+    buffer = MagicMock()
+    buffer.stats.return_value = SimpleNamespace(
+        subscribed_since=datetime.now().astimezone().isoformat(),
+        by_type={},
+    )
+
+    result = await health(
+        mass,
+        buffer=buffer,
+        logs_enabled=False,
+        policy_schema_version=2,
+        policy_profile="Custom",
+        token_resolution_failures=0,
+    )
+
+    assert result.event_buffer_active is True
 
 
 async def test_routes_handles_private_api_absence_and_attributes_known_paths() -> None:

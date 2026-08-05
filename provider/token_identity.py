@@ -28,6 +28,16 @@ class TokenIdentityRegistry:
         self._capacity = capacity
         self._on_change = on_change
         self._entries: OrderedDict[str, TokenIdentity] = OrderedDict()
+        self._token_resolution_failures = 0
+
+    @property
+    def token_resolution_failures(self) -> int:
+        """Return the aggregate count of authoritative token-ID lookup failures."""
+        return self._token_resolution_failures
+
+    def record_resolution_failure(self) -> None:
+        """Increment the value-free authoritative token-ID failure counter."""
+        self._token_resolution_failures += 1
 
     def bind(self, bearer_token: str, *, user_id: str, token_id: str | None) -> None:
         """Bind one authenticated bearer without retaining its raw value."""

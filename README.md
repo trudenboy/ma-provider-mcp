@@ -24,9 +24,9 @@ configuration, and provider diagnostics without maintaining a parallel tool API.
 - Built on **PrefectHQ FastMCP v3** — no homebrew SDK glue.
 - **No core MA changes required.** Authentication delegates to
   `mass.webserver.auth.authenticate_with_token` (handles both JWT and legacy tokens).
-- **Tag-based access control** — 16 action permissions (query / control / edit / delete × 4)
-  plus 3 MCP-resource toggles; reads on, all mutations off by default. Two further
-  off-by-default namespaces (`debug`, `config`) add 4 + 5 capability flags.
+- **Permissions & Confirmations v2** — five named profiles and per-token overrides
+  resolve all 26 stable capabilities to `Deny`, `Allow`, or `Confirm`. New and
+  unconfigured installations fail closed to the `Read-only` profile.
 - **Mounted into MA's existing webserver** at `/mcp/v1` — reuses TLS, reverse proxy,
   and Home Assistant ingress out of the box. No second port, no extra firewall rule.
 - The MCP surface contains exactly three tools: `search_tools`, `get_tool_schema`,
@@ -84,32 +84,42 @@ claude mcp add ma --transport http \
   --header "Authorization: Bearer $TOKEN"
 ```
 
-## Permissions
+## Permissions & confirmations
 
-The provider config exposes 16 action-permission booleans, grouped by category:
+Version 2 replaces every v1 permission boolean, dynamic-API gate, and global
+confirmation toggle with one policy resolver. Choose a default profile and optional
+override for each `MCP — …` token (or add a Music Assistant token ID manually):
 
-| Category   | Verbs                                                                |
-|------------|----------------------------------------------------------------------|
-| Query      | library, queue, players, metadata                                    |
-| Control    | playback, volume, players, media (announcements)                     |
-| Edit       | library (add), queue (move/save), playlists (create/add/reorder), favorites (add) |
-| Delete     | library (remove), queue (clear), playlists (delete), favorites (remove) |
+| Profile | Behavior |
+|---|---|
+| `Read-only` | Allows `query:*`; denies everything else. |
+| `Home control` | Allows query, control, and edit; confirms delete; denies debug, config, and system. |
+| `Interactive admin` | Allows query and control; confirms edit, delete, debug, config, and system. |
+| `Trusted` | Allows all capabilities without elicitation. |
+| `Custom` | Assigns `Deny`, `Allow`, or `Confirm` to each of the 26 capabilities; unset values deny. |
 
-Three further **MCP Resources** toggles control which `library://`,
-`player://` / `queue://`, and prompt resources are advertised. Two optional,
-off-by-default namespaces add their own flags: **Debug** (4 — inspect, logs,
-events, providers) and **Config** (5 — read, edit provider / core /
-player, allow secret writes; writes delegate to MA's atomic save). Every
-capability outside the Query group is off by default.
+Per-token overrides use `Inherit`, a named profile, or their own `Custom` matrix.
+Overrides are keyed by Music Assistant token ID, so replacing or revoking a token
+cannot transfer authority to another bearer. Stored v1 keys are ignored; after
+upgrading, configure a v2 default and any token overrides explicitly.
 
-Each maps to a tag (`query:library`, `control:playback`, …). The unified catalog
-applies those tags to native MA commands before discovery and repeats the check
-immediately before execution, so a cached command cannot bypass a revoked permission.
-Native `config/*` commands use the existing Config read/provider/core/player toggles;
-writing a `SECURE_STRING` additionally requires `config:write:secret`. Direct queue
-clear/delete operations and the safe batch-removal extension always elicit client
-confirmation. Resource and prompt visibility continues to use the three MCP Resource
-toggles above.
+`Confirm` is per call and is never remembered. If a client cannot perform MCP
+elicitation, either keep the capability denied or deliberately change only that
+capability/token to `Allow`; the server returns an actionable error naming the
+capability. Resource reads require `Allow`, so a `Confirm` capability cannot be
+bypassed through `library://`, `player://`, or `queue://`.
+
+Authorization is resolved for discovery and repeated immediately before execution
+and after elicitation. Music Assistant scopes, disabled users, player/provider
+filters, authentication, hard-denied auth/dashboard commands, secret-write guards,
+and impersonation confirmation remain authoritative upper bounds. The independent
+resource and prompt toggles remain available.
+
+Security audit records cover confirmation outcomes, denials, and privileged
+execution outcomes using only fixed fields: MA user, exact token ID or safe client
+label, command, capability, effective mode, and controlled outcome. Bearers,
+fingerprints, submitted values, command arguments, unmasked secure configuration,
+and exception text are never included.
 
 ## Spec compliance (MCP 2025-06-18 / draft)
 
@@ -123,7 +133,7 @@ toggles above.
   optional `enforce_audience` config rejects tokens whose `aud` ≠ canonical
   URI (soft mode by default — logs warning until MA issues audience-bound JWTs).
 - **Tool annotations** (`title`, `readOnly`/`destructive`/`idempotent`/`openWorld` hints).
-- **Elicitation** for destructive operations.
+- **Elicitation** for every request whose effective policy mode is `Confirm`.
 - **Per-tool timeouts** so a stuck provider doesn't tie up an MCP session.
 
 ## Development

@@ -19,6 +19,14 @@ from mcp.shared.exceptions import McpError
 from mcp.types import INVALID_REQUEST, METHOD_NOT_FOUND
 from music_assistant_models.auth import Scope
 
+from .audit import (
+    ANONYMOUS_USER_ID,
+    NO_TOKEN_CLIENT_ID,
+    AuditRecord,
+    AuditSink,
+    emit_audit_record,
+    is_privileged_capability,
+)
 from .auth import LEGACY_TOKEN_CLIENT_ID, LOOKUP_FAILURE_CLIENT_ID
 from .command_policy import (
     CommandDecision,
@@ -70,28 +78,6 @@ def _command_error(command: str, exc: Exception) -> ToolError:
     """Return an actionable execution error for a canonical command."""
     detail = str(exc).strip() or type(exc).__name__
     return ToolError(f"Command {command!r} failed: {detail}")
-
-
-async def confirm_or_raise(ctx: Context | None, prompt: str, *, required: bool) -> None:
-    """Ask the MCP client to confirm an operation when elicitation is available."""
-    if ctx is None:
-        if required:
-            raise ToolError("Client confirmation is required for this operation")
-        return
-    try:
-        result = await ctx.elicit(prompt, response_type=bool)  # type: ignore[arg-type, unused-ignore]
-    except NotImplementedError:
-        if required:
-            raise ToolError("Client confirmation is required for this operation") from None
-        return
-    except McpError as exc:
-        if exc.error.code in (INVALID_REQUEST, METHOD_NOT_FOUND):
-            if required:
-                raise ToolError("Client confirmation is required for this operation") from exc
-            return
-        raise
-    if getattr(result, "action", None) != "accept" or not getattr(result, "data", None):
-        raise ToolError("Operation cancelled by user")
 
 
 @dataclass(frozen=True, slots=True)
@@ -200,6 +186,7 @@ class DynamicAPIAdapter:
         policy_provider: Callable[[str], PolicySnapshot] | None = None,
         default_policy_provider: Callable[[], PolicySnapshot] | None = None,
         identity_provider: Callable[[str], TokenIdentity | None] | None = None,
+        audit_sink: AuditSink | None = None,
     ) -> None:
         """Initialise the adapter with request-aware policy providers."""
         self.mass = mass
@@ -210,6 +197,7 @@ class DynamicAPIAdapter:
         self._policy_provider = policy_provider
         self._default_policy_provider = default_policy_provider
         self._identity_provider = identity_provider
+        self._audit_sink = audit_sink or emit_audit_record
         self._snapshot: CatalogSnapshot | None = None
         self._snapshot_diagnostics: _SnapshotDiagnostics | None = None
         self._snapshot_lock = asyncio.Lock()
@@ -283,9 +271,11 @@ class DynamicAPIAdapter:
             raise ToolError("response_mode must be 'compact' or 'full'")
         entry = await self.get_visible_entry(name)
         if entry is None:
+            await self._audit_denied_name(name)
             raise ToolError(f"Tool {name!r} not found or not permitted")
         auth = await self._authentication() if self._auth_required_provider() else None
         if auth is None and self._auth_required_provider():
+            await self._audit_denied_name(name)
             raise ToolError("Authentication is required")
 
         call_arguments = dict(arguments)
@@ -303,7 +293,7 @@ class DynamicAPIAdapter:
         except (KeyError, TypeError, ValueError) as exc:
             raise ToolError(str(exc)) from exc
 
-        initial_invocation = await self._authorize_call(
+        initial_invocation = await self._authorize_call_audited(
             entry,
             auth,
             parsed,
@@ -318,8 +308,13 @@ class DynamicAPIAdapter:
             await self._authentication(revalidate=True) if self._auth_required_provider() else None
         )
         if auth is None and self._auth_required_provider():
+            self._audit_invocation(
+                initial_invocation,
+                "authorization.denied",
+                impersonating=impersonating,
+            )
             raise ToolError("Authentication is required")
-        invocation = await self._authorize_call(
+        invocation = await self._authorize_call_audited(
             initial_invocation.entry,
             auth,
             parsed,
@@ -339,26 +334,70 @@ class DynamicAPIAdapter:
                 else None
             )
             if auth is None and self._auth_required_provider():
+                self._audit_invocation(
+                    invocation,
+                    "authorization.denied",
+                    impersonating=impersonating,
+                )
                 raise ToolError("Authentication is required")
-            invocation = await self._authorize_call(
+            invocation = await self._authorize_call_audited(
                 invocation.entry,
                 auth,
                 parsed,
                 impersonated=impersonated,
             )
+        invocation, result = await self._execute_authorized(
+            invocation,
+            confirmation_evidence,
+            impersonated=impersonated,
+            impersonating=impersonating,
+        )
+        return self._bounded_envelope(
+            name,
+            result,
+            response_mode=response_mode,
+            fields=fields,
+            max_items=max_items,
+            profile=invocation.entry.profile,
+        )
+
+    async def _execute_authorized(
+        self,
+        invocation: AuthorizedInvocation,
+        confirmation_evidence: frozenset[str],
+        *,
+        impersonated: Any,
+        impersonating: bool,
+    ) -> tuple[AuthorizedInvocation, Any]:
+        """Seal authorization, execute once, and record the controlled outcome."""
+        execution_started = False
         try:
             async with asyncio.timeout(_CALL_TIMEOUT_SECONDS):
-                invocation = await self._finalize_invocation(
-                    invocation,
-                    impersonated=impersonated,
-                )
+                try:
+                    invocation = await self._finalize_invocation(
+                        invocation,
+                        impersonated=impersonated,
+                    )
+                except ToolError:
+                    self._audit_invocation(
+                        invocation,
+                        "authorization.denied",
+                        impersonating=impersonating,
+                    )
+                    raise
                 if not self._confirmation_evidence(
                     invocation,
                     impersonating=impersonating,
                 ).issubset(confirmation_evidence):
+                    self._audit_invocation(
+                        invocation,
+                        "authorization.denied",
+                        impersonating=impersonating,
+                    )
                     raise ToolError(
                         "Authorization changed to require confirmation; retry the operation"
                     )
+                execution_started = True
                 result = await self._execute(
                     invocation.entry,
                     invocation.arguments,
@@ -368,19 +407,19 @@ class DynamicAPIAdapter:
                 )
                 result = await self._postflight(invocation, result)
         except TimeoutError as exc:
+            if execution_started:
+                self._audit_execution(invocation, "execution.failed", impersonating=impersonating)
             raise ToolError(f"Command {invocation.entry.command!r} timed out") from exc
         except ToolError:
+            if execution_started:
+                self._audit_execution(invocation, "execution.failed", impersonating=impersonating)
             raise
         except Exception as exc:
+            if execution_started:
+                self._audit_execution(invocation, "execution.failed", impersonating=impersonating)
             raise _command_error(invocation.entry.command, exc) from exc
-        return self._bounded_envelope(
-            name,
-            result,
-            response_mode=response_mode,
-            fields=fields,
-            max_items=max_items,
-            profile=invocation.entry.profile,
-        )
+        self._audit_execution(invocation, "execution.succeeded", impersonating=impersonating)
+        return invocation, result
 
     def _capture_registry(self) -> _RegistryCapture:
         """Capture the caller-safe subset used by compilation and diagnostics."""
@@ -638,7 +677,41 @@ class DynamicAPIAdapter:
             return frozenset()
         capability = self._confirmation_capability(invocation)
         prompt = f"Run {invocation.entry.name} using capability {capability}?"
-        await self._confirm_capability(ctx, prompt, capability)
+        self._audit_invocation(
+            invocation,
+            "confirmation.requested",
+            capability=capability,
+            impersonating=impersonating,
+        )
+        try:
+            await self._confirm_capability(ctx, prompt, capability)
+        except NotImplementedError:
+            self._audit_invocation(
+                invocation,
+                "confirmation.unsupported",
+                capability=capability,
+                impersonating=impersonating,
+            )
+            raise
+        except ToolError as exc:
+            outcome = (
+                "confirmation.declined"
+                if str(exc) == "Operation cancelled by user"
+                else "confirmation.unsupported"
+            )
+            self._audit_invocation(
+                invocation,
+                outcome,
+                capability=capability,
+                impersonating=impersonating,
+            )
+            raise
+        self._audit_invocation(
+            invocation,
+            "confirmation.accepted",
+            capability=capability,
+            impersonating=impersonating,
+        )
         return evidence
 
     async def _execute(
@@ -744,6 +817,39 @@ class DynamicAPIAdapter:
             for variable, token in reversed(context_tokens):
                 variable.reset(token)
 
+    async def _authorize_call_audited(
+        self,
+        entry: DynamicEntry,
+        auth: tuple[AccessToken, Any] | None,
+        arguments: Mapping[str, Any],
+        *,
+        impersonated: Any,
+    ) -> AuthorizedInvocation:
+        """Authorize once and record one controlled denial on failure."""
+        try:
+            return await self._authorize_call(
+                entry,
+                auth,
+                arguments,
+                impersonated=impersonated,
+            )
+        except ToolError:
+            policy = self._request_policy(auth)
+            decision = entry.decision or resolve_command_policy(
+                entry.command,
+                entry.required_scope,
+                entry.profile,
+            )
+            capability = self._decision_audit_capability(decision, policy)
+            self._emit_audit(
+                auth,
+                command=entry.command,
+                capability=capability,
+                mode=decision.effective_mode(policy).value,
+                outcome="authorization.denied",
+            )
+            raise
+
     async def _authorize_call(
         self,
         entry: DynamicEntry,
@@ -845,6 +951,122 @@ class DynamicAPIAdapter:
             impersonated_user=impersonated_user,
             policy=policy,
         )
+
+    async def _audit_denied_name(self, name: str) -> None:
+        """Record a denied canonical name without exposing request inputs."""
+        snapshot = await self.base_snapshot()
+        entry = next((item for item in snapshot.entries if item.name == name), None)
+        token = self._token_provider()
+        auth: tuple[AccessToken, Any] | None = None
+        if token is not None:
+            identity = self._identity_provider(token.token) if self._identity_provider else None
+            auth = (token, identity)
+        if entry is None or entry.decision is None:
+            self._emit_audit(
+                auth,
+                command="unknown",
+                capability="unknown",
+                mode=PolicyMode.DENY.value,
+                outcome="authorization.denied",
+            )
+            return
+        policy = self._request_policy(auth)
+        decision = entry.decision
+        self._emit_audit(
+            auth,
+            command=entry.command,
+            capability=self._decision_audit_capability(decision, policy),
+            mode=decision.effective_mode(policy).value,
+            outcome="authorization.denied",
+        )
+
+    def _audit_execution(
+        self,
+        invocation: AuthorizedInvocation,
+        outcome: str,
+        *,
+        impersonating: bool,
+    ) -> None:
+        """Record one privileged non-provider execution outcome."""
+        if invocation.entry.command.startswith("fastmcp/"):
+            return
+        capability = self._invocation_audit_capability(invocation)
+        if not is_privileged_capability(capability):
+            return
+        self._audit_invocation(
+            invocation,
+            outcome,
+            capability=capability,
+            impersonating=impersonating,
+        )
+
+    def _audit_invocation(
+        self,
+        invocation: AuthorizedInvocation,
+        outcome: str,
+        *,
+        capability: str | None = None,
+        impersonating: bool,
+    ) -> None:
+        """Record one invocation outcome using fixed authorization fields."""
+        self._emit_audit(
+            invocation.auth,
+            command=invocation.entry.command,
+            capability=capability or self._invocation_audit_capability(invocation),
+            mode=self._invocation_mode(invocation, impersonating=impersonating).value,
+            outcome=outcome,
+        )
+
+    def _emit_audit(
+        self,
+        auth: tuple[AccessToken, Any] | None,
+        *,
+        command: str,
+        capability: str,
+        mode: str,
+        outcome: str,
+    ) -> None:
+        """Send one value-free record to the configured audit boundary."""
+        token, user = auth if auth is not None else (None, None)
+        self._audit_sink(
+            AuditRecord(
+                user_id=str(getattr(user, "user_id", "") or ANONYMOUS_USER_ID),
+                client_id=str(getattr(token, "client_id", "") or NO_TOKEN_CLIENT_ID),
+                command=command,
+                capability=capability,
+                mode=mode,
+                outcome=outcome,
+            )
+        )
+
+    @staticmethod
+    def _decision_audit_capability(
+        decision: CommandDecision,
+        policy: PolicySnapshot,
+    ) -> str:
+        """Choose one deterministic capability relevant to a decision."""
+        required = sorted(decision.required_capabilities)
+        if required:
+            return required[0]
+        alternatives = sorted(
+            decision.alternative_capabilities,
+            key=lambda capability: (
+                policy.mode(capability) is PolicyMode.DENY,
+                capability,
+            ),
+        )
+        return alternatives[0] if alternatives else "unknown"
+
+    @classmethod
+    def _invocation_audit_capability(cls, invocation: AuthorizedInvocation) -> str:
+        """Choose one deterministic capability relevant to a final invocation."""
+        decision = invocation.entry.decision
+        if decision is None:
+            return "unknown"
+        required = sorted(decision.required_capabilities | invocation.preflight.additional_required)
+        if required:
+            return required[0]
+        return cls._decision_audit_capability(decision, invocation.policy)
 
     def _policy(self, token: AccessToken) -> PolicySnapshot:
         """Resolve the immutable policy for the exact current bearer."""
