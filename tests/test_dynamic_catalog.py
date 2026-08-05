@@ -565,13 +565,13 @@ async def test_registry_change_rebuilds_discovery_index_immediately() -> None:
         """Expose a new endpoint."""
         return
 
-    adapter = _real_adapter(_handler("music/existing", existing))
+    adapter = _real_adapter(_handler("music/browse", existing))
     service = _meta_service(adapter)
-    before = await service.discover("new command")
-    adapter.mass.command_handlers["music/new_command"] = _handler("music/new_command", new_command)
-    after = await service.discover("new command")
+    before = await service.discover("search")
+    adapter.mass.command_handlers["music/search"] = _handler("music/search", new_command)
+    after = await service.discover("search")
     assert before["items"] == []
-    assert after["items"][0]["name"] == "ma_api:music/new_command"
+    assert after["items"][0]["name"] == "ma_api:music/search"
     assert service.index_build_count == 2
 
 
@@ -773,11 +773,11 @@ async def test_adapter_observes_registry_changes_without_restart() -> None:
     async def second(value: int) -> int:
         return value
 
-    adapter = _real_adapter(_handler("music/first", first))
-    assert [entry.name for entry in await adapter.visible_entries()] == ["ma_api:music/first"]
-    adapter.mass.command_handlers = {"music/second": _handler("music/second", second)}
+    adapter = _real_adapter(_handler("music/browse", first))
+    assert [entry.name for entry in await adapter.visible_entries()] == ["ma_api:music/browse"]
+    adapter.mass.command_handlers = {"music/search": _handler("music/search", second)}
     entries = await adapter.visible_entries()
-    assert [entry.name for entry in entries] == ["ma_api:music/second"]
+    assert [entry.name for entry in entries] == ["ma_api:music/search"]
     assert entries[0].input_schema["required"] == ["value"]
 
 
@@ -974,11 +974,11 @@ async def test_adapter_executes_strictly_and_bounds_result() -> None:
     async def values(prefix: str) -> list[str]:
         return [prefix * 3000 for _index in range(40)]
 
-    adapter = _real_adapter(_handler("music/values", values))
+    adapter = _real_adapter(_handler("music/search", values))
     ctx = MagicMock(session_id="session-1")
     with pytest.raises(ToolError, match="Unexpected argument\\(s\\): typo"):
         await adapter.call(
-            "ma_api:music/values",
+            "ma_api:music/search",
             {"prefix": "x", "typo": True},
             response_mode="compact",
             fields=None,
@@ -986,7 +986,7 @@ async def test_adapter_executes_strictly_and_bounds_result() -> None:
             ctx=ctx,
         )
     result = await adapter.call(
-        "ma_api:music/values",
+        "ma_api:music/search",
         {"prefix": "x"},
         response_mode="compact",
         fields=None,
@@ -1375,10 +1375,10 @@ async def test_registry_incompatibility_is_reported_without_breaking_catalog() -
     async def values() -> list[str]:
         return []
 
-    valid = _handler("music/values", values)
+    valid = _handler("music/search", values)
     adapter = _real_adapter(valid)
     adapter.mass.command_handlers["broken"] = SimpleNamespace(target=None)
-    assert [entry.name for entry in await adapter.visible_entries()] == ["ma_api:music/values"]
+    assert [entry.name for entry in await adapter.visible_entries()] == ["ma_api:music/search"]
     diagnostics = adapter.diagnostics()
     assert diagnostics["available"] is True
     assert diagnostics["incompatible_handlers"] == ("broken",)
@@ -1422,8 +1422,8 @@ async def test_hidden_auth_registry_churn_keeps_catalog_state_stable() -> None:
     async def hidden() -> None:
         return None
 
-    adapter = _real_adapter(_handler("music/first", first))
-    adapter.mass.command_handlers["music/second"] = _handler("music/second", second)
+    adapter = _real_adapter(_handler("music/browse", first))
+    adapter.mass.command_handlers["music/search"] = _handler("music/search", second)
     service = meta_discovery.MetaDiscoveryService(adapter)
     initial_view = await adapter.visible_catalog()
     initial_page = await service.discover("", limit=1)
@@ -1511,7 +1511,7 @@ async def test_denied_handlers_stay_denied_when_reauthorized(command: str) -> No
     async def operation() -> None:
         return None
 
-    adapter = _real_adapter(_handler("music/read", operation))
+    adapter = _real_adapter(_handler("music/search", operation))
     entry = (await adapter.visible_entries())[0]
     handler = _handler(command, operation, scope="admin")
     adapter.mass.command_handlers = {command: handler}
@@ -1537,9 +1537,9 @@ async def test_execution_sets_and_restores_ma_auth_context(
     async def whoami() -> str:
         return str(current_user.get().user_id)
 
-    adapter = _real_adapter(_handler("music/whoami", whoami))
+    adapter = _real_adapter(_handler("music/browse", whoami))
     result = await adapter.call(
-        "ma_api:music/whoami",
+        "ma_api:music/browse",
         {},
         response_mode="compact",
         fields=None,
@@ -1561,7 +1561,7 @@ async def test_schema_covers_enum_union_collections_and_impersonation() -> None:
     async def typed(mode: Mode, values: list[int], optional: str | None = None) -> dict[str, int]:
         return {str(mode): len(values) + bool(optional)}
 
-    handler = _handler("music/typed", typed)
+    handler = _handler("music/browse", typed)
     handler.type_hints = {
         "mode": Mode,
         "values": list[int],
@@ -1743,7 +1743,7 @@ async def test_sync_coroutine_and_generator_handlers_close_cleanly() -> None:
 
     for name, target, expected in (
         ("music/sync", sync_value, "sync"),
-        ("music/async", coroutine_value, "async"),
+        ("music/search", coroutine_value, "async"),
     ):
         adapter = _real_adapter(_handler(name, target))
         result = await adapter.call(
@@ -1756,9 +1756,9 @@ async def test_sync_coroutine_and_generator_handlers_close_cleanly() -> None:
         )
         assert result["data"] == expected
 
-    adapter = _real_adapter(_handler("music/generated", generated))
+    adapter = _real_adapter(_handler("music/browse", generated))
     result = await adapter.call(
-        "ma_api:music/generated",
+        "ma_api:music/browse",
         {},
         response_mode="full",
         fields=None,
@@ -1925,7 +1925,7 @@ async def test_native_authorization_revoked_between_checks_prevents_execution(
     async def replacement() -> None:
         called.append("replacement")
 
-    handler = _handler("music/write", write, "library.write")
+    handler = _handler("music/sync", write, "library.write")
     adapter = _real_adapter(
         handler,
         allowed_tags={str(Tag.EDIT_LIBRARY)},
@@ -1946,7 +1946,7 @@ async def test_native_authorization_revoked_between_checks_prevents_execution(
 
     with pytest.raises(ToolError, match="not permitted"):
         await adapter.call(
-            "ma_api:music/write",
+            "ma_api:music/sync",
             {},
             response_mode="compact",
             fields=None,
@@ -2604,7 +2604,7 @@ async def test_impersonation_is_authorized_before_confirmation_and_execution(
         player_filter=[],
         provider_filter=[],
     )
-    handler = _handler("music/read", operation, "library.read")
+    handler = _handler("music/search", operation, "library.read")
     handler.allow_impersonation = True
     adapter = _real_adapter(handler, user=caller)
     adapter.mass.webserver.auth.get_user = AsyncMock(
@@ -2613,7 +2613,7 @@ async def test_impersonation_is_authorized_before_confirmation_and_execution(
     adapter.mass.webserver.auth.get_user_by_username = AsyncMock(return_value=None)
     with pytest.raises(ToolError, match="impersonate"):
         await adapter.call(
-            "ma_api:music/read",
+            "ma_api:music/search",
             {"user": "u2"},
             response_mode="compact",
             fields=None,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -16,6 +17,9 @@ from provider.command_profiles import (
     LEGACY_COMMAND_MAPPINGS,
     LegacyMigration,
 )
+
+if TYPE_CHECKING:
+    from syrupy.assertion import SnapshotAssertion
 
 _PROFILE_BASELINE = {
     "library_get_track_by_uri": "music/item_by_uri",
@@ -176,8 +180,9 @@ def test_frozen_baseline_maps_every_former_source_exactly_once() -> None:
 
 async def test_current_ma_registry_is_capability_classified_or_explicitly_denied(
     tmp_path: Path,
+    snapshot: SnapshotAssertion,
 ) -> None:
-    """Every authenticated handler in MA's real core registry has a v2 classification."""
+    """Pin every authenticated handler to its exact v2 capability classification."""
     mass = MusicAssistant(str(tmp_path), str(tmp_path))
     mass.config = ConfigController(mass)
     mass.config.initialized = True
@@ -187,6 +192,7 @@ async def test_current_ma_registry_is_capability_classified_or_explicitly_denied
 
     unclassified: list[str] = []
     unexpectedly_denied: list[str] = []
+    classifications: dict[str, list[str] | str] = {}
     for command, handler in mass.command_handlers.items():
         if not handler.authenticated:
             continue
@@ -205,6 +211,12 @@ async def test_current_ma_registry_is_capability_classified_or_explicitly_denied
             command.startswith("auth/") or command in {"dashboard/register", "dashboard/unregister"}
         ):
             unexpectedly_denied.append(command)
+        classifications[command] = (
+            "hard-denied"
+            if decision.hard_denied
+            else sorted(decision.required_capabilities or decision.alternative_capabilities)
+        )
 
     assert unclassified == []
     assert unexpectedly_denied == []
+    assert classifications == snapshot

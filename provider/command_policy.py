@@ -12,6 +12,7 @@ from music_assistant_models.constants import SECURE_STRING_SUBSTITUTE
 from music_assistant_models.enums import ConfigEntryType
 
 from .config_io.secret_handler import gate_secret_writes
+from .known_commands import KNOWN_AUTHENTICATED_COMMANDS
 from .policy import PolicyMode, PolicySnapshot, combine_policy_modes
 from .tags import Tag
 
@@ -96,6 +97,57 @@ _DESTRUCTIVE_VERBS = frozenset({"clear", "delete", "remove", "reset", "revoke"})
 _SYSTEM_COMMAND_PREFIXES = ("audio_analysis/", "dashboard/", "logging/", "tasks/")
 _HARD_DENIED_COMMANDS = frozenset({"dashboard/register", "dashboard/unregister"})
 _HARD_DENIED_PREFIXES = ("auth/",)
+
+_PLAYBACK_COMMANDS = frozenset(
+    {
+        "player_queues/autoplay",
+        "player_queues/crossfade",
+        "player_queues/dont_stop_the_music",
+        "player_queues/next",
+        "player_queues/overlay",
+        "player_queues/pause",
+        "player_queues/play",
+        "player_queues/play_index",
+        "player_queues/play_media",
+        "player_queues/play_pause",
+        "player_queues/previous",
+        "player_queues/repeat",
+        "player_queues/resume",
+        "player_queues/seek",
+        "player_queues/set_playback_speed",
+        "player_queues/shuffle",
+        "player_queues/skip",
+        "player_queues/stop",
+        "player_queues/transfer",
+        "players/cmd/next",
+        "players/cmd/pause",
+        "players/cmd/play",
+        "players/cmd/play_pause",
+        "players/cmd/previous",
+        "players/cmd/resume",
+        "players/cmd/seek",
+        "players/cmd/stop",
+    }
+)
+_MEDIA_CONTROL_COMMANDS = frozenset(
+    {
+        "music/mark_played",
+        "music/mark_unplayed",
+        "players/cmd/play_announcement",
+    }
+)
+_VOLUME_COMMANDS = frozenset(
+    {
+        "players/cmd/group_volume",
+        "players/cmd/group_volume_down",
+        "players/cmd/group_volume_mute",
+        "players/cmd/group_volume_up",
+        "players/cmd/volume_down",
+        "players/cmd/volume_mute",
+        "players/cmd/volume_set",
+        "players/cmd/volume_up",
+    }
+)
 
 
 def _family(
@@ -277,6 +329,8 @@ def resolve_command_policy(
         return CommandDecision({}, hard_denied=True)
     if exact := EXACT_POLICIES.get(command):
         return exact
+    if command not in KNOWN_AUTHENTICATED_COMMANDS:
+        return CommandDecision({}, hard_denied=True)
 
     if command.startswith(_SYSTEM_COMMAND_PREFIXES) or command in {
         "info",
@@ -297,7 +351,9 @@ def resolve_command_policy(
     )
     if profile is not None:
         annotations.update(profile.annotations)
-    required_capabilities = _required_capabilities(family, operation)
+    required_capabilities = _command_capability_override(command) or _required_capabilities(
+        family, operation
+    )
     if not required_capabilities:
         return CommandDecision(annotations, hard_denied=True)
     preflight = (
@@ -330,6 +386,17 @@ def resolve_command_policy(
 def command_is_hard_denied(command: str) -> bool:
     """Return whether a command belongs to an unconditional deny family."""
     return command in _HARD_DENIED_COMMANDS or command.startswith(_HARD_DENIED_PREFIXES)
+
+
+def _command_capability_override(command: str) -> frozenset[str]:
+    """Return a fine-grained capability for migrated control commands."""
+    if command in _PLAYBACK_COMMANDS:
+        return frozenset({str(Tag.CONTROL_PLAYBACK)})
+    if command in _MEDIA_CONTROL_COMMANDS:
+        return frozenset({str(Tag.CONTROL_MEDIA)})
+    if command in _VOLUME_COMMANDS:
+        return frozenset({str(Tag.CONTROL_VOLUME)})
+    return frozenset()
 
 
 async def preflight_command(

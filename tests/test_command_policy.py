@@ -19,7 +19,7 @@ from provider.command_policy import (
     preflight_command,
     resolve_command_policy,
 )
-from provider.command_profiles import CommandProfile
+from provider.command_profiles import COMMAND_PROFILES, CommandProfile
 from provider.policy import PolicyMode, PolicyProfile, policy_snapshot
 from provider.tags import Tag
 
@@ -81,6 +81,22 @@ def test_system_health_keeps_annotations_separate_from_capability() -> None:
 def test_unknown_command_fails_closed_instead_of_inheriting_scope(scope: str | None) -> None:
     """Upstream scope metadata alone cannot classify an unknown command family."""
     decision = resolve_command_policy("future/new_command", scope, None)
+    assert decision.hard_denied is True
+    assert decision.required_capabilities == frozenset()
+
+
+@pytest.mark.parametrize(
+    ("command", "scope"),
+    [
+        ("music/future_command", "library.read"),
+        ("player_queues/future_command", "queues.control"),
+        ("config/core/future_command", "config.core.read"),
+        ("players/cmd/future_command", "players.control"),
+    ],
+)
+def test_unknown_descendant_of_known_family_fails_closed(command: str, scope: str) -> None:
+    """A recognized family cannot classify an unpinned future command."""
+    decision = resolve_command_policy(command, scope, None)
     assert decision.hard_denied is True
     assert decision.required_capabilities == frozenset()
 
@@ -175,12 +191,40 @@ def test_nonregistration_dashboard_commands_require_system_admin() -> None:
     assert decision.required_capabilities == frozenset({str(Tag.SYSTEM_ADMIN)})
 
 
-@pytest.mark.parametrize("command", ["audio_analysis/run", "logging/set_level", "tasks/list"])
+@pytest.mark.parametrize("command", ["audio_analysis/coverage", "logging/get", "tasks/list"])
 def test_system_command_families_require_system_admin(command: str) -> None:
     """System commands are decided solely by the system:admin capability mode."""
     decision = resolve_command_policy(command, "system.read", None)
     assert decision.hard_denied is False
     assert decision.required_capabilities == frozenset({str(Tag.SYSTEM_ADMIN)})
+
+
+@pytest.mark.parametrize(
+    ("command", "scope", "capability"),
+    [
+        ("players/cmd/play", "players.control", Tag.CONTROL_PLAYBACK),
+        ("players/cmd/pause", "players.control", Tag.CONTROL_PLAYBACK),
+        ("players/cmd/stop", "players.control", Tag.CONTROL_PLAYBACK),
+        ("players/cmd/seek", "players.control", Tag.CONTROL_PLAYBACK),
+        ("player_queues/skip", "queues.control", Tag.CONTROL_PLAYBACK),
+        ("player_queues/play_media", "queues.control", Tag.CONTROL_PLAYBACK),
+        ("player_queues/play_index", "queues.control", Tag.CONTROL_PLAYBACK),
+        ("players/cmd/play_announcement", "players.control", Tag.CONTROL_MEDIA),
+        ("music/mark_played", "library.write", Tag.CONTROL_MEDIA),
+        ("music/mark_unplayed", "library.write", Tag.CONTROL_MEDIA),
+        ("players/cmd/volume_set", "players.control", Tag.CONTROL_VOLUME),
+        ("players/cmd/group_volume", "players.control", Tag.CONTROL_VOLUME),
+        ("players/cmd/group_volume_mute", "players.control", Tag.CONTROL_VOLUME),
+    ],
+)
+def test_fine_grained_control_commands_use_their_named_capability(
+    command: str,
+    scope: str,
+    capability: Tag,
+) -> None:
+    """Playback, media, and volume controls cannot bypass their Custom-policy mode."""
+    decision = resolve_command_policy(command, scope, COMMAND_PROFILES.get(command))
+    assert decision.required_capabilities == frozenset({str(capability)})
 
 
 @pytest.mark.parametrize(
