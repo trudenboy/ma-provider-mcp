@@ -51,6 +51,7 @@ CALL_TOOL_NAME = "call_tool"
 SEARCH_TOOL_NAME = "search_tools"
 _META_NAMES = {CALL_TOOL_NAME, SEARCH_TOOL_NAME, GET_TOOL_SCHEMA_NAME}
 _TOKEN_RE = re.compile(r"[^\W_]+", re.UNICODE)
+_CATALOG_STABILIZATION_ATTEMPTS = 3
 
 
 class DynamicAdapter(Protocol):
@@ -182,11 +183,17 @@ class MetaDiscoveryService:
             offset = 0
         page_limit = resolve_limit(mode, limit)
 
-        while True:
+        for attempt in range(_CATALOG_STABILIZATION_ATTEMPTS):
             view = await self.adapter.visible_catalog()
             snapshot = await self.adapter.base_snapshot()
             if view.fingerprint == snapshot.fingerprint:
                 break
+            if attempt == _CATALOG_STABILIZATION_ATTEMPTS - 1:
+                raise PaginationError(
+                    "catalog_changed",
+                    "catalog changed during discovery; retry without a cursor",
+                )
+            await asyncio.sleep(0)
         visible = {entry.name: entry for entry in view.entries}
         revision = catalog_revision(snapshot.fingerprint, view.entries)
         if state is not None and state.revision != revision:

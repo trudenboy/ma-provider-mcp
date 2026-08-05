@@ -10,7 +10,7 @@ from dataclasses import dataclass, replace
 from enum import StrEnum
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
 from fastmcp import Client, Context, FastMCP
@@ -390,6 +390,39 @@ async def test_search_retries_when_registry_changes_between_catalog_reads() -> N
     assert (await service.discover("replacement"))["items"] == [
         {"name": "ma_api:music/replacement", "description": "Replacement collection."}
     ]
+
+
+async def test_persistent_catalog_churn_stops_after_three_attempts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Discovery yields between retries and fails instead of spinning forever."""
+
+    class _ChurningAdapter(_SnapshotAdapter):
+        visible_calls = 0
+        snapshot_calls = 0
+
+        async def visible_catalog(self) -> CatalogView:
+            self.visible_calls += 1
+            fingerprint = (1, "visible", (("music/search", self.visible_calls),))
+            return CatalogView(fingerprint, ())
+
+        async def base_snapshot(self) -> CatalogSnapshot:
+            self.snapshot_calls += 1
+            fingerprint = (1, "snapshot", (("music/search", self.snapshot_calls),))
+            return CatalogSnapshot(fingerprint, ())
+
+    adapter = _ChurningAdapter(_catalog_snapshot())
+    service = _meta_service(adapter)
+    sleep = AsyncMock()
+    monkeypatch.setattr("provider.meta_discovery.asyncio.sleep", sleep)
+
+    with pytest.raises(PaginationError) as exc_info:
+        await service.discover()
+
+    assert exc_info.value.code == "catalog_changed"
+    assert str(exc_info.value) == "catalog changed during discovery; retry without a cursor"
+    assert adapter.visible_calls == adapter.snapshot_calls == 3
+    assert sleep.await_args_list == [call(0), call(0)]
 
 
 async def test_parallel_searches_contend_for_one_awaitable_index_build(
