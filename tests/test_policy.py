@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 import pytest
 
 from provider.policy import (
@@ -112,7 +114,7 @@ def test_policy_snapshots_are_deeply_immutable() -> None:
     custom["query:library"] = PolicyMode.DENY
     assert snapshot.mode("query:library") is PolicyMode.ALLOW
     with pytest.raises(TypeError):
-        snapshot.modes["query:library"] = PolicyMode.DENY  # type: ignore[index]
+        cast("dict[str, PolicyMode]", snapshot.modes)["query:library"] = PolicyMode.DENY
 
 
 @pytest.mark.parametrize(
