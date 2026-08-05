@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+COMPOSE_FILE = REPO_ROOT / "docker-compose.dev.yml"
 
 
 def test_compose_defaults_to_a_neighboring_ma_checkout() -> None:
@@ -19,7 +20,7 @@ def test_compose_defaults_to_a_neighboring_ma_checkout() -> None:
     if docker is None:
         pytest.skip("Docker CLI is unavailable")
     completed = subprocess.run(  # noqa: S603 - resolved Docker executable, fixed arguments
-        [docker, "compose", "-f", "docker-compose.dev.yml", "config", "--format", "json"],
+        [docker, "compose", "-f", str(COMPOSE_FILE), "config", "--format", "json"],
         cwd=REPO_ROOT,
         check=True,
         capture_output=True,
