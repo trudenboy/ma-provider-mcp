@@ -19,11 +19,12 @@ from mcp.types import INVALID_REQUEST, METHOD_NOT_FOUND
 
 from .command_policy import (
     CommandDecision,
+    CommandPreflight,
     Confirmation,
     DynamicPolicy,
     DynamicRisk,
-    ResultProjector,
     command_tags_visible,
+    postflight_command,
     preflight_command,
     resolve_command_policy,
 )
@@ -107,6 +108,17 @@ class DynamicEntry:
     profile: CommandProfile | None = None
     compiled_signature: CompiledSignature | None = None
     decision: CommandDecision | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class AuthorizedInvocation:
+    """One fully authorized native invocation ready for execution."""
+
+    entry: DynamicEntry
+    arguments: dict[str, Any]
+    auth: tuple[AccessToken, Any] | None
+    impersonated_user: Any | None
+    preflight: CommandPreflight
 
 
 @dataclass(frozen=True, slots=True)
@@ -275,18 +287,18 @@ class DynamicAPIAdapter:
         except (KeyError, TypeError, ValueError) as exc:
             raise ToolError(str(exc)) from exc
 
-        entry, impersonated_user, _result_projector = await self._authorize_call(
+        initial_invocation = await self._authorize_call(
             entry,
             auth,
             parsed,
             impersonated=impersonated,
         )
-        await self._confirm(entry, ctx, impersonating=impersonating)
+        await self._confirm(initial_invocation.entry, ctx, impersonating=impersonating)
         auth = await self._authentication(revalidate=True)
         if auth is None and self._auth_required_provider():
             raise ToolError("Authentication is required")
-        entry, impersonated_user, result_projector = await self._authorize_call(
-            entry,
+        invocation = await self._authorize_call(
+            initial_invocation.entry,
             auth,
             parsed,
             impersonated=impersonated,
@@ -294,22 +306,26 @@ class DynamicAPIAdapter:
 
         try:
             async with asyncio.timeout(_CALL_TIMEOUT_SECONDS):
-                result = await self._execute(entry, parsed, auth, impersonated_user)
-                if result_projector is not None:
-                    result = result_projector(result)
+                result = await self._execute(
+                    invocation.entry,
+                    invocation.arguments,
+                    invocation.auth,
+                    invocation.impersonated_user,
+                )
+                result = await self._postflight(invocation, result)
         except TimeoutError as exc:
-            raise ToolError(f"Command {entry.command!r} timed out") from exc
+            raise ToolError(f"Command {invocation.entry.command!r} timed out") from exc
         except ToolError:
             raise
         except Exception as exc:
-            raise _command_error(entry.command, exc) from exc
+            raise _command_error(invocation.entry.command, exc) from exc
         return self._bounded_envelope(
             name,
             result,
             response_mode=response_mode,
             fields=fields,
             max_items=max_items,
-            profile=entry.profile,
+            profile=invocation.entry.profile,
         )
 
     def _registry_fingerprint(self) -> CatalogFingerprint:
@@ -598,7 +614,7 @@ class DynamicAPIAdapter:
         decision: CommandDecision,
         arguments: Mapping[str, Any],
         auth: tuple[AccessToken, Any] | None,
-    ) -> ResultProjector | None:
+    ) -> CommandPreflight:
         """Run request-dependent policy checks under the current MA auth context."""
         context_tokens = self._set_auth_context(auth)
         try:
@@ -612,6 +628,24 @@ class DynamicAPIAdapter:
             for variable, token in reversed(context_tokens):
                 variable.reset(token)
 
+    async def _postflight(self, invocation: AuthorizedInvocation, result: Any) -> Any:
+        """Sanitize a native result under the final authorized request context."""
+        decision = invocation.entry.decision
+        if decision is None:
+            raise ToolError(f"Tool {invocation.entry.name!r} not found or not permitted")
+        context_tokens = self._set_auth_context(invocation.auth)
+        try:
+            return await postflight_command(
+                self.mass,
+                decision,
+                invocation.arguments,
+                invocation.preflight,
+                result,
+            )
+        finally:
+            for variable, token in reversed(context_tokens):
+                variable.reset(token)
+
     async def _authorize_call(
         self,
         entry: DynamicEntry,
@@ -619,7 +653,7 @@ class DynamicAPIAdapter:
         arguments: Mapping[str, Any],
         *,
         impersonated: Any,
-    ) -> tuple[DynamicEntry, Any | None, ResultProjector | None]:
+    ) -> AuthorizedInvocation:
         """Refresh authorization, impersonation, target filters and request preflight."""
         entry = self._reauthorize_entry(entry, auth)
         impersonated_user = (
@@ -632,8 +666,14 @@ class DynamicAPIAdapter:
         decision = entry.decision
         if decision is None:
             decision = resolve_command_policy(entry.command, entry.required_scope, entry.profile)
-        result_projector = await self._preflight(decision, arguments, auth)
-        return entry, impersonated_user, result_projector
+        preflight = await self._preflight(decision, arguments, auth)
+        return AuthorizedInvocation(
+            entry=entry,
+            arguments=dict(arguments),
+            auth=auth,
+            impersonated_user=impersonated_user,
+            preflight=preflight,
+        )
 
     async def _resolve_impersonated_user(
         self,

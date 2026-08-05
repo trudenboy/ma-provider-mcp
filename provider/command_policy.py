@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import inspect
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
@@ -17,8 +17,6 @@ from .tags import Tag
 
 if TYPE_CHECKING:
     from .command_profiles import CommandProfile
-
-type ResultProjector = Callable[[Any], Any]
 
 
 class DynamicRisk(StrEnum):
@@ -62,6 +60,13 @@ class CommandDecision:
     confirmation: Confirmation = Confirmation.NEVER
     preflight: str | None = None
     alternative_tags: frozenset[str] = frozenset()
+
+
+@dataclass(frozen=True, slots=True)
+class CommandPreflight:
+    """State retained between command authorization and result sanitization."""
+
+    secure_config_value: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -285,7 +290,7 @@ async def preflight_command(
     decision: CommandDecision,
     arguments: Mapping[str, Any],
     allowed_tags: set[str],
-) -> ResultProjector | None:
+) -> CommandPreflight:
     """
     Enforce request-dependent guards before confirmation and execution.
 
@@ -295,11 +300,11 @@ async def preflight_command(
     :param allowed_tags: Current provider permission tags.
     """
     if decision.preflight == "config_secret_read":
-        return await _config_value_projector(mass, arguments)
+        return CommandPreflight(secure_config_value=await _config_value_is_secure(mass, arguments))
     if decision.preflight == "config_secret_write":
         values = arguments.get("values")
         if not isinstance(values, Mapping):
-            return None
+            return CommandPreflight()
         getter_name, target = _config_entries_target(arguments)
         entries = getattr(mass.config, getter_name)(target)
         if inspect.isawaitable(entries):
@@ -311,7 +316,23 @@ async def preflight_command(
         )
     elif decision.preflight == "config_flow_submit":
         await _preflight_setup_flow_submit(mass, arguments, allowed_tags)
-    return None
+    return CommandPreflight()
+
+
+async def postflight_command(
+    mass: Any,
+    decision: CommandDecision,
+    arguments: Mapping[str, Any],
+    preflight: CommandPreflight,
+    result: Any,
+) -> Any:
+    """Sanitize one native command result after execution and before serialization."""
+    if decision.preflight != "config_secret_read":
+        return result
+    secure_after_execution = await _config_value_is_secure(mass, arguments)
+    if not preflight.secure_config_value and not secure_after_execution:
+        return result
+    return None if result is None else SECURE_STRING_SUBSTITUTE
 
 
 def command_tags_visible(decision: CommandDecision, allowed_tags: set[str]) -> bool:
@@ -414,11 +435,11 @@ def _config_entries_target(arguments: Mapping[str, Any]) -> tuple[str, str]:
     raise ValueError("Config save arguments do not identify a target")
 
 
-async def _config_value_projector(
+async def _config_value_is_secure(
     mass: Any,
     arguments: Mapping[str, Any],
-) -> ResultProjector | None:
-    """Classify one live config value and mask it when its schema is secure."""
+) -> bool:
+    """Return whether one live config value is declared secure."""
     key = arguments.get("key")
     if not isinstance(key, str) or not key:
         raise ToolError("Unable to classify config value")
@@ -438,9 +459,13 @@ async def _config_value_projector(
         raise ToolError("Unable to classify config value") from exc
     if entry is None:
         raise ToolError("Unable to classify config value")
-    if entry.type is not ConfigEntryType.SECURE_STRING:
-        return None
-    return lambda result: None if result is None else SECURE_STRING_SUBSTITUTE
+    try:
+        entry_type = ConfigEntryType(entry.type)
+    except (TypeError, ValueError) as exc:
+        raise ToolError("Unable to classify config value") from exc
+    if entry_type is ConfigEntryType.UNKNOWN:
+        raise ToolError("Unable to classify config value")
+    return entry_type is ConfigEntryType.SECURE_STRING
 
 
 async def _preflight_setup_flow_submit(
