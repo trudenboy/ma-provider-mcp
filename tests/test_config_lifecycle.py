@@ -112,6 +112,21 @@ async def test_unknown_config_action_uses_plugin_provider_handler(
 
 
 @pytest.mark.asyncio
+async def test_unknown_config_action_normalizes_empty_plugin_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Optional MA action results remain compatible with the provider's tuple contract."""
+    provider = _provider(MagicMock(), _config())
+    base_handler = AsyncMock(return_value=None)
+    monkeypatch.setattr(PluginProvider, "handle_config_action", base_handler)
+
+    entries = await provider.handle_config_action("future_ma_action")
+
+    assert entries == ()
+    base_handler.assert_awaited_once_with("future_ma_action")
+
+
+@pytest.mark.asyncio
 async def test_mcp_restart_does_not_reregister_provider_commands(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

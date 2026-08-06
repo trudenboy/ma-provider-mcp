@@ -80,7 +80,7 @@ class MCPServerProvider(PluginProvider):  # type: ignore[misc, unused-ignore]
                     value=url,
                 ),
             )
-        return await super().handle_config_action(action)
+        return await super().handle_config_action(action) or ()
 
     async def handle_async_init(self) -> None:
         """Register MA commands, then build and start the FastMCP runtime."""
