@@ -3,20 +3,16 @@
 from __future__ import annotations
 
 import ast
-import importlib
-import importlib.util
 from pathlib import Path
 
-PROVIDER_ROOT = Path(__file__).parents[1] / "provider"
+from provider import capabilities as capabilities_module
+
+PROVIDER_ROOT = Path(capabilities_module.__file__).parent
 
 
 def test_capability_is_the_only_policy_vocabulary() -> None:
     """Reintroducing the former Tag domain or changing the 26 strings must fail."""
-    spec = importlib.util.find_spec("provider.capabilities")
-    assert spec is not None
-    module = importlib.import_module("provider.capabilities")
-
-    assert [str(item) for item in module.Capability] == [
+    assert [str(item) for item in capabilities_module.Capability] == [
         "query:library",
         "query:queue",
         "query:players",
