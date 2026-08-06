@@ -286,3 +286,57 @@ git add provider/config.py provider/strings.json \
 git commit -m "refactor: use MA translations for policy selectors"
 git push
 ```
+
+### Task 4: Move all remaining dynamic settings text to translations
+
+**Files:**
+- Modify: `tests/test_config_entries.py`
+- Modify: `tests/test_policy_config.py`
+- Modify: `tests/test_strings_json.py`
+- Modify: `provider/config.py`
+- Modify: `provider/strings.json`
+- Modify: `CHANGELOG.md`
+
+**Interfaces:**
+- Consumes: structural `info_label`, stable `policy_capability`, and
+  `ConfigEntry.translation_params`
+- Produces: a provider configuration schema with no runtime-composed user-facing
+  text outside Music Assistant's translation mechanism
+
+- [x] **Step 1: Add failing endpoint and capability translation tests**
+
+Require the endpoint label to carry no inline text and pass only the normalized URL,
+and require every capability entry to use `policy_capability`, pass its stable ID,
+and expose value-only policy mode options.
+
+- [x] **Step 2: Run the focused tests and confirm RED**
+
+Run the endpoint, dynamic policy schema, and strings contract tests. Expected: all
+three fail because the remaining runtime-generated text is still inline.
+
+- [x] **Step 3: Implement the stable translation routing**
+
+Route endpoint guidance through the structural `info_label` key. Route every matrix
+entry through `policy_capability`, and define its label, description, and
+`deny`/`allow`/`confirm` option titles in `provider/strings.json`.
+
+- [x] **Step 4: Run focused tests and confirm GREEN**
+
+Run:
+
+```bash
+uv run pytest -q tests/test_config_entries.py tests/test_policy_config.py \
+  tests/test_strings_json.py
+```
+
+Expected: all endpoint and policy configuration contracts pass.
+
+- [x] **Step 5: Run the upstream config-entry checker and complete quality gate**
+
+Validate the inlined provider against the current Music Assistant checkout, then
+run pytest, Ruff, mypy, and pre-commit.
+
+- [ ] **Step 6: Commit, push, verify CI, and merge the approved PR**
+
+Push the schema-wide translation refactor to PR #235. Merge only after every current
+GitHub check is green.

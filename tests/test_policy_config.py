@@ -195,6 +195,20 @@ def test_dynamic_entries_have_conditional_matrices_and_hashed_token_keys(
     assert len(token_matrix) == len(Tag) == 26
     assert all(entry.advanced is True for entry in default_matrix)
     assert all(entry.advanced is True for entry in token_matrix)
+    for capability in Tag:
+        for entry in (
+            by_key[policy_mode_key(capability)],
+            by_key[policy_mode_key(capability, raw_id)],
+        ):
+            assert entry.label is None
+            assert entry.description is None
+            assert entry.translation_key == "policy_capability"
+            assert entry.translation_params == [str(capability)]
+            assert [(option.value, option.title) for option in entry.options] == [
+                ("deny", None),
+                ("allow", None),
+                ("confirm", None),
+            ]
 
 
 def test_v1_entries_are_removed_even_if_stored_values_exist(mock_mass: MagicMock) -> None:

@@ -202,15 +202,11 @@ def build_config_entries(
     """Return endpoint, resource, prompt, and dynamic v2 policy entries."""
     base_url = mass.webserver.base_url.rstrip("/")
     mount_path = "/" + mount_path.strip("/")
-    info_label = (
-        f"MCP endpoint: {base_url}{mount_path}\n"
-        "Create tokens in Profile → Long-lived access tokens."
-    )
     entries: list[ConfigEntry] = [
         ConfigEntry(
             key="info_label",
             type=ConfigEntryType.LABEL,
-            label=info_label,
+            translation_params=[f"{base_url}{mount_path}"],
             category="server",
             required=False,
         ),
@@ -363,7 +359,7 @@ def _policy_selector(key: str, label: str | None, *, allow_inherit: bool) -> Con
 
 def _custom_matrix(selector_key: str, token_id: str | None = None) -> list[ConfigEntry]:
     """Build the conditional 26-capability Custom matrix for one selector."""
-    options = [ConfigValueOption(value=mode.value, title=mode.value.title()) for mode in PolicyMode]
+    options = [ConfigValueOption(value=mode.value) for mode in PolicyMode]
     return [
         ConfigEntry(
             key=policy_mode_key(capability, token_id),
@@ -373,7 +369,8 @@ def _custom_matrix(selector_key: str, token_id: str | None = None) -> list[Confi
             advanced=True,
             depends_on=selector_key,
             depends_on_value=PolicyProfile.CUSTOM.value,
-            label=str(capability),
+            translation_key="policy_capability",
+            translation_params=[str(capability)],
             category="policy",
             required=False,
         )

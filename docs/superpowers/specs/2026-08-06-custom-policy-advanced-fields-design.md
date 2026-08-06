@@ -21,13 +21,20 @@ conditions. A capability field is shown only when Advanced mode is enabled and
 its owning selector is set to `Custom`.
 
 The default and per-token selectors remain non-advanced. Music Assistant's native
-translation mechanism owns all selector UI text: the default selector uses its
-structural `policy_default` key, while dynamic selectors use the stable
-`policy_token` translation key and pass the token name through
-`translation_params`. Both translation entries define the profile option titles.
-The Custom option therefore keeps the stored value `Custom` but renders as
-`Custom (Advanced mode required)`, and selector descriptions explain where its
-capability settings appear.
+translation mechanism owns all provider-settings UI text. The endpoint guidance
+uses its structural `info_label` key and passes the normalized endpoint as a
+translation parameter. The default selector uses its structural `policy_default`
+key, while dynamic selectors use the stable `policy_token` key and pass the token
+name through `translation_params`. Both selector translations define the profile
+option titles. Every dynamic capability entry similarly uses the stable
+`policy_capability` key, passing its public capability ID as a parameter and
+resolving `deny`, `allow`, and `confirm` option titles from `strings.json`.
+
+The Custom option therefore keeps the stored value `Custom` but renders as `Custom
+(Advanced mode required)`, and selector descriptions explain where its capability
+settings appear. Capability IDs remain visible technical identifiers and unchanged
+policy values; only their presentation is routed through Music Assistant's
+translation layer.
 
 ## Configuration behavior
 
@@ -36,7 +43,8 @@ profile resolution, hot swapping, and the v2 policy schema remain unchanged.
 Changing the visible option title does not change the value passed to or returned
 by Music Assistant configuration APIs.
 Hashed per-token entry keys never need matching `strings.json` records because
-their labels, descriptions, and option titles resolve through `policy_token`.
+their selectors resolve through `policy_token` and their matrices resolve through
+`policy_capability`.
 
 Selecting `Custom` while Advanced mode is disabled does not remove existing mode
 values. Previously unset Custom modes continue to resolve as `deny`. Enabling
@@ -57,7 +65,12 @@ Tests will verify that:
   title while retaining `Custom` as its value;
 - dynamic selectors expose `translation_key=policy_token` and pass their token
   name as the sole translation parameter instead of embedding UI text;
-- selector labels, descriptions, and profile option titles live in `strings.json`;
+- the endpoint guidance passes only its normalized URL through
+  `translation_params`;
+- capability entries expose `translation_key=policy_capability`, pass the stable
+  capability ID as their sole parameter, and carry no inline option titles;
+- labels, descriptions, profile titles, and policy mode titles live in
+  `strings.json`;
 - all 26 capabilities are still emitted for every matrix;
 - policy parsing and stored Custom values are unchanged.
 
