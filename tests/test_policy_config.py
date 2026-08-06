@@ -156,12 +156,12 @@ def test_dynamic_entries_have_conditional_matrices_and_hashed_token_keys(
     assert by_key[selector_key].value == "Custom"
     assert by_key[debug_key].value == "confirm"
     assert by_key[CONF_POLICY_TOKEN_SUFFIXES].value == [policy_token_suffix(raw_id)]
-    assert [option.value for option in by_key[CONF_DEFAULT_POLICY].options] == [
-        "Read-only",
-        "Home control",
-        "Interactive admin",
-        "Trusted",
-        "Custom",
+    assert [(option.value, option.title) for option in by_key[CONF_DEFAULT_POLICY].options] == [
+        ("Read-only", "Read-only"),
+        ("Home control", "Home control"),
+        ("Interactive admin", "Interactive admin"),
+        ("Trusted", "Trusted"),
+        ("Custom", "Custom (Advanced mode required)"),
     ]
     assert [option.value for option in by_key[selector_key].options] == [
         "Inherit",
@@ -171,6 +171,10 @@ def test_dynamic_entries_have_conditional_matrices_and_hashed_token_keys(
         "Trusted",
         "Custom",
     ]
+    assert [(option.value, option.title) for option in by_key[selector_key].options][-1] == (
+        "Custom",
+        "Custom (Advanced mode required)",
+    )
     assert raw_id not in selector_key
     assert token_policy_key(raw_id) == token_policy_key(raw_id)
     assert token_policy_key(raw_id) != token_policy_key("replacement-id")

@@ -353,7 +353,17 @@ def _policy_selector(key: str, label: str | None, *, allow_inherit: bool) -> Con
         key=key,
         type=ConfigEntryType.STRING,
         default_value=INHERIT_POLICY if allow_inherit else PolicyProfile.READ_ONLY.value,
-        options=[ConfigValueOption(value=value, title=value) for value in values],
+        options=[
+            ConfigValueOption(
+                value=value,
+                title=(
+                    "Custom (Advanced mode required)"
+                    if value == PolicyProfile.CUSTOM.value
+                    else value
+                ),
+            )
+            for value in values
+        ],
         label=label,
         description=(
             "Select Custom and enable Advanced mode to edit individual capability modes."

@@ -127,7 +127,7 @@ git commit -m "fix: hide custom policy fields outside advanced mode"
 - Consumes: `_policy_selector(key: str, label: str | None, *, allow_inherit: bool) -> ConfigEntry`
 - Produces: profile options whose stored values remain unchanged and whose Custom title is `Custom (Advanced mode required)`
 
-- [ ] **Step 1: Add a failing option title/value test**
+- [x] **Step 1: Add a failing option title/value test**
 
 Extend `test_dynamic_entries_have_conditional_matrices_and_hashed_token_keys` with literal expected pairs for both selectors:
 
@@ -145,7 +145,7 @@ assert [(option.value, option.title) for option in by_key[selector_key].options]
 )
 ```
 
-- [ ] **Step 2: Run the focused test and confirm RED**
+- [x] **Step 2: Run the focused test and confirm RED**
 
 Run:
 
@@ -156,7 +156,7 @@ uv run pytest -q \
 
 Expected: failure because the Custom option title is currently `Custom`.
 
-- [ ] **Step 3: Implement the distinct Custom display title**
+- [x] **Step 3: Implement the distinct Custom display title**
 
 Build each option with its existing value and a conditional title:
 
@@ -174,7 +174,7 @@ options=[
 ],
 ```
 
-- [ ] **Step 4: Run focused policy configuration tests and confirm GREEN**
+- [x] **Step 4: Run focused policy configuration tests and confirm GREEN**
 
 Run:
 
@@ -184,7 +184,7 @@ uv run pytest -q tests/test_policy_config.py tests/test_strings_json.py
 
 Expected: all policy configuration and string contract tests pass.
 
-- [ ] **Step 5: Run the complete quality gate**
+- [x] **Step 5: Run the complete quality gate**
 
 Run:
 
@@ -198,7 +198,7 @@ uv run pre-commit run --all-files
 
 Expected: every command exits successfully.
 
-- [ ] **Step 6: Commit the implementation**
+- [x] **Step 6: Commit the implementation**
 
 ```bash
 git add provider/config.py tests/test_policy_config.py \
