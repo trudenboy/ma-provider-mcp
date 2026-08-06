@@ -22,9 +22,10 @@
 - Modify: `tests/test_policy_config.py`
 - Modify: `tests/test_strings_json.py`
 - Modify: `provider/config.py`
+- Modify: `provider/provider.py` (only if the full type gate exposes the known MA override drift)
 - Modify: `provider/strings.json`
 
-- [ ] **Step 1: Add failing configuration-schema tests**
+- [x] **Step 1: Add failing configuration-schema tests**
 
 Extend `test_dynamic_entries_have_conditional_matrices_and_hashed_token_keys` to require ordinary selectors, advanced matrix entries, and guidance on the dynamic per-token selector:
 
@@ -44,7 +45,7 @@ Extend the strings contract test to require the same guidance on the static defa
 assert "Advanced mode" in entries["policy_default"]["description"]
 ```
 
-- [ ] **Step 2: Run the focused tests and confirm RED**
+- [x] **Step 2: Run the focused tests and confirm RED**
 
 Run:
 
@@ -56,7 +57,7 @@ uv run pytest -q \
 
 Expected: failure because Custom matrix entries are not advanced and the selector guidance is absent.
 
-- [ ] **Step 3: Implement the minimal schema change**
+- [x] **Step 3: Implement the minimal schema change**
 
 In `_custom_matrix`, set the capability entries to advanced while preserving their existing dependency:
 
@@ -78,7 +79,7 @@ description=(
 
 Append the equivalent sentence to `config_entries.policy_default.description` in `provider/strings.json`.
 
-- [ ] **Step 4: Run focused tests and confirm GREEN**
+- [x] **Step 4: Run focused tests and confirm GREEN**
 
 Run:
 
@@ -88,7 +89,7 @@ uv run pytest -q tests/test_policy_config.py tests/test_strings_json.py
 
 Expected: all policy configuration and string contract tests pass.
 
-- [ ] **Step 5: Run the complete quality gate**
+- [x] **Step 5: Run the complete quality gate**
 
 Run:
 
@@ -102,7 +103,11 @@ pre-commit run --all-files
 
 Expected: every command exits successfully.
 
-- [ ] **Step 6: Commit the implementation**
+The full gate exposed a stale `handle_config_action` return annotation introduced by
+an earlier merge. Align it with the current MA base class and the method's actual
+always-tuple behavior, then rerun the complete gate.
+
+- [x] **Step 6: Commit the implementation**
 
 ```bash
 git add provider/config.py provider/strings.json \

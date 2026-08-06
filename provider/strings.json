@@ -34,7 +34,7 @@
     },
     "policy_default": {
       "label": "Default policy",
-      "description": "Policy used when a token has no explicit override. Missing v2 configuration defaults to Read-only."
+      "description": "Policy used when a token has no explicit override. Missing v2 configuration defaults to Read-only. Select Custom and enable Advanced mode to edit individual capability modes."
     },
     "policy_manual_token_ids": {
       "label": "Manual MCP token IDs",

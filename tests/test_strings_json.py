@@ -85,6 +85,7 @@ def test_strings_expose_only_v2_policy_configuration_contract() -> None:
     entries = data["config_entries"]
 
     assert entries.keys() >= {"policy_default", "policy_manual_token_ids"}
+    assert "Advanced mode" in entries["policy_default"]["description"]
     assert set(entries).isdisjoint(
         {
             "require_confirmation",

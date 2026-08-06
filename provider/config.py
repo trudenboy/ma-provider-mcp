@@ -355,6 +355,11 @@ def _policy_selector(key: str, label: str | None, *, allow_inherit: bool) -> Con
         default_value=INHERIT_POLICY if allow_inherit else PolicyProfile.READ_ONLY.value,
         options=[ConfigValueOption(value=value, title=value) for value in values],
         label=label,
+        description=(
+            "Select Custom and enable Advanced mode to edit individual capability modes."
+            if label is not None
+            else None
+        ),
         category="policy",
         required=False,
     )
@@ -369,6 +374,7 @@ def _custom_matrix(selector_key: str, token_id: str | None = None) -> list[Confi
             type=ConfigEntryType.STRING,
             default_value=PolicyMode.DENY.value,
             options=options,
+            advanced=True,
             depends_on=selector_key,
             depends_on_value=PolicyProfile.CUSTOM.value,
             label=str(capability),

@@ -151,6 +151,8 @@ def test_dynamic_entries_have_conditional_matrices_and_hashed_token_keys(
     assert CONF_MANUAL_TOKEN_IDS in by_key
     assert by_key[CONF_MANUAL_TOKEN_IDS].multi_value is True
     assert selector_key in by_key
+    assert by_key[CONF_DEFAULT_POLICY].advanced is False
+    assert by_key[selector_key].advanced is False
     assert by_key[selector_key].value == "Custom"
     assert by_key[debug_key].value == "confirm"
     assert by_key[CONF_POLICY_TOKEN_SUFFIXES].value == [policy_token_suffix(raw_id)]
@@ -186,6 +188,11 @@ def test_dynamic_entries_have_conditional_matrices_and_hashed_token_keys(
     ]
     assert len(default_matrix) == len(Tag) == 26
     assert len(token_matrix) == len(Tag) == 26
+    assert all(entry.advanced is True for entry in default_matrix)
+    assert all(entry.advanced is True for entry in token_matrix)
+    assert by_key[selector_key].description == (
+        "Select Custom and enable Advanced mode to edit individual capability modes."
+    )
 
 
 def test_v1_entries_are_removed_even_if_stored_values_exist(mock_mass: MagicMock) -> None:
