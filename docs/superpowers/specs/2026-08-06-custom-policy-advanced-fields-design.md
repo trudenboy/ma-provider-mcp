@@ -20,14 +20,18 @@ The Music Assistant frontend therefore applies both independent visibility
 conditions. A capability field is shown only when Advanced mode is enabled and
 its owning selector is set to `Custom`.
 
-The default and per-token selectors remain non-advanced. Their descriptions will
-tell users that Custom capability settings are available in Advanced mode, so
-selecting `Custom` in the normal view does not look like a broken or empty form.
+The default and per-token selectors remain non-advanced. In both selectors, the
+Custom option keeps the stored value `Custom` but uses the visible title
+`Custom (Advanced mode required)`. Their descriptions also tell users that Custom
+capability settings are available in Advanced mode, so selecting `Custom` in the
+normal view does not look like a broken or empty form.
 
 ## Configuration behavior
 
 This is a presentation-only change. Configuration keys, stored values, defaults,
 profile resolution, hot swapping, and the v2 policy schema remain unchanged.
+Changing the visible option title does not change the value passed to or returned
+by Music Assistant configuration APIs.
 
 Selecting `Custom` while Advanced mode is disabled does not remove existing mode
 values. Previously unset Custom modes continue to resolve as `deny`. Enabling
@@ -44,6 +48,8 @@ Tests will verify that:
 - every default and per-token Custom capability entry has `advanced=True`;
 - every matrix retains the correct `depends_on` and `depends_on_value=Custom`;
 - default and per-token profile selectors remain `advanced=False`;
+- both selectors expose `Custom (Advanced mode required)` as the Custom option
+  title while retaining `Custom` as its value;
 - all 26 capabilities are still emitted for every matrix;
 - policy parsing and stored Custom values are unchanged.
 
