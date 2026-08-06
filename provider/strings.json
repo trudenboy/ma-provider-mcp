@@ -1,5 +1,9 @@
 {
   "config_entries": {
+    "info_label": {
+      "label": "MCP endpoint: {0}\nCreate tokens in Profile → Long-lived access tokens.",
+      "description": "The MCP endpoint and where to manage its Music Assistant access tokens."
+    },
     "open_connect": {
       "label": "Open Connect Wizard",
       "description": "One-click setup for Claude Desktop, Claude Code, Cursor, Windsurf, VSCode, ChatGPT and other MCP clients. Mints a per-client token labelled `MCP — <Client>` (revocable in Profile → Long-lived access tokens) and copies the ready-to-paste snippet for you."
@@ -34,7 +38,35 @@
     },
     "policy_default": {
       "label": "Default policy",
-      "description": "Policy used when a token has no explicit override. Missing v2 configuration defaults to Read-only."
+      "description": "Policy used when a token has no explicit override. Missing v2 configuration defaults to Read-only. Select Custom and enable Advanced mode to edit individual capability modes.",
+      "options": {
+        "Read-only": "Read-only",
+        "Home control": "Home control",
+        "Interactive admin": "Interactive admin",
+        "Trusted": "Trusted",
+        "Custom": "Custom (Advanced mode required)"
+      }
+    },
+    "policy_token": {
+      "label": "{0}",
+      "description": "Select Custom and enable Advanced mode to edit individual capability modes.",
+      "options": {
+        "Inherit": "Inherit",
+        "Read-only": "Read-only",
+        "Home control": "Home control",
+        "Interactive admin": "Interactive admin",
+        "Trusted": "Trusted",
+        "Custom": "Custom (Advanced mode required)"
+      }
+    },
+    "policy_capability": {
+      "label": "{0}",
+      "description": "Permission mode for capability {0}.",
+      "options": {
+        "deny": "Deny",
+        "allow": "Allow",
+        "confirm": "Confirm"
+      }
     },
     "policy_manual_token_ids": {
       "label": "Manual MCP token IDs",

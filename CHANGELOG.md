@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.1] - 2026-08-06
+
+### Changed
+- Custom capability matrices are visible only in Music Assistant Advanced mode,
+  while default and per-token selectors label the profile as
+  `Custom (Advanced mode required)` without changing its stored value.
+- Runtime-generated provider settings now use Music Assistant translation keys for
+  endpoint guidance, per-token policy selectors, capability labels, and policy modes.
+- The provider runtime now uses FastMCP 3.4.6, including patch fixes for JWKS
+  handling, schema stability, and trusted-proxy OAuth metadata fetches.
+
+### Fixed
+- Provider config actions normalize Music Assistant's optional empty result to an
+  empty entry tuple, keeping type compatibility across current MA development APIs.
+
 ## [2.0.0] - 2026-08-05
 
 ### Added

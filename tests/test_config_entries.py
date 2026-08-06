@@ -34,9 +34,10 @@ def test_retained_endpoint_resource_and_prompt_entries(mock_mass: MagicMock) -> 
 
 
 def test_info_label_includes_normalized_endpoint(mock_mass: MagicMock) -> None:
-    """The info label matches runtime mount-path normalization."""
+    """The translated info label receives the normalized endpoint as its only parameter."""
     entries = build_config_entries(mock_mass, "mcp/v1")
-    label = str(entries[0].label)
+    info = entries[0]
 
-    assert f"{mock_mass.webserver.base_url}/mcp/v1" in label
-    assert f"{mock_mass.webserver.base_url}mcp" not in label
+    assert info.key == "info_label"
+    assert info.label is None
+    assert info.translation_params == [f"{mock_mass.webserver.base_url}/mcp/v1"]

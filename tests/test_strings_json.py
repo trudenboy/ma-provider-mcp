@@ -73,10 +73,13 @@ def test_deliteralized_entries_have_strings(mock_mass: MagicMock) -> None:
     for entry in build_config_entries(mock_mass, DEFAULT_MOUNT_PATH):
         if entry.label is not None:
             continue
-        assert entry.key in config_entries, f"missing strings.json entry for {entry.key!r}"
-        text = config_entries[entry.key]
-        assert text.get("label"), f"empty label for {entry.key!r}"
-        assert text.get("description"), f"empty description for {entry.key!r}"
+        translation_key = entry.translation_key or entry.key
+        assert translation_key in config_entries, (
+            f"missing strings.json entry for {translation_key!r}"
+        )
+        text = config_entries[translation_key]
+        assert text.get("label"), f"empty label for {translation_key!r}"
+        assert text.get("description"), f"empty description for {translation_key!r}"
 
 
 def test_strings_expose_only_v2_policy_configuration_contract() -> None:
@@ -84,7 +87,34 @@ def test_strings_expose_only_v2_policy_configuration_contract() -> None:
     data = _load_strings()
     entries = data["config_entries"]
 
-    assert entries.keys() >= {"policy_default", "policy_manual_token_ids"}
+    assert entries.keys() >= {
+        "info_label",
+        "policy_capability",
+        "policy_default",
+        "policy_manual_token_ids",
+        "policy_token",
+    }
+    assert entries["info_label"]["label"].startswith("MCP endpoint: {0}")
+    assert "Advanced mode" in entries["policy_default"]["description"]
+    expected_profile_options = {
+        "Read-only": "Read-only",
+        "Home control": "Home control",
+        "Interactive admin": "Interactive admin",
+        "Trusted": "Trusted",
+        "Custom": "Custom (Advanced mode required)",
+    }
+    assert entries["policy_default"]["options"] == expected_profile_options
+    assert entries["policy_token"]["label"] == "{0}"
+    assert entries["policy_token"]["options"] == {
+        "Inherit": "Inherit",
+        **expected_profile_options,
+    }
+    assert entries["policy_capability"]["label"] == "{0}"
+    assert entries["policy_capability"]["options"] == {
+        "deny": "Deny",
+        "allow": "Allow",
+        "confirm": "Confirm",
+    }
     assert set(entries).isdisjoint(
         {
             "require_confirmation",
