@@ -47,7 +47,7 @@ from provider.policy import PolicyMode, PolicyProfile, policy_snapshot
 _META_NAMES = {"search_tools", "call_tool", "get_tool_schema"}
 
 
-class _TestDynamicAPIAdapter(DynamicAPIAdapter):
+class _TestDynamicAPIAdapter(DynamicAPIAdapter):  # type: ignore[misc, unused-ignore]
     """Adapter with a mutable test-only policy source."""
 
     _test_allowed_capabilities_provider: Callable[[], set[str]]
@@ -639,7 +639,7 @@ def _real_adapter(
     mass.webserver.auth.get_user = AsyncMock(return_value=user)
     mass.webserver.auth.authenticate_with_token = AsyncMock(return_value=user)
     token = AccessToken(token="secret", client_id="u1", scopes=[])
-    adapter = _TestDynamicAPIAdapter(
+    adapter: _TestDynamicAPIAdapter = _TestDynamicAPIAdapter(
         mass,
         auth_required_provider=lambda: True,
         token_provider=lambda: token,
@@ -781,7 +781,7 @@ async def test_catalog_snapshot_has_immutable_constant_time_name_lookup() -> Non
 
     assert snapshot.by_name["ma_api:music/search"] is snapshot.entries[0]
     with pytest.raises(TypeError):
-        snapshot.by_name["ma_api:music/other"] = snapshot.entries[0]  # type: ignore[index]
+        snapshot.by_name["ma_api:music/other"] = snapshot.entries[0]  # type: ignore[index, unused-ignore]
 
 
 async def test_request_catalog_context_uses_one_registry_generation() -> None:
