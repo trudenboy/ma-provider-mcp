@@ -16,7 +16,8 @@ from music_assistant.controllers.webserver.helpers.auth_middleware import (
 )
 
 from ..confirmation_context import capability_was_confirmed
-from ..tags import enabled_tags
+
+# removed global capability fallback
 
 if TYPE_CHECKING:
     from music_assistant_models.auth import User
@@ -60,10 +61,10 @@ def current_user() -> User | None:
 
 
 def authorize_extension(
-    config: ProviderConfig,
+    _config: ProviderConfig,
     *,
     required_scope: str,
-    required_tag: str,
+    required_capability: str,
     policy_provider: Callable[[str | None], PolicySnapshot] | None = None,
     require_auth: bool = True,
     confirmation_command: str | None = None,
@@ -80,20 +81,22 @@ def authorize_extension(
 
         bearer = get_current_token()
         mode = (
-            policy_provider(bearer).mode(required_tag)
+            policy_provider(bearer).mode(required_capability)
             if bearer is not None or not require_auth
             else PolicyMode.DENY
         )
         if mode is PolicyMode.DENY:
-            raise InsufficientPermissions(f"Provider permission {required_tag!r} is disabled")
+            raise InsufficientPermissions(
+                f"Provider permission {required_capability!r} is disabled"
+            )
         if mode is PolicyMode.CONFIRM and (
             confirmation_command is None
-            or not capability_was_confirmed(confirmation_command, required_tag)
+            or not capability_was_confirmed(confirmation_command, required_capability)
         ):
             raise InsufficientPermissions(
-                f"Capability {required_tag!r} requires confirmation; set it to Allow or use an "
+                f"Capability {required_capability!r} requires confirmation; set it to Allow or use an "
                 "elicitation-capable client"
             )
-    elif required_tag not in {str(tag) for tag in enabled_tags(config)}:
-        raise InsufficientPermissions(f"Provider permission {required_tag!r} is disabled")
+    else:
+        raise InsufficientPermissions("A request policy provider is required")
     return user  # type: ignore[no-any-return, unused-ignore]

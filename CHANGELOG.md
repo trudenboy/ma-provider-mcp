@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0] - 2026-08-06
+
+### Added
+- Optional `app_music_assistant` Prefab UI 0.20.2 player/queue App, disabled by
+  default, with renderer-only state/action tools and text fallback.
+- `search_tools(include_top_schema=true)` for one-shot top-result schema discovery.
+- Bounded p50/p95/max health performance samples for discovery and execution.
+- Declarative command/argument target-filter rules for player, queue, and music
+  provider targets, including post-elicitation and impersonated-user enforcement.
+
+### Changed
+- Catalog fingerprints now digest authorization and schema descriptors; immutable
+  snapshots expose O(1) name indexes and request views share one generation.
+- Capability, policy, policy-config, catalog, execution, and serialization layers are
+  separated; policy providers are mandatory and startup is transactional.
+- Tool failures use stable `[code] message` values without arguments, secrets, token
+  identifiers, bearer values, or raw exception text.
+- The Connect Wizard exposes only `default_policy.profile`.
+- FastMCP remains pinned to 3.4.6; docs use Astro 7.1.6, Starlight 0.41.7,
+  Sharp 0.35.3, and Node.js 22.12 or newer.
+
+### Removed
+- Legacy discovery mappings/migrations, retired profiles, global tag-policy fallback,
+  deprecated Connect `base_url`, and historical helper re-exports.
+
 ## [2.0.1] - 2026-08-06
 
 ### Changed

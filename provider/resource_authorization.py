@@ -20,9 +20,9 @@ from .audit import (
     emit_audit_record,
 )
 from .auth import LEGACY_TOKEN_CLIENT_ID, LOOKUP_FAILURE_CLIENT_ID
+from .capabilities import Capability
 from .commands.authorization import normalize_scope
 from .policy import PolicyMode, PolicySnapshot
-from .tags import Tag
 
 if TYPE_CHECKING:
     from fastmcp.server.auth.auth import AccessToken
@@ -31,14 +31,14 @@ if TYPE_CHECKING:
 
 
 _SCOPE_BY_TAG = {
-    str(Tag.QUERY_LIBRARY): Scope.LIBRARY_READ,
-    str(Tag.QUERY_PLAYERS): Scope.PLAYERS_READ,
-    str(Tag.QUERY_QUEUE): Scope.QUEUES_READ,
+    str(Capability.QUERY_LIBRARY): Scope.LIBRARY_READ,
+    str(Capability.QUERY_PLAYERS): Scope.PLAYERS_READ,
+    str(Capability.QUERY_QUEUE): Scope.QUEUES_READ,
 }
 _COMMAND_BY_TAG = {
-    str(Tag.QUERY_LIBRARY): "resource:library",
-    str(Tag.QUERY_PLAYERS): "resource:player",
-    str(Tag.QUERY_QUEUE): "resource:queue",
+    str(Capability.QUERY_LIBRARY): "resource:library",
+    str(Capability.QUERY_PLAYERS): "resource:player",
+    str(Capability.QUERY_QUEUE): "resource:queue",
 }
 
 _current_resource_request: ContextVar[AuthorizedResourceRequest | None] = ContextVar(
@@ -228,7 +228,7 @@ class ResourceAuthorizer:
         normalized = normalize_scope(scope)
         if normalized is None or not self._scope_checker(user, normalized):
             return "Resource is not permitted for the current user"
-        if capability in {str(Tag.QUERY_PLAYERS), str(Tag.QUERY_QUEUE)}:
+        if capability in {str(Capability.QUERY_PLAYERS), str(Capability.QUERY_QUEUE)}:
             target = _resource_target(uri)
             allowed = getattr(user, "player_filter", None)
             if (

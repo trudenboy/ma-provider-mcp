@@ -31,7 +31,8 @@ if TYPE_CHECKING:
 
 LOGGER = logging.getLogger(__name__)
 
-LEGACY_TOKEN_CLIENT_ID = "ma-token:legacy"
+# Bandit B105: this is a non-secret audit category, never credential material.
+LEGACY_TOKEN_CLIENT_ID = "ma-token:legacy"  # nosec B105
 LOOKUP_FAILURE_CLIENT_ID = "ma-token:lookup-failed"
 
 

@@ -1,16 +1,10 @@
-"""Stable capability names and temporary global-policy visibility helpers."""
-
-from __future__ import annotations
+"""Stable authorization capabilities exposed by the provider."""
 
 from enum import StrEnum
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from music_assistant_models.config_entries import ProviderConfig
 
 
-class Tag(StrEnum):
-    """The 26 stable Permissions & Confirmations v2 capabilities."""
+class Capability(StrEnum):
+    """The 26 immutable Permissions & Confirmations v2 capabilities."""
 
     QUERY_LIBRARY = "query:library"
     QUERY_QUEUE = "query:queue"
@@ -36,14 +30,6 @@ class Tag(StrEnum):
     CONFIG_WRITE_PROVIDER = "config:write:provider"
     CONFIG_WRITE_CORE = "config:write:core"
     CONFIG_WRITE_PLAYER = "config:write:player"
-    CONFIG_WRITE_SECRET = "config:write:secret"
+    # Bandit B105: this fixed authorization capability is not a secret value.
+    CONFIG_WRITE_SECRET = "config:write:secret"  # nosec B105
     SYSTEM_ADMIN = "system:admin"
-
-
-def enabled_tags(config: ProviderConfig) -> set[Tag]:
-    """Return capabilities visible under the current global v2 policy."""
-    from .config import build_policy_resolver  # noqa: PLC0415
-    from .policy import PolicyMode  # noqa: PLC0415
-
-    snapshot = build_policy_resolver(config).resolve(None)
-    return {capability for capability in Tag if snapshot.mode(capability) is not PolicyMode.DENY}

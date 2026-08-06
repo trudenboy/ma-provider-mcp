@@ -22,26 +22,26 @@ def _entries() -> dict[str, ConfigEntry]:
 
 
 def test_nonsecret_key_passes_without_secret_tag() -> None:
-    """Non-secret keys pass the gate without secret tag enabled."""
-    gate_secret_writes(_entries(), {"log_level": "DEBUG"}, secret_tag_enabled=False)
+    """Non-secret keys pass the gate without secret capability enabled."""
+    gate_secret_writes(_entries(), {"log_level": "DEBUG"}, secret_capability_enabled=False)
 
 
 def test_secret_key_blocked_without_secret_tag() -> None:
-    """Secret keys are blocked without secret tag enabled."""
+    """Secret keys are blocked without secret capability enabled."""
     with pytest.raises(ToolError, match="config:write:secret"):
-        gate_secret_writes(_entries(), {"token": "abc"}, secret_tag_enabled=False)
+        gate_secret_writes(_entries(), {"token": "abc"}, secret_capability_enabled=False)
 
 
 def test_secret_key_allowed_with_secret_tag() -> None:
-    """Secret keys are allowed when secret tag is enabled."""
-    gate_secret_writes(_entries(), {"token": "abc"}, secret_tag_enabled=True)
+    """Secret keys are allowed when secret capability is enabled."""
+    gate_secret_writes(_entries(), {"token": "abc"}, secret_capability_enabled=True)
 
 
 def test_mixed_payload_blocked_atomically_names_secret_key() -> None:
     """Mixed payload is blocked atomically, naming the secret key."""
     with pytest.raises(ToolError, match="token"):
         gate_secret_writes(
-            _entries(), {"log_level": "DEBUG", "token": "abc"}, secret_tag_enabled=False
+            _entries(), {"log_level": "DEBUG", "token": "abc"}, secret_capability_enabled=False
         )
 
 

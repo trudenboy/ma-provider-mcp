@@ -10,16 +10,10 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from music_assistant_models.config_entries import ProviderConfig
 from music_assistant_models.enums import ProviderType
+from music_assistant_models.errors import AuthenticationRequired
 
-from provider.config import (
-    build_config_entries,
-    build_policy_resolver,
-    current_user_mcp_tokens,
-    policy_event_buffer_enabled,
-    policy_mode_key,
-    policy_token_suffix,
-    token_policy_key,
-)
+from provider.capabilities import Capability
+from provider.config import build_config_entries
 from provider.constants import (
     CONF_DEFAULT_POLICY,
     CONF_MANUAL_TOKEN_IDS,
@@ -27,7 +21,14 @@ from provider.constants import (
     DEFAULT_MOUNT_PATH,
 )
 from provider.policy import PolicyMode, PolicyProfile
-from provider.tags import Tag
+from provider.policy_config import (
+    build_policy_resolver,
+    current_user_mcp_tokens,
+    policy_event_buffer_enabled,
+    policy_mode_key,
+    policy_token_suffix,
+    token_policy_key,
+)
 
 
 def _config(values: Mapping[str, object]) -> MagicMock:
@@ -43,7 +44,7 @@ def test_missing_and_malformed_v2_defaults_fail_closed() -> None:
 
     assert missing.resolve(None).profile is PolicyProfile.READ_ONLY
     assert malformed.resolve(None).profile is PolicyProfile.READ_ONLY
-    assert malformed.resolve(None).mode(Tag.CONFIG_WRITE_CORE) is PolicyMode.DENY
+    assert malformed.resolve(None).mode(Capability.CONFIG_WRITE_CORE) is PolicyMode.DENY
 
 
 def test_default_named_and_custom_policy_parsing() -> None:
@@ -53,18 +54,18 @@ def test_default_named_and_custom_policy_parsing() -> None:
         _config(
             {
                 CONF_DEFAULT_POLICY: "Custom",
-                policy_mode_key(Tag.QUERY_LIBRARY): "allow",
-                policy_mode_key(Tag.DEBUG_EVENTS): "confirm",
-                policy_mode_key(Tag.CONFIG_WRITE_CORE): "not-a-mode",
+                policy_mode_key(Capability.QUERY_LIBRARY): "allow",
+                policy_mode_key(Capability.DEBUG_EVENTS): "confirm",
+                policy_mode_key(Capability.CONFIG_WRITE_CORE): "not-a-mode",
             }
         )
     )
 
     assert named.resolve(None).profile is PolicyProfile.HOME_CONTROL
-    assert custom.resolve(None).mode(Tag.QUERY_LIBRARY) is PolicyMode.ALLOW
-    assert custom.resolve(None).mode(Tag.DEBUG_EVENTS) is PolicyMode.CONFIRM
-    assert custom.resolve(None).mode(Tag.CONFIG_WRITE_CORE) is PolicyMode.DENY
-    assert custom.resolve(None).mode(Tag.CONTROL_PLAYBACK) is PolicyMode.DENY
+    assert custom.resolve(None).mode(Capability.QUERY_LIBRARY) is PolicyMode.ALLOW
+    assert custom.resolve(None).mode(Capability.DEBUG_EVENTS) is PolicyMode.CONFIRM
+    assert custom.resolve(None).mode(Capability.CONFIG_WRITE_CORE) is PolicyMode.DENY
+    assert custom.resolve(None).mode(Capability.CONTROL_PLAYBACK) is PolicyMode.DENY
 
 
 def test_override_manual_unknown_and_replacement_resolution() -> None:
@@ -78,7 +79,7 @@ def test_override_manual_unknown_and_replacement_resolution() -> None:
         token_policy_key(revoked_id): "Trusted",
         token_policy_key(replacement_id): "Inherit",
         token_policy_key(manual_id): "Custom",
-        policy_mode_key(Tag.CONTROL_PLAYBACK, manual_id): "allow",
+        policy_mode_key(Capability.CONTROL_PLAYBACK, manual_id): "allow",
     }
     resolver = build_policy_resolver(_config(values), active_token_ids={replacement_id})
 
@@ -86,7 +87,7 @@ def test_override_manual_unknown_and_replacement_resolution() -> None:
     assert resolver.resolve(replacement_id).profile is PolicyProfile.READ_ONLY
     assert resolver.resolve("unknown-id").profile is PolicyProfile.READ_ONLY
     assert resolver.resolve(manual_id).profile is PolicyProfile.CUSTOM
-    assert resolver.resolve(manual_id).mode(Tag.CONTROL_PLAYBACK) is PolicyMode.ALLOW
+    assert resolver.resolve(manual_id).mode(Capability.CONTROL_PLAYBACK) is PolicyMode.ALLOW
 
 
 def test_malformed_token_profile_fails_closed() -> None:
@@ -103,7 +104,7 @@ def test_malformed_token_profile_fails_closed() -> None:
     )
 
     assert resolver.resolve(token_id).profile is PolicyProfile.READ_ONLY
-    assert resolver.resolve(token_id).mode(Tag.SYSTEM_ADMIN) is PolicyMode.DENY
+    assert resolver.resolve(token_id).mode(Capability.SYSTEM_ADMIN) is PolicyMode.DENY
 
 
 @pytest.mark.asyncio
@@ -126,13 +127,27 @@ async def test_current_user_discovery_uses_ma_apis_and_exact_prefix(mock_mass: M
     mock_mass.webserver.auth.get_user_tokens.assert_awaited_once_with()
 
 
+@pytest.mark.asyncio
+async def test_current_user_discovery_treats_startup_without_identity_as_empty(
+    mock_mass: MagicMock,
+) -> None:
+    """MA may request config entries during startup without an authenticated user."""
+    mock_mass.webserver.auth.get_current_user_info = AsyncMock(
+        side_effect=AuthenticationRequired("Not authenticated")
+    )
+    mock_mass.webserver.auth.get_user_tokens = AsyncMock()
+
+    assert await current_user_mcp_tokens(mock_mass) == ()
+    mock_mass.webserver.auth.get_user_tokens.assert_not_awaited()
+
+
 def test_dynamic_entries_have_conditional_matrices_and_hashed_token_keys(
     mock_mass: MagicMock,
 ) -> None:
     """Each selector controls exactly one 26-capability Custom matrix."""
     raw_id = "token-id-must-not-appear"
     selector_key = token_policy_key(raw_id)
-    debug_key = policy_mode_key(Tag.DEBUG_EVENTS, raw_id)
+    debug_key = policy_mode_key(Capability.DEBUG_EVENTS, raw_id)
     stored_values = {
         CONF_POLICY_TOKEN_SUFFIXES: [policy_token_suffix(raw_id)],
         selector_key: "Custom",
@@ -191,11 +206,11 @@ def test_dynamic_entries_have_conditional_matrices_and_hashed_token_keys(
         for entry in entries
         if entry.depends_on == selector_key and entry.depends_on_value == "Custom"
     ]
-    assert len(default_matrix) == len(Tag) == 26
-    assert len(token_matrix) == len(Tag) == 26
+    assert len(default_matrix) == len(Capability) == 26
+    assert len(token_matrix) == len(Capability) == 26
     assert all(entry.advanced is True for entry in default_matrix)
     assert all(entry.advanced is True for entry in token_matrix)
-    for capability in Tag:
+    for capability in Capability:
         for entry in (
             by_key[policy_mode_key(capability)],
             by_key[policy_mode_key(capability, raw_id)],
@@ -239,7 +254,7 @@ def test_actual_provider_config_roundtrip_preserves_exact_cold_token_policies(
         CONF_POLICY_TOKEN_SUFFIXES: [readonly_suffix, debug_suffix],
         token_policy_key(readonly_id): "Read-only",
         token_policy_key(debug_id): "Custom",
-        policy_mode_key(Tag.DEBUG_EVENTS, debug_id): "allow",
+        policy_mode_key(Capability.DEBUG_EVENTS, debug_id): "allow",
     }
     raw = {
         "values": raw_values,

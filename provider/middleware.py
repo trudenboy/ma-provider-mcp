@@ -1,29 +1,8 @@
-"""
-Tag-filter middleware: hide tools / resources / prompts whose tags are disabled.
-
-FastMCP v3's built-in ``restrict_tag`` is scope-based authorization (token must
-carry a specific OAuth scope). What we need here is **config-driven visibility**:
-the operator toggles a permission boolean and the corresponding tools simply
-disappear from listings — no error path, no permission-denied trace.
-
-This middleware reads ``allowed_tags`` from a closure (so we can swap the set in
-place when ``MCPServerProvider.update_config`` runs without rebuilding the
-FastMCP server), and applies the rule:
-
-* a component with **at least one** allowed tag is exposed
-* a component with **no** tags is exposed (treat as always-on infrastructure)
-* a component whose tags are **all** disabled is hidden / blocked
-
-Listings are filtered post-hoc; direct invocations (``tools/call``,
-``resources/read``, ``prompts/get``) look the component up by name/URI and
-apply the same rule. A client that cached a tool name from an earlier
-permission set therefore cannot reach a now-disabled tool.
-"""
+"""Request-policy visibility middleware for FastMCP components."""
 
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Sequence
-from collections.abc import Set as AbstractSet
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
 from fastmcp.exceptions import NotFoundError, PromptError, ResourceError, ToolError
@@ -40,27 +19,9 @@ ComponentKind = Literal["tool", "resource", "prompt"]
 TagsLookup = Callable[[ComponentKind, str], Awaitable[set[str] | None]]
 
 
-def tags_visible(tags: AbstractSet[str] | None, allowed: AbstractSet[str]) -> bool:
-    """
-    Apply the shared visibility rule for a component's tag set.
-
-    ``None`` means the component is unknown (blocked); an empty set means
-    untagged always-on infrastructure; otherwise at least one tag must be
-    allowed.
-
-    :param tags: The component's tag set, or ``None`` when it does not exist.
-    :param allowed: The currently allowed tag set.
-    """
-    if tags is None:
-        return False
-    if not tags:
-        return True
-    return any(str(t) in allowed for t in tags)
-
-
 class TagFilterMiddleware(Middleware):  # type: ignore[misc, unused-ignore]
     """
-    Hide tools, resources, and prompts whose tags are not in ``allowed_tags``.
+    Filter FastMCP component tags through the current request policy snapshot.
 
     ``Middleware`` is typed as ``Any`` upstream; under
     ``disallow_subclassing_any`` we suppress the misc-rule on the class
@@ -69,17 +30,14 @@ class TagFilterMiddleware(Middleware):  # type: ignore[misc, unused-ignore]
 
     def __init__(
         self,
-        allowed_tags_provider: Callable[[], set[str]],
         lookup_component_tags: TagsLookup,
-        policy_provider: Callable[[], PolicySnapshot] | None = None,
+        policy_provider: Callable[[], PolicySnapshot],
         resource_authorizer: ResourceAuthorizer | None = None,
+        prompts_enabled_provider: Callable[[], bool] | None = None,
     ) -> None:
         """
         Initialise the middleware.
 
-        :param allowed_tags_provider: zero-arg callable returning the *current*
-            set of allowed tags. Wrapped in a callable so the operator can
-            change permission flags without restarting the runtime.
         :param lookup_component_tags: async ``(kind, key) -> set[str] | None``
             that resolves a tool name / resource URI / prompt name back to its
             tag set. Returns ``None`` when the component does not exist (treat
@@ -87,10 +45,10 @@ class TagFilterMiddleware(Middleware):  # type: ignore[misc, unused-ignore]
             not slip through).
         """
         super().__init__()
-        self._allowed = allowed_tags_provider
         self._lookup = lookup_component_tags
         self._policy = policy_provider
         self._resource_authorizer = resource_authorizer
+        self._prompts_enabled = prompts_enabled_provider or (lambda: True)
 
     # ── filtered listings ────────────────────────────────────────────────────
 
@@ -195,28 +153,25 @@ class TagFilterMiddleware(Middleware):  # type: ignore[misc, unused-ignore]
 
     def _is_visible(self, kind: ComponentKind, component: Any) -> bool:
         tags = {str(t) for t in (getattr(component, "tags", None) or set())}
-        if kind == "resource" and tags and self._policy is not None:
-            from .policy import PolicyMode  # noqa: PLC0415
+        if kind == "prompt":
+            return self._prompts_enabled()
+        if not tags:
+            return True
+        from .policy import PolicyMode  # noqa: PLC0415
 
-            policy = self._policy()
+        policy = self._policy()
+        if kind == "resource":
             return any(policy.mode(tag) is PolicyMode.ALLOW for tag in tags)
-        return tags_visible(tags, self._allowed())
+        return any(policy.mode(tag) is not PolicyMode.DENY for tag in tags)
 
     async def _resource_is_visible(self, component: Any) -> bool:
         tags = {str(t) for t in (getattr(component, "tags", None) or set())}
         if not tags:
             return True
-        if self._resource_authorizer is not None:
-            key = str(
-                getattr(component, "uriTemplate", None)
-                or getattr(component, "uri_template", None)
-                or getattr(component, "uri", "")
-            )
-            return (
-                await self._resource_authorizer.authorize(key, tags, audit_denial=False) is not None
-            )
-        if not tags_visible(tags, self._allowed()):
-            return False
+        # Listings are filtered only by the request policy snapshot.  Full
+        # identity, scope and target authorization belongs to the actual read
+        # path; doing it here makes an unauthenticated list request hide every
+        # otherwise-visible resource and performs unnecessary MA lookups.
         return self._is_visible("resource", component)
 
     async def _reject_if_hidden(self, kind: ComponentKind, key: str) -> set[str]:
@@ -229,20 +184,21 @@ class TagFilterMiddleware(Middleware):  # type: ignore[misc, unused-ignore]
             # "method-not-allowed" / "not-found" path rather than 500.
             msg = f"{kind.capitalize()} {key!r} not found"
             raise NotFoundError(msg)
-        if (
-            kind == "resource"
-            and tags
-            and self._policy is not None
-            and self._resource_authorizer is None
-        ):
+        if kind == "prompt":
+            if not self._prompts_enabled():
+                raise PromptError(f"Prompt {key!r} is currently disabled by configuration")
+            return tags
+        if tags:
             from .policy import PolicyMode  # noqa: PLC0415
 
-            policy = self._policy()
-            if not any(policy.mode(tag) is PolicyMode.ALLOW for tag in tags):
-                msg = f"{kind.capitalize()} {key!r} is not allowed by request policy"
-                raise self._ERROR_BY_KIND[kind](msg)
-            return tags
-        if not tags_visible(tags, self._allowed()):
-            msg = f"{kind.capitalize()} {key!r} is currently disabled by configuration"
+            modes = [self._policy().mode(tag) for tag in tags]
+            visible = (
+                any(mode is PolicyMode.ALLOW for mode in modes)
+                if kind == "resource"
+                else any(mode is not PolicyMode.DENY for mode in modes)
+            )
+            if visible:
+                return tags
+            msg = f"{kind.capitalize()} {key!r} is not allowed by request policy"
             raise self._ERROR_BY_KIND[kind](msg)
         return tags

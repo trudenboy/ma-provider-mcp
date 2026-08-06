@@ -146,15 +146,13 @@ HTML: str = """<!doctype html>
   </section>
 
   <section class="panel">
-    <strong>Active permissions</strong>
+    <strong>Default policy</strong>
     <div id="perms" class="perm-list" style="margin-top:8px"></div>
     <details>
       <summary>What if my AI says "permission denied"?</summary>
       <div class="hint" style="margin-top:6px">
-        Read-only tools are enabled by default. To let the AI control playback,
-        manage queues, or edit playlists, enable the matching toggles in this
-        plugin's settings (Control / Edit / Delete categories) — changes apply
-        without a restart.
+        Change the default profile in this plugin's settings. Token-specific
+        overrides remain private to the settings screen and are not shown here.
       </div>
     </details>
   </section>
@@ -227,20 +225,10 @@ HTML: str = """<!doctype html>
   function renderPerms() {
     const container = $("perms");
     container.innerHTML = "";
-    const perms = state.info.permissions || [];
-    if (perms.length === 0) {
-      const el = document.createElement("span");
-      el.className = "small";
-      el.textContent = "No permissions enabled.";
-      container.appendChild(el);
-      return;
-    }
-    perms.forEach((p) => {
-      const el = document.createElement("span");
-      el.className = "perm-pill on";
-      el.textContent = p;
-      container.appendChild(el);
-    });
+    const el = document.createElement("span");
+    el.className = "perm-pill on";
+    el.textContent = state.info.default_policy?.profile || "Read-only";
+    container.appendChild(el);
   }
 
   function findClient(id) {

@@ -14,6 +14,7 @@ from music_assistant_models.config_entries import ConfigEntry
 from music_assistant_models.enums import ConfigEntryType
 
 import music_assistant
+from provider.capabilities import Capability
 from provider.command_policy import (
     CommandDecision,
     preflight_command,
@@ -21,7 +22,6 @@ from provider.command_policy import (
 )
 from provider.command_profiles import COMMAND_PROFILES, CommandProfile
 from provider.policy import PolicyMode, PolicyProfile, policy_snapshot
-from provider.tags import Tag
 
 
 def _current_ma_provider_entries_autospec() -> Any:
@@ -59,7 +59,7 @@ def _current_ma_provider_entries_autospec() -> Any:
 def test_direct_queue_deletes_require_only_the_delete_capability(command: str) -> None:
     """Queue deletion classification has no independent risk or confirmation gate."""
     decision = resolve_command_policy(command, "queues.control", profile=None)
-    assert decision.required_capabilities == frozenset({str(Tag.DELETE_QUEUE)})
+    assert decision.required_capabilities == frozenset({str(Capability.DELETE_QUEUE)})
     assert decision.annotations == {
         "readOnlyHint": False,
         "destructiveHint": True,
@@ -71,7 +71,7 @@ def test_direct_queue_deletes_require_only_the_delete_capability(command: str) -
 def test_system_health_keeps_annotations_separate_from_capability() -> None:
     """Read-only behavior hints do not weaken a debug capability requirement."""
     decision = resolve_command_policy("fastmcp/debug/health", "system.read", profile=None)
-    assert decision.required_capabilities == frozenset({str(Tag.DEBUG_PROVIDERS)})
+    assert decision.required_capabilities == frozenset({str(Capability.DEBUG_PROVIDERS)})
     assert decision.annotations["readOnlyHint"] is True
     assert decision.annotations["destructiveHint"] is False
     assert decision.annotations["idempotentHint"] is True
@@ -116,14 +116,14 @@ def test_exact_policy_precedes_profile_and_family_policy() -> None:
         annotations={"destructiveHint": False},
     )
     decision = resolve_command_policy("player_queues/clear", "queues.control", profile)
-    assert decision.required_capabilities == frozenset({str(Tag.DELETE_QUEUE)})
+    assert decision.required_capabilities == frozenset({str(Capability.DELETE_QUEUE)})
     assert decision.annotations["destructiveHint"] is True
 
 
 def test_safe_queue_extension_keeps_destructive_annotation_and_capability() -> None:
     """The safe-removal extension is controlled only by delete:queue mode."""
     decision = resolve_command_policy("fastmcp/queue/remove_items_safe", "queues.control", None)
-    assert decision.required_capabilities == frozenset({str(Tag.DELETE_QUEUE)})
+    assert decision.required_capabilities == frozenset({str(Capability.DELETE_QUEUE)})
     assert decision.annotations["destructiveHint"] is True
 
 
@@ -131,25 +131,27 @@ def test_player_queue_write_operations_require_edit_queue_permission() -> None:
     """Saving a queue is an edit, not an untagged write-scope escape hatch."""
     decision = resolve_command_policy("player_queues/save_as_playlist", "library.write", None)
 
-    assert decision.required_capabilities == frozenset({str(Tag.EDIT_QUEUE)})
+    assert decision.required_capabilities == frozenset({str(Capability.EDIT_QUEUE)})
 
 
 def test_required_and_alternative_capabilities_have_distinct_mode_semantics() -> None:
     """Required capabilities combine while an any-of path picks its least restrictive mode."""
     decision = CommandDecision(
         annotations={},
-        required_capabilities=frozenset({str(Tag.QUERY_LIBRARY), str(Tag.CONFIG_READ)}),
+        required_capabilities=frozenset(
+            {str(Capability.QUERY_LIBRARY), str(Capability.CONFIG_READ)}
+        ),
         alternative_capabilities=frozenset(
-            {str(Tag.CONFIG_WRITE_PROVIDER), str(Tag.CONFIG_WRITE_PLAYER)}
+            {str(Capability.CONFIG_WRITE_PROVIDER), str(Capability.CONFIG_WRITE_PLAYER)}
         ),
     )
     snapshot = policy_snapshot(
         PolicyProfile.CUSTOM,
         {
-            Tag.QUERY_LIBRARY: PolicyMode.ALLOW,
-            Tag.CONFIG_READ: PolicyMode.CONFIRM,
-            Tag.CONFIG_WRITE_PROVIDER: PolicyMode.DENY,
-            Tag.CONFIG_WRITE_PLAYER: PolicyMode.ALLOW,
+            Capability.QUERY_LIBRARY: PolicyMode.ALLOW,
+            Capability.CONFIG_READ: PolicyMode.CONFIRM,
+            Capability.CONFIG_WRITE_PROVIDER: PolicyMode.DENY,
+            Capability.CONFIG_WRITE_PLAYER: PolicyMode.ALLOW,
         },
     )
     assert decision.effective_mode(snapshot) is PolicyMode.CONFIRM
@@ -159,7 +161,7 @@ def test_provider_reload_uses_config_mode_without_mandatory_confirmation() -> No
     """Native provider reload has no classifier-owned confirmation behavior."""
     decision = resolve_command_policy("config/providers/reload", "config.providers.write", None)
 
-    assert decision.required_capabilities == frozenset({str(Tag.CONFIG_WRITE_PROVIDER)})
+    assert decision.required_capabilities == frozenset({str(Capability.CONFIG_WRITE_PROVIDER)})
     assert decision.annotations == {
         "readOnlyHint": False,
         "destructiveHint": True,
@@ -188,7 +190,7 @@ def test_nonregistration_dashboard_commands_require_system_admin() -> None:
     """Dashboard operations outside registration remain system-admin classified."""
     decision = resolve_command_policy("dashboard/show", "users.invite", None)
     assert decision.hard_denied is False
-    assert decision.required_capabilities == frozenset({str(Tag.SYSTEM_ADMIN)})
+    assert decision.required_capabilities == frozenset({str(Capability.SYSTEM_ADMIN)})
 
 
 @pytest.mark.parametrize("command", ["audio_analysis/coverage", "logging/get", "tasks/list"])
@@ -196,31 +198,31 @@ def test_system_command_families_require_system_admin(command: str) -> None:
     """System commands are decided solely by the system:admin capability mode."""
     decision = resolve_command_policy(command, "system.read", None)
     assert decision.hard_denied is False
-    assert decision.required_capabilities == frozenset({str(Tag.SYSTEM_ADMIN)})
+    assert decision.required_capabilities == frozenset({str(Capability.SYSTEM_ADMIN)})
 
 
 @pytest.mark.parametrize(
     ("command", "scope", "capability"),
     [
-        ("players/cmd/play", "players.control", Tag.CONTROL_PLAYBACK),
-        ("players/cmd/pause", "players.control", Tag.CONTROL_PLAYBACK),
-        ("players/cmd/stop", "players.control", Tag.CONTROL_PLAYBACK),
-        ("players/cmd/seek", "players.control", Tag.CONTROL_PLAYBACK),
-        ("player_queues/skip", "queues.control", Tag.CONTROL_PLAYBACK),
-        ("player_queues/play_media", "queues.control", Tag.CONTROL_PLAYBACK),
-        ("player_queues/play_index", "queues.control", Tag.CONTROL_PLAYBACK),
-        ("players/cmd/play_announcement", "players.control", Tag.CONTROL_MEDIA),
-        ("music/mark_played", "library.write", Tag.CONTROL_MEDIA),
-        ("music/mark_unplayed", "library.write", Tag.CONTROL_MEDIA),
-        ("players/cmd/volume_set", "players.control", Tag.CONTROL_VOLUME),
-        ("players/cmd/group_volume", "players.control", Tag.CONTROL_VOLUME),
-        ("players/cmd/group_volume_mute", "players.control", Tag.CONTROL_VOLUME),
+        ("players/cmd/play", "players.control", Capability.CONTROL_PLAYBACK),
+        ("players/cmd/pause", "players.control", Capability.CONTROL_PLAYBACK),
+        ("players/cmd/stop", "players.control", Capability.CONTROL_PLAYBACK),
+        ("players/cmd/seek", "players.control", Capability.CONTROL_PLAYBACK),
+        ("player_queues/skip", "queues.control", Capability.CONTROL_PLAYBACK),
+        ("player_queues/play_media", "queues.control", Capability.CONTROL_PLAYBACK),
+        ("player_queues/play_index", "queues.control", Capability.CONTROL_PLAYBACK),
+        ("players/cmd/play_announcement", "players.control", Capability.CONTROL_MEDIA),
+        ("music/mark_played", "library.write", Capability.CONTROL_MEDIA),
+        ("music/mark_unplayed", "library.write", Capability.CONTROL_MEDIA),
+        ("players/cmd/volume_set", "players.control", Capability.CONTROL_VOLUME),
+        ("players/cmd/group_volume", "players.control", Capability.CONTROL_VOLUME),
+        ("players/cmd/group_volume_mute", "players.control", Capability.CONTROL_VOLUME),
     ],
 )
 def test_fine_grained_control_commands_use_their_named_capability(
     command: str,
     scope: str,
-    capability: Tag,
+    capability: Capability,
 ) -> None:
     """Playback, media, and volume controls cannot bypass their Custom-policy mode."""
     decision = resolve_command_policy(command, scope, COMMAND_PROFILES.get(command))
@@ -228,26 +230,26 @@ def test_fine_grained_control_commands_use_their_named_capability(
 
 
 @pytest.mark.parametrize(
-    ("command", "scope", "tag"),
+    ("command", "scope", "capability"),
     [
-        ("music/search", "library.read", Tag.QUERY_LIBRARY),
-        ("music/playlists/create_playlist", "library.write", Tag.EDIT_PLAYLISTS),
+        ("music/search", "library.read", Capability.QUERY_LIBRARY),
+        ("music/playlists/create_playlist", "library.write", Capability.EDIT_PLAYLISTS),
         (
             "music/playlists/remove_playlist_tracks",
             "library.write",
-            Tag.DELETE_PLAYLISTS,
+            Capability.DELETE_PLAYLISTS,
         ),
-        ("players/cmd/volume_set", "players.control", Tag.CONTROL_VOLUME),
-        ("player_queues/items", "queues.read", Tag.QUERY_QUEUE),
-        ("config/core/save", "config.core.write", Tag.CONFIG_WRITE_CORE),
+        ("players/cmd/volume_set", "players.control", Capability.CONTROL_VOLUME),
+        ("player_queues/items", "queues.read", Capability.QUERY_QUEUE),
+        ("config/core/save", "config.core.write", Capability.CONFIG_WRITE_CORE),
     ],
 )
 def test_longest_family_policy_assigns_required_capability(
-    command: str, scope: str, tag: Tag
+    command: str, scope: str, capability: Capability
 ) -> None:
     """Family policy selects the narrow stable capability for each operation."""
     decision = resolve_command_policy(command, scope, None)
-    assert decision.required_capabilities == frozenset({str(tag)})
+    assert decision.required_capabilities == frozenset({str(capability)})
 
 
 def test_config_preflight_metadata_represents_alternatives_and_secret_escalation() -> None:
@@ -255,10 +257,10 @@ def test_config_preflight_metadata_represents_alternatives_and_secret_escalation
     flow = resolve_command_policy("config/flows/submit", None, None)
     save = resolve_command_policy("config/providers/save", "config.providers.write", None)
     assert flow.alternative_capabilities == frozenset(
-        {str(Tag.CONFIG_WRITE_PROVIDER), str(Tag.CONFIG_WRITE_PLAYER)}
+        {str(Capability.CONFIG_WRITE_PROVIDER), str(Capability.CONFIG_WRITE_PLAYER)}
     )
-    assert flow.secret_capability == str(Tag.CONFIG_WRITE_SECRET)
-    assert save.secret_capability == str(Tag.CONFIG_WRITE_SECRET)
+    assert flow.secret_capability == str(Capability.CONFIG_WRITE_SECRET)
+    assert save.secret_capability == str(Capability.CONFIG_WRITE_SECRET)
 
 
 def _config_mass() -> SimpleNamespace:
@@ -295,13 +297,8 @@ async def test_secure_config_preflight_requires_independent_secret_tag() -> None
         "instance_id": "demo--1",
         "values": {"token": "secret"},
     }
-    preflight = await preflight_command(
-        mass,
-        decision,
-        arguments,
-        {str(Tag.CONFIG_WRITE_PROVIDER)},
-    )
-    assert preflight.additional_required == frozenset({str(Tag.CONFIG_WRITE_SECRET)})
+    preflight = await preflight_command(mass, decision, arguments)
+    assert preflight.additional_required == frozenset({str(Capability.CONFIG_WRITE_SECRET)})
 
 
 async def test_nonsecret_config_preflight_needs_no_secret_tag() -> None:
@@ -316,7 +313,6 @@ async def test_nonsecret_config_preflight_needs_no_secret_tag() -> None:
             "instance_id": "demo--1",
             "values": {"name": "Kitchen"},
         },
-        {str(Tag.CONFIG_WRITE_PROVIDER)},
     )
 
 
@@ -330,10 +326,7 @@ async def test_provider_secure_config_read_uses_current_ma_entries_signature() -
     decision = resolve_command_policy("config/providers/get_value", "config.read", None)
 
     preflight = await preflight_command(
-        SimpleNamespace(config=config),
-        decision,
-        {"instance_id": "demo--1", "key": "token"},
-        {str(Tag.CONFIG_READ)},
+        SimpleNamespace(config=config), decision, {"instance_id": "demo--1", "key": "token"}
     )
 
     assert preflight.secure_config_value is True
@@ -371,12 +364,7 @@ async def test_secure_config_value_reads_retain_secure_preflight_state(
     )
     decision = resolve_command_policy(command, "config.read", None)
 
-    preflight = await preflight_command(
-        SimpleNamespace(config=config),
-        decision,
-        arguments,
-        {str(Tag.CONFIG_READ)},
-    )
+    preflight = await preflight_command(SimpleNamespace(config=config), decision, arguments)
 
     assert preflight.secure_config_value is True
     getter = getattr(config, getter_name)
@@ -393,10 +381,7 @@ async def test_nonsecure_config_value_read_retains_nonsecure_preflight_state() -
     decision = resolve_command_policy("config/core/get_value", "config.core.read", None)
 
     preflight = await preflight_command(
-        SimpleNamespace(config=config),
-        decision,
-        {"domain": "webserver", "key": "name"},
-        {str(Tag.CONFIG_READ)},
+        SimpleNamespace(config=config), decision, {"domain": "webserver", "key": "name"}
     )
 
     assert preflight.secure_config_value is False
@@ -413,10 +398,7 @@ async def test_runtime_string_secure_type_is_classified_secure() -> None:
     decision = resolve_command_policy("config/core/get_value", "config.core.read", None)
 
     preflight = await preflight_command(
-        SimpleNamespace(config=config),
-        decision,
-        {"domain": "webserver", "key": "token"},
-        {str(Tag.CONFIG_READ)},
+        SimpleNamespace(config=config), decision, {"domain": "webserver", "key": "token"}
     )
 
     assert preflight.secure_config_value is True
@@ -434,10 +416,7 @@ async def test_unknown_runtime_config_type_fails_closed() -> None:
 
     with pytest.raises(ToolError, match="Unable to classify config value"):
         await preflight_command(
-            SimpleNamespace(config=config),
-            decision,
-            {"domain": "webserver", "key": "token"},
-            {str(Tag.CONFIG_READ)},
+            SimpleNamespace(config=config), decision, {"domain": "webserver", "key": "token"}
         )
 
 
@@ -451,7 +430,6 @@ async def test_unknown_config_value_key_fails_closed() -> None:
             SimpleNamespace(config=config),
             decision,
             {"domain": "webserver", "key": "future-secret"},
-            {str(Tag.CONFIG_READ)},
         )
 
 
@@ -464,10 +442,7 @@ async def test_config_value_schema_failure_fails_closed() -> None:
 
     with pytest.raises(ToolError, match="Unable to classify config value"):
         await preflight_command(
-            SimpleNamespace(config=config),
-            decision,
-            {"player_id": "missing", "key": "token"},
-            {str(Tag.CONFIG_READ)},
+            SimpleNamespace(config=config), decision, {"player_id": "missing", "key": "token"}
         )
 
 
@@ -483,12 +458,11 @@ async def test_secret_config_preflight_accepts_explicit_secret_tag() -> None:
             "instance_id": "demo--1",
             "values": {"token": "secret"},
         },
-        {str(Tag.CONFIG_WRITE_PROVIDER), str(Tag.CONFIG_WRITE_SECRET)},
     )
 
 
 async def test_provider_setup_flow_secret_requires_secret_tag() -> None:
-    """A provider flow cannot submit a secure value without the orthogonal tag."""
+    """A provider flow cannot submit a secure value without the orthogonal capability."""
     mass = _flow_mass(
         "config.providers.write",
         [ConfigEntry(key="token", type=ConfigEntryType.SECURE_STRING, label="Token")],
@@ -496,13 +470,10 @@ async def test_provider_setup_flow_secret_requires_secret_tag() -> None:
     decision = resolve_command_policy("config/flows/submit", None, None)
 
     preflight = await preflight_command(
-        mass,
-        decision,
-        {"flow_id": "provider-flow", "values": {"token": "secret"}},
-        {str(Tag.CONFIG_WRITE_PROVIDER)},
+        mass, decision, {"flow_id": "provider-flow", "values": {"token": "secret"}}
     )
     assert preflight.additional_required == frozenset(
-        {str(Tag.CONFIG_WRITE_PROVIDER), str(Tag.CONFIG_WRITE_SECRET)}
+        {str(Capability.CONFIG_WRITE_PROVIDER), str(Capability.CONFIG_WRITE_SECRET)}
     )
 
 
@@ -515,15 +486,12 @@ async def test_provider_setup_flow_secret_accepts_provider_and_secret_tags() -> 
     decision = resolve_command_policy("config/flows/submit", None, None)
 
     await preflight_command(
-        mass,
-        decision,
-        {"flow_id": "provider-flow", "values": {"token": "secret"}},
-        {str(Tag.CONFIG_WRITE_PROVIDER), str(Tag.CONFIG_WRITE_SECRET)},
+        mass, decision, {"flow_id": "provider-flow", "values": {"token": "secret"}}
     )
 
 
 async def test_player_setup_flow_allows_player_only_nonsecret_write() -> None:
-    """A player flow needs its own category tag, not the provider category."""
+    """A player flow needs its own category capability, not the provider category."""
     mass = _flow_mass(
         "config.players.write",
         [ConfigEntry(key="name", type=ConfigEntryType.STRING, label="Name")],
@@ -531,10 +499,7 @@ async def test_player_setup_flow_allows_player_only_nonsecret_write() -> None:
     decision = resolve_command_policy("config/flows/submit", None, None)
 
     await preflight_command(
-        mass,
-        decision,
-        {"flow_id": "player-flow", "values": {"name": "Kitchen"}},
-        {str(Tag.CONFIG_WRITE_PLAYER)},
+        mass, decision, {"flow_id": "player-flow", "values": {"name": "Kitchen"}}
     )
 
 
@@ -547,12 +512,9 @@ async def test_setup_flow_rejects_the_wrong_config_category() -> None:
     decision = resolve_command_policy("config/flows/submit", None, None)
 
     preflight = await preflight_command(
-        mass,
-        decision,
-        {"flow_id": "provider-flow", "values": {"name": "Kitchen"}},
-        {str(Tag.CONFIG_WRITE_PLAYER)},
+        mass, decision, {"flow_id": "provider-flow", "values": {"name": "Kitchen"}}
     )
-    assert preflight.additional_required == frozenset({str(Tag.CONFIG_WRITE_PROVIDER)})
+    assert preflight.additional_required == frozenset({str(Capability.CONFIG_WRITE_PROVIDER)})
 
 
 async def test_unknown_setup_flow_fails_closed() -> None:
@@ -561,9 +523,4 @@ async def test_unknown_setup_flow_fails_closed() -> None:
     decision = resolve_command_policy("config/flows/submit", None, None)
 
     with pytest.raises(ToolError, match="setup flow"):
-        await preflight_command(
-            mass,
-            decision,
-            {"flow_id": "missing-flow", "values": {}},
-            {str(Tag.CONFIG_WRITE_PROVIDER), str(Tag.CONFIG_WRITE_PLAYER)},
-        )
+        await preflight_command(mass, decision, {"flow_id": "missing-flow", "values": {}})

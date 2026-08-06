@@ -14,12 +14,12 @@ from music_assistant_models.enums import ConfigEntryType
 
 from music_assistant.models.plugin import PluginProvider
 from provider import _init_helpers, server
+from provider.capabilities import Capability
 from provider.commands import ProviderCommandSet
-from provider.config import policy_mode_key, policy_token_suffix, token_policy_key
 from provider.constants import CONF_DEFAULT_POLICY, CONF_POLICY_TOKEN_SUFFIXES
+from provider.policy_config import policy_mode_key, policy_token_suffix, token_policy_key
 from provider.provider import MCPServerProvider
 from provider.server import MCPServerRuntime
-from provider.tags import Tag
 
 
 class _LifecycleMass:
@@ -67,7 +67,7 @@ def _config(*, debug_events: bool = False) -> MagicMock:
     config = MagicMock()
     config.get_value.side_effect = lambda key, default=None: {
         CONF_DEFAULT_POLICY: "Custom",
-        policy_mode_key(Tag.DEBUG_EVENTS): "allow" if debug_events else "deny",
+        policy_mode_key(Capability.DEBUG_EVENTS): "allow" if debug_events else "deny",
         "debug_event_buffer_capacity": 100,
     }.get(key, default)
     return config
@@ -257,7 +257,7 @@ async def test_auto_discovered_debug_override_activates_buffer_before_authentica
         CONF_DEFAULT_POLICY: "Read-only",
         CONF_POLICY_TOKEN_SUFFIXES: [policy_token_suffix(token_id)],
         token_policy_key(token_id): "Custom",
-        policy_mode_key(Tag.DEBUG_EVENTS, token_id): "allow",
+        policy_mode_key(Capability.DEBUG_EVENTS, token_id): "allow",
         "debug_event_buffer_capacity": 100,
     }
     config = MagicMock()

@@ -29,9 +29,9 @@ configuration, and provider diagnostics without maintaining a parallel tool API.
   unconfigured installations fail closed to the `Read-only` profile.
 - **Mounted into MA's existing webserver** at `/mcp/v1` — reuses TLS, reverse proxy,
   and Home Assistant ingress out of the box. No second port, no extra firewall rule.
-- The MCP surface contains exactly three tools: `search_tools`, `get_tool_schema`,
-  and `call_tool`. They discover and invoke Music Assistant's live API registry as
-  `ma_api:*` commands.
+- The default MCP surface contains exactly three tools: `search_tools`,
+  `get_tool_schema`, and `call_tool`. Enabling **Enable MCP App** adds only
+  `app_music_assistant`; its state/action tools remain renderer-only.
 - Provider-owned `fastmcp/*` commands use that same registry and exist only for safe
   queue batch removal and diagnostics that Music Assistant does not expose natively.
 
@@ -50,6 +50,9 @@ with `search_tools(cursor="...")` until `next_cursor` is null. Resource-aware cl
 can traverse the same catalog through `catalog://commands{?cursor,limit}` and follow
 `next_uri`. Catalog pages contain command names only; descriptions belong to ranked
 search pages, and command schemas always remain on-demand through `get_tool_schema`.
+Set `include_top_schema=true` with a non-empty query and no cursor to attach the full
+schema only to the first ranked result. Search is Unicode-aware and uses canonical
+names plus curated aliases; it does not translate queries or call an embedding service.
 
 The provider registers eight ordinary MA extension commands under `fastmcp/*`: one
 server-side safe queue batch-removal command and seven bounded diagnostics commands.
@@ -109,6 +112,11 @@ capability/token to `Allow`; the server returns an actionable error naming the
 capability. Resource reads require `Allow`, so a `Confirm` capability cannot be
 bypassed through `library://`, `player://`, or `queue://`.
 
+The optional Prefab MCP App uses the same dispatcher and repeats authentication,
+scope, filter, policy, and target checks after every elicitation. A UI click is not a
+confirmation. Hosts without MCP Apps support receive a text fallback. Changing
+`enable_mcp_app` restarts the runtime because it changes tools and resources.
+
 Authorization is resolved for discovery and repeated immediately before execution
 and after elicitation. Music Assistant scopes, disabled users, player/provider
 filters, authentication, hard-denied auth/dashboard commands, secret-write guards,
@@ -120,6 +128,9 @@ execution outcomes using only fixed fields: MA user, exact token ID or safe clie
 label, command, capability, effective mode, and controlled outcome. Bearers,
 fingerprints, submitted values, command arguments, unmasked secure configuration,
 and exception text are never included.
+
+The Connect Wizard shows only the selected default policy profile. It intentionally
+does not expose capability counts, mode lists, Custom matrices, or per-token overrides.
 
 ## Spec compliance (MCP 2025-06-18 / draft)
 

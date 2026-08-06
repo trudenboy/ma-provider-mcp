@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from types import MappingProxyType
 
-from .tags import Tag
+from .capabilities import Capability
 
 POLICY_SCHEMA_VERSION = 2
 
@@ -40,16 +40,18 @@ class PolicySnapshot:
     def __post_init__(self) -> None:
         """Copy and freeze the complete capability map."""
         normalized = {str(capability): PolicyMode(mode) for capability, mode in self.modes.items()}
-        expected = {str(capability) for capability in Tag}
+        expected = {str(capability) for capability in Capability}
         if set(normalized) != expected:
             raise ValueError("Policy snapshot must assign every supported capability")
         object.__setattr__(
             self,
             "modes",
-            MappingProxyType({str(capability): normalized[str(capability)] for capability in Tag}),
+            MappingProxyType(
+                {str(capability): normalized[str(capability)] for capability in Capability}
+            ),
         )
 
-    def mode(self, capability: str | Tag) -> PolicyMode:
+    def mode(self, capability: str | Capability) -> PolicyMode:
         """Return the effective mode for one supported capability."""
         try:
             return self.modes[str(capability)]
@@ -69,7 +71,7 @@ class PolicySelection:
         normalized = {
             str(capability): PolicyMode(mode) for capability, mode in self.custom_modes.items()
         }
-        unsupported = set(normalized) - {str(capability) for capability in Tag}
+        unsupported = set(normalized) - {str(capability) for capability in Capability}
         if unsupported:
             raise ValueError(f"Unsupported capabilities: {', '.join(sorted(unsupported))}")
         if self.choice is not PolicyProfile.CUSTOM and normalized:
@@ -89,7 +91,7 @@ class PolicySelection:
         return cls(profile)
 
     @classmethod
-    def custom(cls, modes: Mapping[str | Tag, PolicyMode]) -> PolicySelection:
+    def custom(cls, modes: Mapping[str | Capability, PolicyMode]) -> PolicySelection:
         """Build one explicit Custom choice."""
         return cls(
             PolicyProfile.CUSTOM, {str(capability): mode for capability, mode in modes.items()}
@@ -130,25 +132,26 @@ class PolicyResolver:
 
 def policy_snapshot(
     profile: PolicyProfile,
-    custom_modes: Mapping[str | Tag, PolicyMode] | None = None,
+    custom_modes: Mapping[str | Capability, PolicyMode] | None = None,
 ) -> PolicySnapshot:
     """Expand one profile into a complete immutable capability map."""
     if profile is PolicyProfile.CUSTOM:
         explicit = {
             str(capability): PolicyMode(mode) for capability, mode in (custom_modes or {}).items()
         }
-        unsupported = set(explicit) - {str(capability) for capability in Tag}
+        unsupported = set(explicit) - {str(capability) for capability in Capability}
         if unsupported:
             raise ValueError(f"Unsupported capabilities: {', '.join(sorted(unsupported))}")
         expanded = {
-            str(capability): explicit.get(str(capability), PolicyMode.DENY) for capability in Tag
+            str(capability): explicit.get(str(capability), PolicyMode.DENY)
+            for capability in Capability
         }
         return PolicySnapshot(profile, expanded)
     if custom_modes:
         raise ValueError("Explicit capability modes require the Custom profile")
 
     modes: dict[str, PolicyMode] = {}
-    for capability in Tag:
+    for capability in Capability:
         value = str(capability)
         if profile is PolicyProfile.TRUSTED:
             mode = PolicyMode.ALLOW

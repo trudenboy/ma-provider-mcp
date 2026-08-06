@@ -35,6 +35,11 @@ arguments and secret values, unmasked secure configuration, and exception text. 
 debug health summary exposes only aggregate token-resolution failures; it never lists
 token IDs or fingerprints.
 
+The optional MCP App cannot call Music Assistant directly. Its closed action enum maps
+to canonical commands in the same dispatcher used by `call_tool`, including per-call
+elicitation and post-elicitation revalidation. App backend tools are renderer-only and
+the bundled Prefab renderer has no external network, script, or frame domains.
+
 After upgrading from v1, old permission booleans, `dynamic_api_*`, and
 `require_confirmation` values are ignored. Review the v2 default and per-token
 overrides before granting mutation, debug, configuration, or system capabilities.

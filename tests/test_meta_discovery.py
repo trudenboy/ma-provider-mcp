@@ -14,9 +14,15 @@ from mcp.shared.exceptions import McpError
 from provider import meta_discovery
 from provider.config import build_config_entries
 from provider.constants import DEFAULT_MOUNT_PATH
-from provider.dynamic_api import CatalogSnapshot, CatalogView, DynamicEntry
+from provider.dynamic_api import (
+    CatalogSnapshot,
+    CatalogView,
+    DynamicEntry,
+    RequestCatalogContext,
+)
 from provider.meta_discovery import register_meta_discovery
 from provider.middleware import TagFilterMiddleware
+from provider.policy import PolicyProfile, policy_snapshot
 from provider.server import build_tag_lookup
 
 
@@ -33,6 +39,13 @@ class _Adapter:
     async def visible_catalog(self) -> CatalogView:
         """Return the empty request-filtered catalog."""
         return CatalogView(self._snapshot.fingerprint, ())
+
+    async def catalog_context(self) -> RequestCatalogContext:
+        """Return one empty same-generation request context."""
+        return RequestCatalogContext(
+            self._snapshot,
+            CatalogView(self._snapshot.fingerprint, ()),
+        )
 
     async def visible_entries(self) -> list[DynamicEntry]:
         """Return an empty dynamic catalog."""
@@ -68,8 +81,6 @@ async def test_registers_exactly_three_real_tools() -> None:
 
     register_meta_discovery(
         mcp,
-        allowed_tags_provider=set,
-        lookup_component_tags=build_tag_lookup(mcp),
         dynamic_adapter=_Adapter(),
     )
     async with Client(mcp) as client:
@@ -82,8 +93,6 @@ async def test_catalog_resource_template_is_discoverable_and_matches_tool_browse
     mcp: FastMCP = FastMCP(name="test")
     register_meta_discovery(
         mcp,
-        allowed_tags_provider=set,
-        lookup_component_tags=build_tag_lookup(mcp),
         dynamic_adapter=_Adapter(),
     )
     async with Client(mcp) as client:
@@ -135,18 +144,28 @@ class _CatalogAdapter(_Adapter):
         """Make every catalog fixture entry visible."""
         return CatalogView(self._snapshot.fingerprint, self._snapshot.entries)
 
+    async def catalog_context(self) -> RequestCatalogContext:
+        """Return the fixed catalog and matching all-visible view."""
+        return RequestCatalogContext(
+            self._snapshot,
+            CatalogView(self._snapshot.fingerprint, self._snapshot.entries),
+        )
+
 
 def _catalog_server(entry_count: int, *, middleware: bool = False) -> FastMCP:
     """Build a resource-enabled catalog server, optionally with empty permissions."""
     mcp: FastMCP = FastMCP(name="catalog-test")
     register_meta_discovery(
         mcp,
-        allowed_tags_provider=set,
-        lookup_component_tags=build_tag_lookup(mcp),
         dynamic_adapter=_CatalogAdapter(entry_count),
     )
     if middleware:
-        mcp.add_middleware(TagFilterMiddleware(lambda: set(), build_tag_lookup(mcp)))
+        mcp.add_middleware(
+            TagFilterMiddleware(
+                build_tag_lookup(mcp),
+                lambda: policy_snapshot(PolicyProfile.READ_ONLY),
+            )
+        )
     return mcp
 
 

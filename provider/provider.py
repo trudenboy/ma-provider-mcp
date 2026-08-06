@@ -3,7 +3,7 @@ MCP Server provider — main PluginProvider implementation.
 
 The provider is a thin lifecycle wrapper over :class:`MCPServerRuntime` from
 ``server.py``. ``handle_async_init`` constructs the runtime and starts it;
-``unload`` shuts it down; ``update_config`` either hot-swaps the tag-filter
+``unload`` shuts it down; ``update_config`` either hot-swaps request policy
 middleware (for permission-only changes) or restarts the runtime.
 """
 
@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 import re
 from contextlib import suppress
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from music_assistant_models.config_entries import ConfigEntry
 from music_assistant_models.enums import ConfigEntryType
@@ -39,12 +39,13 @@ class MCPServerProvider(PluginProvider):  # type: ignore[misc, unused-ignore]
 
     async def get_config_entries(self) -> tuple[ConfigEntry, ...]:
         """Return Config entries to configure this provider."""
-        from .config import build_config_entries, current_user_mcp_tokens  # noqa: PLC0415
+        from .config import build_config_entries  # noqa: PLC0415
         from .constants import (  # noqa: PLC0415
             CONF_MANUAL_TOKEN_IDS,
             CONF_MOUNT_PATH,
             DEFAULT_MOUNT_PATH,
         )
+        from .policy_config import current_user_mcp_tokens  # noqa: PLC0415
 
         tokens = await current_user_mcp_tokens(self.mass)
         return build_config_entries(
@@ -83,22 +84,32 @@ class MCPServerProvider(PluginProvider):  # type: ignore[misc, unused-ignore]
         return await super().handle_config_action(action) or ()
 
     async def handle_async_init(self) -> None:
-        """Register MA commands, then build and start the FastMCP runtime."""
+        """Build policy runtime, register commands, then mount MCP atomically."""
         from .commands import ProviderCommandSet  # noqa: PLC0415
+        from .server import MCPServerRuntime  # noqa: PLC0415
 
+        runtime = MCPServerRuntime(
+            self.mass,
+            self.config,
+            self.logger,
+            policy_change_callback=self._apply_policy_token_ids,
+        )
+        self._runtime = runtime
         self._commands = ProviderCommandSet(
             self.mass,
             config_provider=lambda: self.config,
+            policy_provider=self._resolve_command_policy,
             diagnostics_provider=lambda: (
                 self._runtime.dynamic_diagnostics()
                 if self._runtime is not None
                 else {"available": False, "last_error": "MCP runtime not started"}
             ),
+            audit_client_id_provider=self._resolve_audit_client_id,
             raw_policy_value_provider=self._raw_policy_value,
         )
         try:
             self._commands.start()
-            await self._start_runtime(self.config)
+            await runtime.start()
         except BaseException:
             try:
                 if self._runtime is not None:
@@ -121,6 +132,7 @@ class MCPServerProvider(PluginProvider):  # type: ignore[misc, unused-ignore]
 
     async def unload(self, is_removed: bool = False) -> None:
         """Stop the MCP endpoint before withdrawing its MA commands."""
+        _ = is_removed  # Required by Music Assistant's provider lifecycle signature.
         try:
             if self._runtime is not None:
                 await self._runtime.stop()
@@ -144,7 +156,7 @@ class MCPServerProvider(PluginProvider):  # type: ignore[misc, unused-ignore]
             return
         normalized_keys = {k.removeprefix("values/") for k in changed_keys}
         if all(is_hot_swappable_key(key) for key in normalized_keys):
-            await self._runtime.apply_permission_change(config, normalized_keys)
+            await self._runtime.apply_config_change(config, normalized_keys)
         else:
             await self._runtime.stop()
             self._runtime = None
@@ -162,14 +174,6 @@ class MCPServerProvider(PluginProvider):  # type: ignore[misc, unused-ignore]
             self.logger,
             policy_change_callback=self._apply_policy_token_ids,
         )
-        resolve_policy = getattr(
-            runtime,
-            "resolve_request_policy",
-            getattr(runtime, "resolve_policy", None),
-        )
-        if self._commands is not None and callable(resolve_policy):
-            self._commands.set_policy_provider(resolve_policy)
-            self._commands.set_audit_client_id_provider(runtime.audit_client_id)
         self._runtime = runtime
         try:
             await runtime.start()
@@ -178,6 +182,29 @@ class MCPServerProvider(PluginProvider):  # type: ignore[misc, unused-ignore]
             with suppress(BaseException):
                 await runtime.stop()
             raise
+
+    def _resolve_command_policy(self, bearer_token: str | None) -> Any:
+        """Resolve through the currently attached runtime for every handler call."""
+        runtime = self._runtime
+        resolver = getattr(runtime, "resolve_request_policy", None)
+        if callable(resolver):
+            return resolver(bearer_token)
+        from .policy_config import build_policy_resolver  # noqa: PLC0415
+
+        return build_policy_resolver(
+            self.config,
+            raw_value_provider=self._raw_policy_value,
+        ).resolve(None)
+
+    def _resolve_audit_client_id(self, bearer_token: str | None) -> str:
+        """Resolve a safe audit label through the currently attached runtime."""
+        runtime = self._runtime
+        resolver = getattr(runtime, "audit_client_id", None)
+        if callable(resolver):
+            return str(resolver(bearer_token))
+        from .audit import NO_TOKEN_CLIENT_ID  # noqa: PLC0415
+
+        return NO_TOKEN_CLIENT_ID
 
     def _apply_policy_token_ids(self, token_ids: frozenset[str]) -> None:
         """Refresh event retention when authenticated token identities change."""

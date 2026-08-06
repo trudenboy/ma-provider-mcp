@@ -11,10 +11,10 @@ from fastmcp.exceptions import ToolError
 from music_assistant_models.constants import SECURE_STRING_SUBSTITUTE
 from music_assistant_models.enums import ConfigEntryType
 
+from .capabilities import Capability
 from .config_io.secret_handler import is_secret_key
 from .known_commands import KNOWN_AUTHENTICATED_COMMANDS
 from .policy import PolicyMode, PolicySnapshot, combine_policy_modes
-from .tags import Tag
 
 if TYPE_CHECKING:
     from .command_profiles import CommandProfile
@@ -66,7 +66,7 @@ class FamilyPolicy:
     """Capability columns and annotation behavior for a command prefix."""
 
     prefix: str
-    tags: Mapping[str, Tag]
+    capabilities: Mapping[str, Capability]
     readonly: bool = False
 
 
@@ -154,166 +154,166 @@ _VOLUME_COMMANDS = frozenset(
 def _family(
     prefix: str,
     *,
-    read: Tag | None = None,
-    control: Tag | None = None,
-    write: Tag | None = None,
-    delete: Tag | None = None,
+    read: Capability | None = None,
+    control: Capability | None = None,
+    write: Capability | None = None,
+    delete: Capability | None = None,
     readonly: bool = False,
 ) -> FamilyPolicy:
     """Build one compact family-policy declaration."""
-    tags = {
-        operation: tag
-        for operation, tag in (
+    capabilities = {
+        operation: capability
+        for operation, capability in (
             ("read", read),
             ("control", control),
             ("write", write),
             ("delete", delete),
         )
-        if tag is not None
+        if capability is not None
     }
-    return FamilyPolicy(prefix, tags, readonly=readonly)
+    return FamilyPolicy(prefix, capabilities, readonly=readonly)
 
 
-FAMILY_TAGS = (
+FAMILY_POLICIES = (
     _family(
         "music/playlists/",
-        read=Tag.QUERY_LIBRARY,
-        write=Tag.EDIT_PLAYLISTS,
-        delete=Tag.DELETE_PLAYLISTS,
+        read=Capability.QUERY_LIBRARY,
+        write=Capability.EDIT_PLAYLISTS,
+        delete=Capability.DELETE_PLAYLISTS,
     ),
     _family(
         "music/favorites/",
-        read=Tag.QUERY_LIBRARY,
-        write=Tag.EDIT_FAVORITES,
-        delete=Tag.DELETE_FAVORITES,
+        read=Capability.QUERY_LIBRARY,
+        write=Capability.EDIT_FAVORITES,
+        delete=Capability.DELETE_FAVORITES,
     ),
     _family(
         "music/",
-        read=Tag.QUERY_LIBRARY,
-        control=Tag.CONTROL_MEDIA,
-        write=Tag.EDIT_LIBRARY,
-        delete=Tag.DELETE_LIBRARY,
+        read=Capability.QUERY_LIBRARY,
+        control=Capability.CONTROL_MEDIA,
+        write=Capability.EDIT_LIBRARY,
+        delete=Capability.DELETE_LIBRARY,
     ),
-    _family("players/cmd/volume_", control=Tag.CONTROL_VOLUME),
-    _family("players/cmd/", control=Tag.CONTROL_PLAYERS),
+    _family("players/cmd/volume_", control=Capability.CONTROL_VOLUME),
+    _family("players/cmd/", control=Capability.CONTROL_PLAYERS),
     _family(
         "players/sleep_timer/",
-        read=Tag.QUERY_PLAYERS,
-        control=Tag.CONTROL_PLAYBACK,
-        delete=Tag.CONTROL_PLAYBACK,
+        read=Capability.QUERY_PLAYERS,
+        control=Capability.CONTROL_PLAYBACK,
+        delete=Capability.CONTROL_PLAYBACK,
     ),
-    _family("players/", read=Tag.QUERY_PLAYERS),
+    _family("players/", read=Capability.QUERY_PLAYERS),
     _family(
         "player_queues/",
-        read=Tag.QUERY_QUEUE,
-        control=Tag.EDIT_QUEUE,
-        write=Tag.EDIT_QUEUE,
-        delete=Tag.DELETE_QUEUE,
+        read=Capability.QUERY_QUEUE,
+        control=Capability.EDIT_QUEUE,
+        write=Capability.EDIT_QUEUE,
+        delete=Capability.DELETE_QUEUE,
     ),
-    _family("metadata/", read=Tag.QUERY_METADATA),
+    _family("metadata/", read=Capability.QUERY_METADATA),
     _family(
         "config/providers",
-        read=Tag.CONFIG_READ,
-        write=Tag.CONFIG_WRITE_PROVIDER,
+        read=Capability.CONFIG_READ,
+        write=Capability.CONFIG_WRITE_PROVIDER,
     ),
-    _family("config/core", read=Tag.CONFIG_READ, write=Tag.CONFIG_WRITE_CORE),
+    _family("config/core", read=Capability.CONFIG_READ, write=Capability.CONFIG_WRITE_CORE),
     _family(
         "config/players",
-        read=Tag.CONFIG_READ,
-        write=Tag.CONFIG_WRITE_PLAYER,
+        read=Capability.CONFIG_READ,
+        write=Capability.CONFIG_WRITE_PLAYER,
     ),
     _family(
         "config/player_queues",
-        read=Tag.CONFIG_READ,
-        write=Tag.CONFIG_WRITE_PLAYER,
+        read=Capability.CONFIG_READ,
+        write=Capability.CONFIG_WRITE_PLAYER,
     ),
     _family(
         "config/dsp_presets/",
-        read=Tag.CONFIG_READ,
-        write=Tag.CONFIG_WRITE_PLAYER,
+        read=Capability.CONFIG_READ,
+        write=Capability.CONFIG_WRITE_PLAYER,
     ),
     _family(
         "config/dsp_irs/",
-        read=Tag.CONFIG_READ,
-        write=Tag.CONFIG_WRITE_PLAYER,
+        read=Capability.CONFIG_READ,
+        write=Capability.CONFIG_WRITE_PLAYER,
     ),
     _family(
         "diagnostics/",
-        read=Tag.DEBUG_INSPECT,
+        read=Capability.DEBUG_INSPECT,
         readonly=True,
     ),
-    _family("providers", read=Tag.DEBUG_PROVIDERS),
+    _family("providers", read=Capability.DEBUG_PROVIDERS),
 )
 
 
-def _readonly_debug(tag: Tag) -> CommandDecision:
+def _readonly_debug(capability: Capability) -> CommandDecision:
     """Return a read-only command guarded by one debug capability."""
     return CommandDecision(
         _READ_ANNOTATIONS,
-        frozenset({str(tag)}),
+        frozenset({str(capability)}),
     )
 
 
-def _destructive_write(tag: Tag) -> CommandDecision:
+def _destructive_write(capability: Capability) -> CommandDecision:
     """Return a destructive annotation with one write capability."""
     return CommandDecision(
         _DESTRUCTIVE_ANNOTATIONS,
-        frozenset({str(tag)}),
+        frozenset({str(capability)}),
     )
 
 
 EXACT_POLICIES: dict[str, CommandDecision] = {
-    "player_queues/delete_item": _destructive_write(Tag.DELETE_QUEUE),
-    "player_queues/clear": _destructive_write(Tag.DELETE_QUEUE),
-    "fastmcp/queue/remove_items_safe": _destructive_write(Tag.DELETE_QUEUE),
-    "config/providers/reload": _destructive_write(Tag.CONFIG_WRITE_PROVIDER),
+    "player_queues/delete_item": _destructive_write(Capability.DELETE_QUEUE),
+    "player_queues/clear": _destructive_write(Capability.DELETE_QUEUE),
+    "fastmcp/queue/remove_items_safe": _destructive_write(Capability.DELETE_QUEUE),
+    "config/providers/reload": _destructive_write(Capability.CONFIG_WRITE_PROVIDER),
     "config/flows/submit": CommandDecision(
         _CONTROL_ANNOTATIONS,
         frozenset(),
         "config_flow_submit",
-        frozenset({str(Tag.CONFIG_WRITE_PROVIDER), str(Tag.CONFIG_WRITE_PLAYER)}),
-        str(Tag.CONFIG_WRITE_SECRET),
+        frozenset({str(Capability.CONFIG_WRITE_PROVIDER), str(Capability.CONFIG_WRITE_PLAYER)}),
+        str(Capability.CONFIG_WRITE_SECRET),
     ),
     "config/flows/get": CommandDecision(
         _READ_ANNOTATIONS,
-        frozenset({str(Tag.CONFIG_READ)}),
+        frozenset({str(Capability.CONFIG_READ)}),
     ),
     "config/flows/abort": CommandDecision(
         _DESTRUCTIVE_ANNOTATIONS,
         preflight="config_flow_abort",
         alternative_capabilities=frozenset(
-            {str(Tag.CONFIG_WRITE_PROVIDER), str(Tag.CONFIG_WRITE_PLAYER)}
+            {str(Capability.CONFIG_WRITE_PROVIDER), str(Capability.CONFIG_WRITE_PLAYER)}
         ),
     ),
     "players/create_group_player": CommandDecision(
         _CONTROL_ANNOTATIONS,
-        frozenset({str(Tag.CONFIG_WRITE_PLAYER)}),
+        frozenset({str(Capability.CONFIG_WRITE_PLAYER)}),
     ),
-    "players/remove_group_player": _destructive_write(Tag.CONFIG_WRITE_PLAYER),
-    "players/remove": _destructive_write(Tag.CONFIG_WRITE_PLAYER),
+    "players/remove_group_player": _destructive_write(Capability.CONFIG_WRITE_PLAYER),
+    "players/remove": _destructive_write(Capability.CONFIG_WRITE_PLAYER),
     "players/add_currently_playing_to_favorites": CommandDecision(
         _CONTROL_ANNOTATIONS,
-        frozenset({str(Tag.EDIT_FAVORITES)}),
+        frozenset({str(Capability.EDIT_FAVORITES)}),
     ),
     "metadata/set_default_preferred_language": CommandDecision(
         _CONTROL_ANNOTATIONS,
-        frozenset({str(Tag.CONFIG_WRITE_CORE)}),
+        frozenset({str(Capability.CONFIG_WRITE_CORE)}),
     ),
     "metadata/set_preferred_language": CommandDecision(
         _CONTROL_ANNOTATIONS,
-        frozenset({str(Tag.EDIT_LIBRARY)}),
+        frozenset({str(Capability.EDIT_LIBRARY)}),
     ),
     "metadata/update_metadata": CommandDecision(
         _CONTROL_ANNOTATIONS,
-        frozenset({str(Tag.EDIT_LIBRARY)}),
+        frozenset({str(Capability.EDIT_LIBRARY)}),
     ),
-    "fastmcp/debug/tail_log": _readonly_debug(Tag.DEBUG_LOGS),
-    "fastmcp/debug/log_stats": _readonly_debug(Tag.DEBUG_LOGS),
-    "fastmcp/debug/recent_events": _readonly_debug(Tag.DEBUG_EVENTS),
-    "fastmcp/debug/event_buffer_stats": _readonly_debug(Tag.DEBUG_EVENTS),
-    "fastmcp/debug/health": _readonly_debug(Tag.DEBUG_PROVIDERS),
-    "fastmcp/debug/routes": _readonly_debug(Tag.DEBUG_PROVIDERS),
-    "fastmcp/debug/packages": _readonly_debug(Tag.DEBUG_PROVIDERS),
+    "fastmcp/debug/tail_log": _readonly_debug(Capability.DEBUG_LOGS),
+    "fastmcp/debug/log_stats": _readonly_debug(Capability.DEBUG_LOGS),
+    "fastmcp/debug/recent_events": _readonly_debug(Capability.DEBUG_EVENTS),
+    "fastmcp/debug/event_buffer_stats": _readonly_debug(Capability.DEBUG_EVENTS),
+    "fastmcp/debug/health": _readonly_debug(Capability.DEBUG_PROVIDERS),
+    "fastmcp/debug/routes": _readonly_debug(Capability.DEBUG_PROVIDERS),
+    "fastmcp/debug/packages": _readonly_debug(Capability.DEBUG_PROVIDERS),
 }
 
 
@@ -340,7 +340,7 @@ def resolve_command_policy(
     }:
         return CommandDecision(
             _SYSTEM_ANNOTATIONS,
-            frozenset({str(Tag.SYSTEM_ADMIN)}),
+            frozenset({str(Capability.SYSTEM_ADMIN)}),
         )
 
     family = _matching_family(command)
@@ -380,7 +380,7 @@ def resolve_command_policy(
         required_capabilities,
         preflight,
         secret_capability=(
-            str(Tag.CONFIG_WRITE_SECRET) if preflight == "config_secret_write" else None
+            str(Capability.CONFIG_WRITE_SECRET) if preflight == "config_secret_write" else None
         ),
     )
 
@@ -393,11 +393,11 @@ def command_is_hard_denied(command: str) -> bool:
 def _command_capability_override(command: str) -> frozenset[str]:
     """Return a fine-grained capability for migrated control commands."""
     if command in _PLAYBACK_COMMANDS:
-        return frozenset({str(Tag.CONTROL_PLAYBACK)})
+        return frozenset({str(Capability.CONTROL_PLAYBACK)})
     if command in _MEDIA_CONTROL_COMMANDS:
-        return frozenset({str(Tag.CONTROL_MEDIA)})
+        return frozenset({str(Capability.CONTROL_MEDIA)})
     if command in _VOLUME_COMMANDS:
-        return frozenset({str(Tag.CONTROL_VOLUME)})
+        return frozenset({str(Capability.CONTROL_VOLUME)})
     return frozenset()
 
 
@@ -405,7 +405,6 @@ async def preflight_command(
     mass: Any,
     decision: CommandDecision,
     arguments: Mapping[str, Any],
-    allowed_tags: set[str],
 ) -> CommandPreflight:
     """
     Enforce request-dependent guards before confirmation and execution.
@@ -413,9 +412,7 @@ async def preflight_command(
     :param mass: Running Music Assistant instance.
     :param decision: Resolved command policy.
     :param arguments: Strictly parsed command arguments.
-    :param allowed_tags: Current provider permission tags.
     """
-    del allowed_tags
     if decision.preflight == "config_secret_read":
         return CommandPreflight(secure_config_value=await _config_value_is_secure(mass, arguments))
     if decision.preflight == "config_secret_write":
@@ -427,7 +424,9 @@ async def preflight_command(
         if inspect.isawaitable(entries):
             entries = await entries
         if any(is_secret_key(entries, str(key)) for key in values):
-            return CommandPreflight(additional_required=frozenset({str(Tag.CONFIG_WRITE_SECRET)}))
+            return CommandPreflight(
+                additional_required=frozenset({str(Capability.CONFIG_WRITE_SECRET)})
+            )
     elif decision.preflight == "config_flow_submit":
         return await _preflight_setup_flow_submit(mass, arguments)
     elif decision.preflight == "config_flow_abort":
@@ -460,7 +459,7 @@ def revalidate_preflight_command_sync(
         requires_secret = entries is None or any(is_secret_key(entries, str(key)) for key in values)
         return CommandPreflight(
             additional_required=(
-                frozenset({str(Tag.CONFIG_WRITE_SECRET)}) if requires_secret else frozenset()
+                frozenset({str(Capability.CONFIG_WRITE_SECRET)}) if requires_secret else frozenset()
             )
         )
     if decision.preflight == "config_flow_submit":
@@ -486,22 +485,11 @@ async def postflight_command(
     return None if result is None else SECURE_STRING_SUBSTITUTE
 
 
-def command_tags_visible(decision: CommandDecision, allowed_tags: set[str]) -> bool:
-    """Return whether legacy allow-only capabilities make a command visible."""
-    required = decision.required_capabilities
-    alternatives = decision.alternative_capabilities
-    return (
-        not decision.hard_denied
-        and required.issubset(allowed_tags)
-        and (not alternatives or bool(alternatives & allowed_tags))
-    )
-
-
 def _matching_family(command: str) -> FamilyPolicy | None:
     """Return the longest matching family policy."""
     matches = (
         family
-        for family in FAMILY_TAGS
+        for family in FAMILY_POLICIES
         if (
             command.startswith(family.prefix)
             if family.prefix.endswith(("/", "_"))
@@ -529,8 +517,8 @@ def _operation(
     scope_operation = _scope_operation(scope)
     if scope_operation is not None:
         return scope_operation
-    if family is not None and len(family.tags) == 1:
-        return next(iter(family.tags))
+    if family is not None and len(family.capabilities) == 1:
+        return next(iter(family.capabilities))
     return "system"
 
 
@@ -563,10 +551,10 @@ def _annotations(operation: str, *, destructive: bool) -> Mapping[str, bool]:
 
 def _required_capabilities(family: FamilyPolicy, operation: str) -> frozenset[str]:
     """Select the family capability for the resolved operation."""
-    tag = family.tags.get(operation)
-    if tag is None and operation == "delete":
-        tag = family.tags.get("write")
-    return frozenset({str(tag)}) if tag is not None else frozenset()
+    capability = family.capabilities.get(operation)
+    if capability is None and operation == "delete":
+        capability = family.capabilities.get("write")
+    return frozenset({str(capability)}) if capability is not None else frozenset()
 
 
 def _config_entries_target(arguments: Mapping[str, Any]) -> tuple[str, str]:
@@ -677,8 +665,8 @@ async def _preflight_setup_flow_submit(
     scope = get_scope(flow_id)
     if inspect.isawaitable(scope):
         scope = await scope
-    required_tag = _setup_flow_write_tag(scope)
-    if required_tag is None:
+    required_capability = _setup_flow_write_capability(scope)
+    if required_capability is None:
         raise ToolError("Unknown setup flow or unsupported setup flow scope")
     try:
         step = get_flow(flow_id)
@@ -689,9 +677,9 @@ async def _preflight_setup_flow_submit(
     entries = getattr(step, "entries", None)
     if not isinstance(entries, list | tuple):
         raise ToolError("Malformed setup flow step")
-    required = {str(required_tag)}
+    required = {str(required_capability)}
     if any(is_secret_key(entries, str(key)) for key in values):
-        required.add(str(Tag.CONFIG_WRITE_SECRET))
+        required.add(str(Capability.CONFIG_WRITE_SECRET))
     return CommandPreflight(additional_required=frozenset(required))
 
 
@@ -735,16 +723,16 @@ def _revalidate_setup_flow_submit_sync(
     values = arguments.get("values")
     if not isinstance(flow_id, str) or not flow_id or not isinstance(values, Mapping):
         raise ToolError("Invalid setup flow submission")
-    required_tag = _setup_flow_write_tag(_setup_flow_scope_sync(mass, flow_id))
-    if required_tag is None:
+    required_capability = _setup_flow_write_capability(_setup_flow_scope_sync(mass, flow_id))
+    if required_capability is None:
         raise ToolError("Unknown setup flow or unsupported setup flow scope")
-    required = {str(required_tag)}
+    required = {str(required_capability)}
     step = _setup_flow_step_sync(mass, flow_id)
     entries = getattr(step, "entries", None) if step is not None else None
     if not isinstance(entries, list | tuple) or any(
         is_secret_key(entries, str(key)) for key in values
     ):
-        required.add(str(Tag.CONFIG_WRITE_SECRET))
+        required.add(str(Capability.CONFIG_WRITE_SECRET))
     return CommandPreflight(additional_required=frozenset(required))
 
 
@@ -756,10 +744,10 @@ def _revalidate_setup_flow_abort_sync(
     flow_id = arguments.get("flow_id")
     if not isinstance(flow_id, str) or not flow_id:
         raise ToolError("Invalid setup flow abort")
-    required_tag = _setup_flow_write_tag(_setup_flow_scope_sync(mass, flow_id))
-    if required_tag is None:
+    required_capability = _setup_flow_write_capability(_setup_flow_scope_sync(mass, flow_id))
+    if required_capability is None:
         raise ToolError("Unknown setup flow or unsupported setup flow scope")
-    return CommandPreflight(additional_required=frozenset({str(required_tag)}))
+    return CommandPreflight(additional_required=frozenset({str(required_capability)}))
 
 
 async def _preflight_setup_flow_abort(
@@ -776,17 +764,17 @@ async def _preflight_setup_flow_abort(
     scope = get_scope(flow_id)
     if inspect.isawaitable(scope):
         scope = await scope
-    required_tag = _setup_flow_write_tag(scope)
-    if required_tag is None:
+    required_capability = _setup_flow_write_capability(scope)
+    if required_capability is None:
         raise ToolError("Unknown setup flow or unsupported setup flow scope")
-    return CommandPreflight(additional_required=frozenset({str(required_tag)}))
+    return CommandPreflight(additional_required=frozenset({str(required_capability)}))
 
 
-def _setup_flow_write_tag(scope: Any) -> Tag | None:
-    """Map a current MA setup-flow scope to its one config write tag."""
+def _setup_flow_write_capability(scope: Any) -> Capability | None:
+    """Map a current MA setup-flow scope to its one config write capability."""
     value = str(getattr(scope, "value", scope) or "").casefold()
     if value == "config.providers.write":
-        return Tag.CONFIG_WRITE_PROVIDER
+        return Capability.CONFIG_WRITE_PROVIDER
     if value == "config.players.write":
-        return Tag.CONFIG_WRITE_PLAYER
+        return Capability.CONFIG_WRITE_PLAYER
     return None
