@@ -60,87 +60,6 @@ CURATED_PROFILE_MAPPINGS: dict[str, str] = {
 
 
 @dataclass(frozen=True, slots=True)
-class LegacyMigration:
-    """One non-executable legacy-name replacement or concrete usage hint."""
-
-    command: str | None = None
-    message: str | None = None
-
-
-def migration(command: str) -> LegacyMigration:
-    """Create a migration to a live MA command."""
-    return LegacyMigration(command=command)
-
-
-def retired(message: str) -> LegacyMigration:
-    """Create a migration hint for a former aggregate operation."""
-    return LegacyMigration(message=message)
-
-
-LEGACY_COMMAND_MAPPINGS: dict[str, LegacyMigration] = {
-    **{legacy: migration(command) for legacy, command in CURATED_PROFILE_MAPPINGS.items()},
-    "players_list_players": migration("players/all"),
-    "players_get_player": migration("players/get"),
-    "queue_get_active_queue": migration("player_queues/get_active_queue"),
-    "queue_add_to_queue": migration("player_queues/play_media"),
-    "queue_remove_item": migration("fastmcp/queue/remove_items_safe"),
-    "queue_clear_queue": migration("player_queues/clear"),
-    "queue_move_item": migration("player_queues/move_item"),
-    "queue_move_item_to_end": migration("player_queues/move_item_end"),
-    "queue_transfer_queue": migration("player_queues/transfer"),
-    "playlists_add_tracks": migration("music/playlists/add_playlist_tracks"),
-    "debug_reload_provider": migration("config/providers/reload"),
-    "debug_inspect_player": migration("players/get"),
-    "debug_inspect_queue": migration("player_queues/get"),
-    "debug_inspect_provider": migration("providers"),
-    "debug_list_providers": migration("providers"),
-    "debug_inspect_provider_config": migration("config/providers/get"),
-    "debug_tail_log": migration("fastmcp/debug/tail_log"),
-    "debug_log_stats": migration("fastmcp/debug/log_stats"),
-    "debug_recent_events": migration("fastmcp/debug/recent_events"),
-    "debug_event_buffer_stats": migration("fastmcp/debug/event_buffer_stats"),
-    "debug_health_summary": migration("fastmcp/debug/health"),
-    "debug_list_webserver_routes": migration("fastmcp/debug/routes"),
-    "debug_list_package_versions": migration("fastmcp/debug/packages"),
-    "config_get_provider": migration("config/providers/get"),
-    "config_get_core": migration("config/core/get"),
-    "config_get_player": migration("config/players/get"),
-    "config_get_dsp": migration("config/players/dsp/get"),
-    "config_set_provider_value": migration("config/providers/save"),
-    "config_save_provider": migration("config/providers/save"),
-    "config_trigger_provider_action": migration("config/providers/invoke_action"),
-    "config_set_core_value": migration("config/core/save"),
-    "config_save_core": migration("config/core/save"),
-    "config_set_player_value": migration("config/players/save"),
-    "config_save_player": migration("config/players/save"),
-    "config_save_dsp": migration("config/players/dsp/save"),
-    "config_list_targets": retired("Use search_tools('config providers core players')"),
-    "config_get_entries": retired("Use the target-specific config/*/get_entries command"),
-    "playback_play": migration("players/cmd/play"),
-    "mcp_api:players/summary": migration("players/all"),
-    "mcp_api:queue/snapshot": migration("player_queues/get_active_queue"),
-    "mcp_api:queue/add": migration("player_queues/play_media"),
-    "mcp_api:queue/remove": retired("Use fastmcp/queue/remove_items_safe or player_queues/clear"),
-    "mcp_api:queue/move": retired("Use player_queues/move_item, move_item_end, or transfer"),
-    "mcp_api:playlist/add_many": migration("music/playlists/add_playlist_tracks"),
-    "mcp_api:config/targets": retired("Use search_tools('config targets')"),
-    "mcp_api:config/entries": retired("Use the target-specific config/*/get_entries command"),
-    "mcp_api:config/save": retired("Use the target-specific config/*/save command"),
-    "mcp_api:config/save_dsp": migration("config/players/dsp/save"),
-    "mcp_api:debug/inspect": retired(
-        "Use native players, queues, providers, config, or diagnostics commands"
-    ),
-    "mcp_api:debug/logs": retired("Use fastmcp/debug/tail_log or fastmcp/debug/log_stats"),
-    "mcp_api:debug/events": retired(
-        "Use fastmcp/debug/recent_events or fastmcp/debug/event_buffer_stats"
-    ),
-    "mcp_api:debug/health": migration("fastmcp/debug/health"),
-    "mcp_api:debug/routes": migration("fastmcp/debug/routes"),
-    "mcp_api:debug/packages": migration("fastmcp/debug/packages"),
-}
-
-
-@dataclass(frozen=True, slots=True)
 class CommandProfile:
     """
     Provider-owned ergonomics layered over one live MA command handler.
@@ -318,9 +237,6 @@ def aliases_by_command() -> dict[str, tuple[str, ...]]:
     aliases: dict[str, list[str]] = {}
     for legacy_name, command in CURATED_PROFILE_MAPPINGS.items():
         aliases.setdefault(command, []).append(legacy_name)
-    for legacy_name, target in LEGACY_COMMAND_MAPPINGS.items():
-        if target.command is not None:
-            aliases.setdefault(target.command, []).append(legacy_name)
     return {command: tuple(sorted(set(names))) for command, names in aliases.items()}
 
 

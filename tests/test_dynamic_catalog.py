@@ -7,6 +7,7 @@ import contextvars
 import inspect
 import json
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from types import SimpleNamespace
@@ -17,12 +18,12 @@ import pytest
 from fastmcp import Client, Context, FastMCP
 from fastmcp.exceptions import ToolError
 from fastmcp.server.auth import AccessToken
-from mcp.shared.exceptions import McpError
 from music_assistant_models.auth import Scope
 from music_assistant_models.config_entries import ConfigEntry
 from music_assistant_models.enums import ConfigEntryType
 
 from provider import meta_discovery
+from provider.capabilities import Capability
 from provider.catalog_pagination import (
     PaginationError,
     decode_cursor,
@@ -38,13 +39,18 @@ from provider.dynamic_api import (
     CatalogView,
     DynamicAPIAdapter,
     DynamicEntry,
+    RequestCatalogContext,
 )
 from provider.meta_discovery import DynamicAdapter, register_meta_discovery
-from provider.policy import PolicyMode
-from provider.server import build_tag_lookup
-from provider.tags import Tag
+from provider.policy import PolicyMode, PolicyProfile, policy_snapshot
 
 _META_NAMES = {"search_tools", "call_tool", "get_tool_schema"}
+
+
+class _TestDynamicAPIAdapter(DynamicAPIAdapter):
+    """Adapter with a mutable test-only policy source."""
+
+    _test_allowed_capabilities_provider: Callable[[], set[str]]
 
 
 @dataclass
@@ -61,6 +67,11 @@ class _FakeAdapter:
         """Return the fake command as visible to every request."""
         snapshot = await self.base_snapshot()
         return CatalogView(snapshot.fingerprint, snapshot.entries)
+
+    async def catalog_context(self) -> RequestCatalogContext:
+        """Return a same-generation fake request context."""
+        snapshot = await self.base_snapshot()
+        return RequestCatalogContext(snapshot, CatalogView(snapshot.fingerprint, snapshot.entries))
 
     async def visible_entries(self) -> list[DynamicEntry]:
         """Return one discoverable command."""
@@ -126,8 +137,6 @@ def _server() -> tuple[FastMCP, _FakeAdapter]:
     adapter = _FakeAdapter(calls=[])
     register_meta_discovery(
         mcp,
-        allowed_tags_provider=lambda: set(),
-        lookup_component_tags=build_tag_lookup(mcp),
         dynamic_adapter=adapter,
     )
     return mcp, adapter
@@ -164,7 +173,7 @@ async def test_search_tool_rejects_invalid_limit_with_stable_code() -> None:
     """The wire contract exposes invalid page-size errors without transport detail."""
     mcp, _adapter = _server()
     async with Client(mcp) as client:
-        with pytest.raises(ToolError, match="invalid_limit"):
+        with pytest.raises(ToolError, match=r"\[invalid_arguments\]"):
             await client.call_tool("search_tools", {"query": "music", "limit": 0})
 
 
@@ -173,7 +182,7 @@ async def test_search_tool_rejects_non_integer_limits_with_stable_code(limit: ob
     """The MCP boundary must not coerce non-integer page sizes."""
     mcp, _adapter = _server()
     async with Client(mcp) as client:
-        with pytest.raises(ToolError, match="invalid_limit"):
+        with pytest.raises(ToolError, match=r"\[invalid_arguments\]"):
             await client.call_tool("search_tools", {"query": "music", "limit": limit})
 
 
@@ -181,7 +190,7 @@ async def test_search_tool_rejects_malformed_cursor_with_stable_code() -> None:
     """The wire contract exposes malformed cursor errors with a stable code."""
     mcp, _adapter = _server()
     async with Client(mcp) as client:
-        with pytest.raises(ToolError, match="invalid_cursor"):
+        with pytest.raises(ToolError, match=r"\[invalid_arguments\]"):
             await client.call_tool("search_tools", {"cursor": "not-json"})
 
 
@@ -190,31 +199,46 @@ async def test_search_tools_schema_advertises_pagination() -> None:
     mcp, _adapter = _server()
     async with Client(mcp) as client:
         tool = next(item for item in await client.list_tools() if item.name == "search_tools")
-    assert set(tool.inputSchema["properties"]) == {"query", "cursor", "limit"}
+    assert set(tool.inputSchema["properties"]) == {
+        "query",
+        "cursor",
+        "limit",
+        "include_top_schema",
+    }
     assert tool.outputSchema is not None
     assert {"mode", "items", "total", "next_cursor", "catalog_revision"} <= set(
         tool.outputSchema["properties"]
     )
 
 
-async def test_call_tool_rejects_retired_name_with_concrete_migration() -> None:
-    """Legacy names remain actionable hints but never redirect to executable recipes."""
+async def test_search_can_include_only_the_top_result_schema() -> None:
+    """Opt-in discovery embeds one schema without expanding the whole catalog."""
     mcp, _adapter = _server()
     async with Client(mcp) as client:
-        with pytest.raises(ToolError, match="ma_api:players/all"):
-            await client.call_tool("call_tool", {"name": "players_list_players"})
+        result = await client.call_tool(
+            "search_tools",
+            {"query": "playback", "include_top_schema": True},
+        )
+    assert result.structured_content is not None
+    items = result.structured_content["items"]
+    assert items
+    assert items[0]["schema"]["name"] == items[0]["name"]
+    assert all("schema" not in item for item in items[1:])
 
 
-async def test_search_returns_retired_alias_as_non_executable_migration_hint() -> None:
-    """Even aggregate retirements are discoverable but cannot redirect execution."""
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"include_top_schema": True},
+        {"query": "playback", "cursor": "opaque", "include_top_schema": True},
+    ],
+)
+async def test_top_schema_requires_query_without_cursor(arguments: dict[str, object]) -> None:
+    """The shortcut cannot expand catalog browsing or continuation pages."""
     mcp, _adapter = _server()
     async with Client(mcp) as client:
-        search = await client.call_tool("search_tools", {"query": "config_list_targets"})
-        with pytest.raises(ToolError, match="Use search_tools"):
-            await client.call_tool("call_tool", {"name": "config_list_targets"})
-    assert search.structured_content is not None
-    assert search.structured_content["items"][0]["name"] == "config_list_targets"
-    assert "Use search_tools" in search.structured_content["items"][0]["description"]
+        with pytest.raises(ToolError, match=r"\[invalid_arguments\]"):
+            await client.call_tool("search_tools", arguments)
 
 
 def _meta_service(adapter: DynamicAdapter) -> Any:
@@ -262,6 +286,13 @@ class _SnapshotAdapter:
     async def visible_catalog(self) -> CatalogView:
         """Make all test entries visible."""
         return CatalogView(self.snapshot.fingerprint, self.snapshot.entries)
+
+    async def catalog_context(self) -> RequestCatalogContext:
+        """Return the fixture snapshot and its matching visible view."""
+        return RequestCatalogContext(
+            self.snapshot,
+            CatalogView(self.snapshot.fingerprint, self.snapshot.entries),
+        )
 
     async def call(
         self,
@@ -347,9 +378,12 @@ async def test_visibility_change_invalidates_cursor_without_leaking_hidden_name(
     class _VisibilityAdapter(_SnapshotAdapter):
         restricted = False
 
-        async def visible_catalog(self) -> CatalogView:
+        async def catalog_context(self) -> RequestCatalogContext:
             entries = self.snapshot.entries[:-1] if self.restricted else self.snapshot.entries
-            return CatalogView(self.snapshot.fingerprint, entries)
+            return RequestCatalogContext(
+                self.snapshot,
+                CatalogView(self.snapshot.fingerprint, entries),
+            )
 
     adapter = _VisibilityAdapter(_catalog_snapshot())
     service = _meta_service(adapter)
@@ -363,8 +397,8 @@ async def test_visibility_change_invalidates_cursor_without_leaking_hidden_name(
     assert hidden_name not in {item["name"] for item in restricted["items"]}
 
 
-async def test_search_retries_when_registry_changes_between_catalog_reads() -> None:
-    """Search retries so metadata and returned descriptions share one generation."""
+async def test_search_uses_one_request_catalog_context() -> None:
+    """Search never composes a view and snapshot from different generations."""
     first = CatalogSnapshot(
         (1, "test", (("music/first", 1),)),
         (_catalog_entry("ma_api:music/first", "Original collection."),),
@@ -375,21 +409,19 @@ async def test_search_retries_when_registry_changes_between_catalog_reads() -> N
     )
 
     class _ChangingAdapter(_SnapshotAdapter):
-        def __init__(self) -> None:
-            super().__init__(first)
-            self.changed = False
-
         async def base_snapshot(self) -> CatalogSnapshot:
-            """Replace the live registry after the first visible-catalog read."""
-            self.changed = True
-            return second
+            raise AssertionError("discovery must not read the base snapshot separately")
 
         async def visible_catalog(self) -> CatalogView:
-            """Return whichever generation is visible at this instant."""
-            snapshot = second if self.changed else first
-            return CatalogView(snapshot.fingerprint, snapshot.entries)
+            raise AssertionError("discovery must not read the request view separately")
 
-    service = _meta_service(_ChangingAdapter())
+        async def catalog_context(self) -> RequestCatalogContext:
+            return RequestCatalogContext(
+                second,
+                CatalogView(second.fingerprint, second.entries),
+            )
+
+    service = _meta_service(_ChangingAdapter(first))
     assert (await service.discover("replacement"))["items"] == [
         {
             "name": "ma_api:music/replacement",
@@ -397,77 +429,6 @@ async def test_search_retries_when_registry_changes_between_catalog_reads() -> N
             "policy_mode": "confirm",
         }
     ]
-
-
-async def test_persistent_catalog_churn_stops_after_three_attempts(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Discovery yields between retries and fails instead of spinning forever."""
-
-    class _ChurningAdapter(_SnapshotAdapter):
-        visible_calls = 0
-        snapshot_calls = 0
-
-        async def visible_catalog(self) -> CatalogView:
-            self.visible_calls += 1
-            fingerprint = (1, "visible", (("music/search", self.visible_calls),))
-            return CatalogView(fingerprint, ())
-
-        async def base_snapshot(self) -> CatalogSnapshot:
-            self.snapshot_calls += 1
-            fingerprint = (1, "snapshot", (("music/search", self.snapshot_calls),))
-            return CatalogSnapshot(fingerprint, ())
-
-    adapter = _ChurningAdapter(_catalog_snapshot())
-    service = _meta_service(adapter)
-    sleep = AsyncMock()
-    monkeypatch.setattr("provider.meta_discovery.asyncio.sleep", sleep)
-
-    with pytest.raises(PaginationError) as exc_info:
-        await service.discover()
-
-    assert exc_info.value.code == "catalog_changed"
-    assert str(exc_info.value) == "catalog changed during discovery; retry without a cursor"
-    assert adapter.visible_calls == adapter.snapshot_calls == 3
-    assert sleep.await_args_list == [call(0), call(0)]
-
-
-async def test_persistent_catalog_churn_has_consistent_tool_and_resource_guidance() -> None:
-    """Both public discovery routes tell clients to restart after live catalog churn."""
-
-    class _ChurningAdapter(_SnapshotAdapter):
-        def __init__(self) -> None:
-            super().__init__(_catalog_snapshot())
-            self.calls = 0
-
-        async def visible_catalog(self) -> CatalogView:
-            """Expose a catalog generation that changes before its snapshot is read."""
-            self.calls += 1
-            fingerprint = (1, "visible", (("music/search", self.calls),))
-            return CatalogView(fingerprint, self.snapshot.entries)
-
-        async def base_snapshot(self) -> CatalogSnapshot:
-            """Expose the next generation, modelling persistent registry churn."""
-            fingerprint = (1, "snapshot", (("music/search", self.calls),))
-            return CatalogSnapshot(fingerprint, self.snapshot.entries)
-
-    mcp: FastMCP = FastMCP(name="catalog-churn-test")
-    register_meta_discovery(
-        mcp,
-        allowed_tags_provider=set,
-        lookup_component_tags=build_tag_lookup(mcp),
-        dynamic_adapter=_ChurningAdapter(),
-    )
-
-    async with Client(mcp) as client:
-        with pytest.raises(ToolError) as tool_error:
-            await client.call_tool("search_tools", {"query": "music"})
-        with pytest.raises(McpError) as resource_error:
-            await client.read_resource("catalog://commands?limit=2")
-
-    for error in (tool_error.value, resource_error.value):
-        assert "catalog_changed" in str(error)
-        assert "retry without a cursor" in str(error)
 
 
 async def test_parallel_searches_contend_for_one_awaitable_index_build(
@@ -621,7 +582,7 @@ async def test_old_curated_name_is_not_callable() -> None:
     """Legacy public names are a breaking migration, not hidden aliases."""
     mcp, _adapter = _server()
     async with Client(mcp) as client:
-        with pytest.raises(ToolError, match="ma_api:players/cmd/play"):
+        with pytest.raises(ToolError, match=r"\[invalid_arguments\]"):
             await client.call_tool("call_tool", {"name": "playback_play", "arguments": {}})
         with pytest.raises(ToolError):
             await client.call_tool("playback_play", {"player_id": "kitchen"})
@@ -667,10 +628,10 @@ def _real_adapter(
     handler: Any,
     *,
     scope_checker: Any = None,
-    allowed_tags: set[str] | None = None,
+    allowed_capabilities: set[str] | None = None,
     user: Any = None,
     audit_sink: Any = None,
-) -> DynamicAPIAdapter:
+) -> _TestDynamicAPIAdapter:
     """Build an authenticated adapter around one fake MA handler."""
     mass = MagicMock()
     mass.command_handlers = {handler.command: handler}
@@ -678,22 +639,37 @@ def _real_adapter(
     mass.webserver.auth.get_user = AsyncMock(return_value=user)
     mass.webserver.auth.authenticate_with_token = AsyncMock(return_value=user)
     token = AccessToken(token="secret", client_id="u1", scopes=[])
-    return DynamicAPIAdapter(
+    adapter = _TestDynamicAPIAdapter(
         mass,
         auth_required_provider=lambda: True,
         token_provider=lambda: token,
         scope_checker=scope_checker or (lambda _user, _scope: True),
-        allowed_tags_provider=lambda: (
-            allowed_tags if allowed_tags is not None else {str(tag) for tag in Tag}
+        policy_provider=lambda _bearer: policy_snapshot(
+            PolicyProfile.CUSTOM,
+            {
+                str(capability): (
+                    PolicyMode.ALLOW
+                    if str(capability) in adapter._test_allowed_capabilities_provider()
+                    else PolicyMode.DENY
+                )
+                for capability in Capability
+            },
         ),
+        default_policy_provider=lambda: policy_snapshot(PolicyProfile.READ_ONLY),
         audit_sink=audit_sink,
     )
+    adapter._test_allowed_capabilities_provider = lambda: (
+        allowed_capabilities
+        if allowed_capabilities is not None
+        else {str(capability) for capability in Capability}
+    )
+    return adapter
 
 
 def _bypass_ma_argument_parser(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep authorization tests independent of MA parser optional dependencies."""
     monkeypatch.setattr(
-        "provider.dynamic_api.CompiledSignature.parse",
+        "provider.dynamic_signatures.CompiledSignature.parse",
         lambda _signature, arguments: dict(arguments),
     )
 
@@ -774,6 +750,53 @@ async def test_registry_replacement_changes_fingerprint_without_restart() -> Non
     assert second.entries[0].handler is replacement_handler
 
 
+async def test_security_and_schema_descriptors_invalidate_catalog_snapshot() -> None:
+    """Changing live scope or documentation must invalidate compiled binders and schemas."""
+
+    async def search(search_query: str) -> list[str]:
+        """Original catalog description."""
+        return [search_query]
+
+    handler = _handler("music/search", search)
+    adapter = _real_adapter(handler)
+    first = await adapter.base_snapshot()
+
+    handler.required_scope = "library.write"
+    search.__doc__ = "Updated catalog description."
+    second = await adapter.base_snapshot()
+
+    assert second.fingerprint != first.fingerprint
+    assert second.entries[0].description == "Updated catalog description."
+    assert second.entries[0].required_scope == "library.write"
+    assert second.entries[0].compiled_signature is not first.entries[0].compiled_signature
+
+
+async def test_catalog_snapshot_has_immutable_constant_time_name_lookup() -> None:
+    """Schema and execution lookup must use the snapshot's immutable name map."""
+
+    async def search(search_query: str) -> list[str]:
+        return [search_query]
+
+    snapshot = await _real_adapter(_handler("music/search", search)).base_snapshot()
+
+    assert snapshot.by_name["ma_api:music/search"] is snapshot.entries[0]
+    with pytest.raises(TypeError):
+        snapshot.by_name["ma_api:music/other"] = snapshot.entries[0]  # type: ignore[index]
+
+
+async def test_request_catalog_context_uses_one_registry_generation() -> None:
+    """A request view and its base snapshot must be captured from one generation."""
+
+    async def search(search_query: str) -> list[str]:
+        return [search_query]
+
+    adapter = _real_adapter(_handler("music/search", search))
+    context = await adapter.catalog_context()
+
+    assert context.snapshot.fingerprint == context.view.fingerprint
+    assert context.view.by_name["ma_api:music/search"].name == "ma_api:music/search"
+
+
 async def test_registry_validity_changes_fingerprint_and_base_diagnostics() -> None:
     """Empty valid and invalid registries never share cached availability state."""
 
@@ -832,7 +855,8 @@ async def test_cached_snapshot_keeps_visibility_request_specific() -> None:
         auth_required_provider=lambda: True,
         token_provider=current_token.get,
         scope_checker=lambda user, scope: scope in user.scopes,
-        allowed_tags_provider=lambda: {str(tag) for tag in Tag},
+        policy_provider=lambda _bearer: policy_snapshot(PolicyProfile.TRUSTED),
+        default_policy_provider=lambda: policy_snapshot(PolicyProfile.READ_ONLY),
     )
 
     async def catalog_for(user_id: str) -> Any:
@@ -937,7 +961,7 @@ async def test_adapter_executes_strictly_and_bounds_result() -> None:
 
     adapter = _real_adapter(_handler("music/search", values))
     ctx = MagicMock(session_id="session-1")
-    with pytest.raises(ToolError, match="Unexpected argument\\(s\\): typo"):
+    with pytest.raises(ToolError, match=r"\[invalid_arguments\]"):
         await adapter.call(
             "ma_api:music/search",
             {"prefix": "x", "typo": True},
@@ -967,7 +991,7 @@ async def test_empty_upstream_exception_names_type_and_command() -> None:
         raise IndexError
 
     adapter = _real_adapter(_handler("music/search", search))
-    with pytest.raises(ToolError, match=r"music/search.*IndexError"):
+    with pytest.raises(ToolError, match=r"\[execution_failed\]"):
         await adapter.call(
             "ma_api:music/search",
             {"search_query": "missing"},
@@ -991,6 +1015,8 @@ async def test_adapter_hides_catalog_when_mcp_auth_is_disabled() -> None:
         auth_required_provider=lambda: False,
         token_provider=lambda: None,
         scope_checker=lambda _user, _scope: True,
+        policy_provider=lambda _bearer: policy_snapshot(PolicyProfile.READ_ONLY),
+        default_policy_provider=lambda: policy_snapshot(PolicyProfile.READ_ONLY),
     )
     assert await adapter.visible_entries() == []
 
@@ -1425,7 +1451,7 @@ async def test_dynamic_catalog_rejects_unknown_scopes_before_ma_checker(scope: o
     adapter = _real_adapter(handler, scope_checker=scope_checker)
 
     assert await adapter.visible_entries() == []
-    with pytest.raises(ToolError, match="not found or not permitted"):
+    with pytest.raises(ToolError, match=r"\[not_found_or_forbidden\]"):
         await adapter.call(
             "ma_api:music/search",
             {},
@@ -1589,7 +1615,7 @@ async def test_denied_auth_command_cannot_be_called_directly() -> None:
         elicit=AsyncMock(return_value=SimpleNamespace(action="accept", data=True))
     )
 
-    with pytest.raises(ToolError, match="not found or not permitted"):
+    with pytest.raises(ToolError, match=r"\[not_found_or_forbidden\]"):
         await adapter.call(
             "ma_api:auth/token/create",
             {},
@@ -1608,8 +1634,10 @@ async def test_native_command_requires_its_live_permission_tag() -> None:
         return None
 
     handler = _handler("music/search", operation, "library.read")
-    assert await _real_adapter(handler, allowed_tags=set()).visible_entries() == []
-    visible = await _real_adapter(handler, allowed_tags={str(Tag.QUERY_LIBRARY)}).visible_entries()
+    assert await _real_adapter(handler, allowed_capabilities=set()).visible_entries() == []
+    visible = await _real_adapter(
+        handler, allowed_capabilities={str(Capability.QUERY_LIBRARY)}
+    ).visible_entries()
     assert [entry.name for entry in visible] == ["ma_api:music/search"]
 
 
@@ -1617,7 +1645,6 @@ async def test_native_command_requires_its_live_permission_tag() -> None:
     ("command", "parameter", "user_filter"),
     [
         ("players/get", "player_id", "player_filter"),
-        ("config/providers/get", "instance_id", "provider_filter"),
     ],
 )
 async def test_invocation_rejects_targets_outside_user_filters(
@@ -1749,11 +1776,11 @@ async def test_queue_delete_has_no_classifier_owned_confirmation() -> None:
 
     adapter = _real_adapter(
         _handler("player_queues/clear", clear, "queues.control"),
-        allowed_tags={str(Tag.DELETE_QUEUE)},
+        allowed_capabilities={str(Capability.DELETE_QUEUE)},
     )
     entry = (await adapter.visible_entries())[0]
     assert entry.decision is not None
-    assert entry.decision.required_capabilities == frozenset({str(Tag.DELETE_QUEUE)})
+    assert entry.decision.required_capabilities == frozenset({str(Capability.DELETE_QUEUE)})
     await adapter.call(
         "ma_api:player_queues/clear",
         {"queue_id": "kitchen"},
@@ -1788,7 +1815,7 @@ async def test_playlist_provider_alias_is_filtered_before_confirmation() -> None
             create_playlist,
             "library.write",
         ),
-        allowed_tags={str(Tag.EDIT_PLAYLISTS)},
+        allowed_capabilities={str(Capability.EDIT_PLAYLISTS)},
         user=user,
     )
     with pytest.raises(ToolError, match="not permitted"):
@@ -1803,7 +1830,7 @@ async def test_playlist_provider_alias_is_filtered_before_confirmation() -> None
     assert called is False
 
 
-@pytest.mark.parametrize("revoked", ["tag", "scope"])
+@pytest.mark.parametrize("revoked", ["capability", "scope"])
 async def test_native_live_authorization_revocation_prevents_elicitation(
     revoked: str,
 ) -> None:
@@ -1818,20 +1845,22 @@ async def test_native_live_authorization_revocation_prevents_elicitation(
 
     adapter = _real_adapter(
         _handler("music/write", write, "library.write"),
-        allowed_tags={str(Tag.EDIT_LIBRARY)},
+        allowed_capabilities={str(Capability.EDIT_LIBRARY)},
     )
 
-    def tags_provider() -> set[str]:
+    def capabilities_provider() -> set[str]:
         nonlocal tag_checks
         tag_checks += 1
-        return {str(Tag.EDIT_LIBRARY)} if revoked != "tag" or tag_checks == 1 else set()
+        return (
+            {str(Capability.EDIT_LIBRARY)} if revoked != "capability" or tag_checks == 1 else set()
+        )
 
     def scope_checker(_user: Any, _scope: Any) -> bool:
         nonlocal scope_checks
         scope_checks += 1
         return revoked != "scope" or scope_checks == 1
 
-    adapter._allowed_tags_provider = tags_provider
+    adapter._test_allowed_capabilities_provider = capabilities_provider
     adapter._scope_checker = scope_checker
     with pytest.raises(ToolError, match="not permitted"):
         await adapter.call(
@@ -1845,13 +1874,13 @@ async def test_native_live_authorization_revocation_prevents_elicitation(
     assert called is False
 
 
-@pytest.mark.parametrize("revoked", ["handler", "tag", "scope"])
+@pytest.mark.parametrize("revoked", ["handler", "capability", "scope"])
 async def test_native_authorization_revoked_between_checks_prevents_execution(
     revoked: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Authorization changes at the call boundary are rechecked before invocation."""
     called: list[str] = []
-    state = {"tag": True, "scope": True}
+    state = {"capability": True, "scope": True}
 
     async def write() -> None:
         called.append("stale")
@@ -1862,9 +1891,11 @@ async def test_native_authorization_revoked_between_checks_prevents_execution(
     handler = _handler("music/sync", write, "library.write")
     adapter = _real_adapter(
         handler,
-        allowed_tags={str(Tag.EDIT_LIBRARY)},
+        allowed_capabilities={str(Capability.EDIT_LIBRARY)},
     )
-    adapter._allowed_tags_provider = lambda: {str(Tag.EDIT_LIBRARY)} if state["tag"] else set()
+    adapter._test_allowed_capabilities_provider = lambda: (
+        {str(Capability.EDIT_LIBRARY)} if state["capability"] else set()
+    )
     adapter._scope_checker = lambda _user, _scope: state["scope"]
 
     async def revoke_during_confirmation(*_args: Any, **_kwargs: Any) -> None:
@@ -1908,7 +1939,7 @@ async def test_fresh_authentication_rejects_removed_or_disabled_user_after_confi
 
     adapter = _real_adapter(
         _handler("config/providers/reload", reload_provider, "config.providers.write"),
-        allowed_tags={str(Tag.CONFIG_WRITE_PROVIDER)},
+        allowed_capabilities={str(Capability.CONFIG_WRITE_PROVIDER)},
         user=initial_user,
     )
     adapter.mass.webserver.auth.get_user = AsyncMock(side_effect=lambda _user_id: current_user)
@@ -1952,7 +1983,7 @@ async def test_revoked_bearer_token_after_confirmation_prevents_execution(
 
     adapter = _real_adapter(
         _handler("config/providers/reload", reload_provider, "config.providers.write"),
-        allowed_tags={str(Tag.CONFIG_WRITE_PROVIDER)},
+        allowed_capabilities={str(Capability.CONFIG_WRITE_PROVIDER)},
         audit_sink=audit_records.append,
     )
     adapter.mass.webserver.auth.authenticate_with_token = AsyncMock(return_value=None)
@@ -1985,7 +2016,7 @@ async def test_valid_bearer_revalidation_uses_the_fresh_user_after_confirmation(
 
     adapter = _real_adapter(
         _handler("config/providers/reload", reload_provider, "config.providers.write"),
-        allowed_tags={str(Tag.CONFIG_WRITE_PROVIDER)},
+        allowed_capabilities={str(Capability.CONFIG_WRITE_PROVIDER)},
     )
     adapter.mass.webserver.auth.authenticate_with_token = AsyncMock(return_value=fresh_user)
 
@@ -2017,7 +2048,7 @@ async def test_post_confirmation_revalidation_rejects_a_different_user(
 
     adapter = _real_adapter(
         _handler("config/providers/reload", reload_provider, "config.providers.write"),
-        allowed_tags={str(Tag.CONFIG_WRITE_PROVIDER)},
+        allowed_capabilities={str(Capability.CONFIG_WRITE_PROVIDER)},
     )
     adapter.mass.webserver.auth.authenticate_with_token = AsyncMock(
         return_value=SimpleNamespace(user_id="other-user", enabled=True, role="admin")
@@ -2056,7 +2087,7 @@ async def test_target_filter_revoked_during_confirmation_prevents_execution(
 
     adapter = _real_adapter(
         _handler("player_queues/clear", clear, "queues.control"),
-        allowed_tags={str(Tag.DELETE_QUEUE)},
+        allowed_capabilities={str(Capability.DELETE_QUEUE)},
         user=current_user,
     )
     adapter.mass.webserver.auth.get_user = AsyncMock(side_effect=lambda _user_id: current_user)
@@ -2076,7 +2107,7 @@ async def test_target_filter_revoked_during_confirmation_prevents_execution(
 
     monkeypatch.setattr(adapter, "_confirm", AsyncMock(side_effect=revoke_filter))
 
-    with pytest.raises(ToolError, match="target is not permitted"):
+    with pytest.raises(ToolError, match=r"\[not_found_or_forbidden\]"):
         await adapter.call(
             "ma_api:player_queues/clear",
             {"queue_id": "kitchen"},
@@ -2107,11 +2138,11 @@ async def test_secret_tag_revoked_during_confirmation_prevents_config_execution(
 
     adapter = _real_adapter(
         _handler("config/providers/save", save_provider_config, "config.providers.write"),
-        allowed_tags=set(),
+        allowed_capabilities=set(),
     )
-    adapter._allowed_tags_provider = lambda: {
-        str(Tag.CONFIG_WRITE_PROVIDER),
-        *({str(Tag.CONFIG_WRITE_SECRET)} if state["secret"] else set()),
+    adapter._test_allowed_capabilities_provider = lambda: {
+        str(Capability.CONFIG_WRITE_PROVIDER),
+        *({str(Capability.CONFIG_WRITE_SECRET)} if state["secret"] else set()),
     }
     adapter.mass.config.get_provider_config_entries = AsyncMock(
         return_value=[ConfigEntry(key="token", type=ConfigEntryType.SECURE_STRING, label="Token")]
@@ -2122,7 +2153,7 @@ async def test_secret_tag_revoked_during_confirmation_prevents_config_execution(
 
     monkeypatch.setattr(adapter, "_confirm", AsyncMock(side_effect=revoke_secret))
 
-    with pytest.raises(ToolError, match="config:write:secret"):
+    with pytest.raises(ToolError, match=r"\[not_found_or_forbidden\]"):
         await adapter.call(
             "ma_api:config/providers/save",
             {
@@ -2197,7 +2228,7 @@ async def test_secure_config_value_is_reclassified_after_confirmation_before_ser
                 "players": "config.players.read",
             }[command.split("/")[1]],
         ),
-        allowed_tags={str(Tag.CONFIG_READ)},
+        allowed_capabilities={str(Capability.CONFIG_READ)},
     )
     schema_getter = AsyncMock(
         side_effect=lambda *_args: [
@@ -2257,7 +2288,7 @@ async def test_secure_config_value_is_reclassified_after_execution_before_serial
 
     adapter = _real_adapter(
         _handler("config/providers/get_value", get_value, "config.providers.read"),
-        allowed_tags={str(Tag.CONFIG_READ)},
+        allowed_capabilities={str(Capability.CONFIG_READ)},
     )
     schema_getter = AsyncMock(
         side_effect=lambda *_args: [
@@ -2301,7 +2332,7 @@ async def test_config_value_that_stops_being_secure_during_execution_stays_maske
 
     adapter = _real_adapter(
         _handler("config/core/get_value", get_value, "config.core.read"),
-        allowed_tags={str(Tag.CONFIG_READ)},
+        allowed_capabilities={str(Capability.CONFIG_READ)},
     )
     adapter.mass.config.get_core_config_entries = AsyncMock(
         side_effect=lambda *_args: [
@@ -2340,14 +2371,14 @@ async def test_config_value_postflight_schema_failure_never_serializes_result(
 
     adapter = _real_adapter(
         _handler("config/players/get_value", get_value, "config.players.read"),
-        allowed_tags={str(Tag.CONFIG_READ)},
+        allowed_capabilities={str(Capability.CONFIG_READ)},
     )
     visible_entry = ConfigEntry(key="token", type=ConfigEntryType.STRING, label="Token")
     adapter.mass.config.get_player_config_entries = AsyncMock(
         side_effect=[[visible_entry], [visible_entry], RuntimeError("schema disappeared")]
     )
 
-    with pytest.raises(ToolError, match="Unable to classify config value") as error:
+    with pytest.raises(ToolError, match=r"\[execution_failed\]") as error:
         await adapter.call(
             "ma_api:config/players/get_value",
             {"player_id": "kitchen", "key": "token"},
@@ -2375,11 +2406,11 @@ async def test_flow_category_revoked_during_confirmation_prevents_execution(
 
     adapter = _real_adapter(
         _handler("config/flows/submit", submit_flow),
-        allowed_tags=set(),
+        allowed_capabilities=set(),
     )
-    adapter._allowed_tags_provider = lambda: {
-        str(Tag.CONFIG_WRITE_PLAYER),
-        *({str(Tag.CONFIG_WRITE_PROVIDER)} if state["provider"] else set()),
+    adapter._test_allowed_capabilities_provider = lambda: {
+        str(Capability.CONFIG_WRITE_PLAYER),
+        *({str(Capability.CONFIG_WRITE_PROVIDER)} if state["provider"] else set()),
     }
     adapter.mass.config.get_setup_flow_required_scope = lambda _flow_id: "config.providers.write"
     step = SimpleNamespace(
@@ -2397,7 +2428,7 @@ async def test_flow_category_revoked_during_confirmation_prevents_execution(
 
     monkeypatch.setattr(adapter, "_confirm", AsyncMock(side_effect=revoke_provider_category))
 
-    with pytest.raises(ToolError, match="config:write:provider"):
+    with pytest.raises(ToolError, match=r"\[not_found_or_forbidden\]"):
         await adapter.call(
             "ma_api:config/flows/submit",
             {"flow_id": "provider-flow", "values": {"name": "Kitchen"}},
@@ -2423,7 +2454,7 @@ async def test_player_only_tag_executes_a_player_setup_flow(
 
     adapter = _real_adapter(
         _handler("config/flows/submit", submit_flow),
-        allowed_tags={str(Tag.CONFIG_WRITE_PLAYER)},
+        allowed_capabilities={str(Capability.CONFIG_WRITE_PLAYER)},
     )
     adapter.mass.config.get_setup_flow_required_scope = lambda _flow_id: "config.players.write"
     step = SimpleNamespace(
@@ -2448,7 +2479,7 @@ async def test_player_only_tag_executes_a_player_setup_flow(
 async def test_provider_setup_flow_rejects_player_only_tag_before_confirmation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Catalog visibility does not let a player tag invoke a provider flow."""
+    """Catalog visibility does not let a player capability invoke a provider flow."""
     _bypass_ma_argument_parser(monkeypatch)
 
     async def submit_flow(flow_id: str, values: dict[str, Any]) -> None:
@@ -2456,7 +2487,7 @@ async def test_provider_setup_flow_rejects_player_only_tag_before_confirmation(
 
     adapter = _real_adapter(
         _handler("config/flows/submit", submit_flow),
-        allowed_tags={str(Tag.CONFIG_WRITE_PLAYER)},
+        allowed_capabilities={str(Capability.CONFIG_WRITE_PLAYER)},
     )
     adapter.mass.config.get_setup_flow_required_scope = lambda _flow_id: "config.providers.write"
     adapter.mass.config.get_setup_flow = AsyncMock(
@@ -2465,7 +2496,7 @@ async def test_provider_setup_flow_rejects_player_only_tag_before_confirmation(
         )
     )
 
-    with pytest.raises(ToolError, match="config:write:provider"):
+    with pytest.raises(ToolError, match=r"\[not_found_or_forbidden\]"):
         await adapter.call(
             "ma_api:config/flows/submit",
             {"flow_id": "provider-flow", "values": {"name": "Kitchen"}},
@@ -2495,12 +2526,12 @@ async def test_native_config_secret_denial_precedes_confirmation_and_target() ->
             save_provider_config,
             "config.providers.write",
         ),
-        allowed_tags={str(Tag.CONFIG_WRITE_PROVIDER)},
+        allowed_capabilities={str(Capability.CONFIG_WRITE_PROVIDER)},
     )
     adapter.mass.config.get_provider_config_entries = AsyncMock(
         return_value=[ConfigEntry(key="token", type=ConfigEntryType.SECURE_STRING, label="Token")]
     )
-    with pytest.raises(ToolError, match="config:write:secret"):
+    with pytest.raises(ToolError, match=r"\[not_found_or_forbidden\]"):
         await adapter.call(
             "ma_api:config/providers/save",
             {
@@ -2547,7 +2578,7 @@ async def test_impersonation_is_authorized_before_confirmation_and_execution() -
         side_effect=lambda identifier: caller if identifier == "u1" else target
     )
     adapter.mass.webserver.auth.get_user_by_username = AsyncMock(return_value=None)
-    with pytest.raises(ToolError, match="impersonate"):
+    with pytest.raises(ToolError, match=r"\[execution_failed\]"):
         await adapter.call(
             "ma_api:music/search",
             {"user": "u2"},

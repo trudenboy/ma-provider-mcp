@@ -26,6 +26,12 @@ three permanent MCP tools: `search_tools`, `get_tool_schema`, and `call_tool`. I
 mounted at `/mcp/v1` and reuses Music Assistant authentication, TLS, Origin checks,
 resources, and prompts.
 
+`search_tools` supports `include_top_schema: true` only with a non-empty query and no
+cursor; it adds a schema to the first ranked result. Search performs Unicode-aware
+normalization but no automatic translation. Enable **Enable MCP App** to add the
+single `app_music_assistant` tool. Its player/queue backend tools are visible only to
+the bundled Prefab renderer; non-App clients receive a text fallback.
+
 ## Setup
 
 Enable the provider in Music Assistant, then use **Open Connect Wizard** to create a
@@ -48,6 +54,9 @@ Assistant token ID:
 The secure default is `Read-only`. Stored v1 permission keys are ignored, so review
 the default and token overrides after upgrading. Confirmations are per call and never
 remembered.
+
+The Connect Wizard displays only the default profile name. Capability matrices and
+per-token overrides remain private to Music Assistant settings.
 
 Clients without MCP elicitation cannot execute `Confirm` operations. Keep the
 capability denied, use an elicitation-capable client, or deliberately set only the

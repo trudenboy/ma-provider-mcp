@@ -9,9 +9,9 @@ import json
 import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Literal, NotRequired, TypedDict, cast
+from typing import Any, Literal, NotRequired, TypedDict, cast
 
-from .dynamic_api import CatalogFingerprint, DynamicEntry
+from .catalog import CatalogFingerprint, DynamicEntry
 
 type DiscoveryMode = Literal["search", "catalog"]
 
@@ -27,6 +27,7 @@ class DiscoveryItem(TypedDict):
 
     name: str
     description: NotRequired[str]
+    schema: NotRequired[dict[str, Any]]
     policy_mode: Literal["allow", "confirm"]
 
 

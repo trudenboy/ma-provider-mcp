@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import math
 import re
+import time
 import unicodedata
 from collections import Counter
 from collections.abc import Mapping
@@ -17,6 +18,13 @@ from fastmcp.exceptions import NotFoundError, ToolError
 from mcp.types import ToolAnnotations
 from pydantic import WithJsonSchema
 
+from .catalog import (
+    CatalogFingerprint,
+    CatalogSnapshot,
+    CatalogView,
+    DynamicEntry,
+    RequestCatalogContext,
+)
 from .catalog_pagination import (
     CURSOR_VERSION,
     CursorState,
@@ -31,27 +39,16 @@ from .catalog_pagination import (
     resolve_limit,
 )
 from .catalog_resource import register_catalog_resource
-from .dynamic_api import (
-    LEGACY_MIGRATIONS,
-    CatalogFingerprint,
-    CatalogSnapshot,
-    CatalogView,
-    DynamicEntry,
-)
+from .errors import ToolFailureCode, tool_failure
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     from fastmcp import FastMCP
-
-    from .middleware import TagsLookup
 
 GET_TOOL_SCHEMA_NAME = "get_tool_schema"
 CALL_TOOL_NAME = "call_tool"
 SEARCH_TOOL_NAME = "search_tools"
 _META_NAMES = {CALL_TOOL_NAME, SEARCH_TOOL_NAME, GET_TOOL_SCHEMA_NAME}
 _TOKEN_RE = re.compile(r"[^\W_]+", re.UNICODE)
-_CATALOG_STABILIZATION_ATTEMPTS = 3
 
 
 def _discovery_policy_mode(entry: DynamicEntry) -> Literal["allow", "confirm"]:
@@ -67,6 +64,9 @@ class DynamicAdapter(Protocol):
 
     async def visible_catalog(self) -> CatalogView:
         """Return entries visible for the current request."""
+
+    async def catalog_context(self) -> RequestCatalogContext:
+        """Return a base snapshot and request view from one generation."""
 
     async def call(
         self,
@@ -171,9 +171,16 @@ class MetaDiscoveryService:
         *,
         cursor: str | None = None,
         limit: int | None = None,
+        include_top_schema: bool = False,
     ) -> DiscoveryPage:
         """Return one visible ranked-search or alphabetical-catalog page."""
+        started = time.perf_counter()
         explicit_query = normalize_query(query)
+        if include_top_schema and (not explicit_query or cursor is not None):
+            raise PaginationError(
+                "invalid_arguments",
+                "include_top_schema requires a non-empty query and no cursor",
+            )
         state = decode_cursor(cursor) if cursor is not None else None
         mode: DiscoveryMode
         if state is not None:
@@ -188,17 +195,9 @@ class MetaDiscoveryService:
             offset = 0
         page_limit = resolve_limit(mode, limit)
 
-        for attempt in range(_CATALOG_STABILIZATION_ATTEMPTS):
-            view = await self.adapter.visible_catalog()
-            snapshot = await self.adapter.base_snapshot()
-            if view.fingerprint == snapshot.fingerprint:
-                break
-            if attempt == _CATALOG_STABILIZATION_ATTEMPTS - 1:
-                raise PaginationError(
-                    "catalog_changed",
-                    "catalog changed during discovery; retry without a cursor",
-                )
-            await asyncio.sleep(0)
+        context = await self.adapter.catalog_context()
+        snapshot = context.snapshot
+        view = context.view
         visible = {entry.name: entry for entry in view.entries}
         revision = catalog_revision(snapshot.fingerprint, view.entries)
         if state is not None and state.revision != revision:
@@ -207,30 +206,13 @@ class MetaDiscoveryService:
                 "catalog changed; restart pagination without a cursor",
             )
 
-        index = await self._index_for(snapshot) if mode == "search" else None
-        legacy = LEGACY_MIGRATIONS.get(normalized_query) if mode == "search" else None
+        index: SearchIndex | None = None
+        if mode == "search":
+            index = await self._index_for(snapshot)
         ordered_items: list[DiscoveryItem]
-        if legacy is not None:
-            canonical = f"ma_api:{legacy.command}" if legacy.command is not None else None
-            if canonical is not None and canonical in visible:
-                ordered_items = [
-                    {
-                        "name": canonical,
-                        "description": visible[canonical].description,
-                        "policy_mode": _discovery_policy_mode(visible[canonical]),
-                    }
-                ]
-            else:
-                hint = canonical or legacy.message
-                ordered_items = [
-                    {
-                        "name": normalized_query,
-                        "description": f"Retired tool; use {hint}.",
-                        "policy_mode": "confirm",
-                    }
-                ]
-        elif mode == "search":
-            assert index is not None
+        if mode == "search":
+            if index is None:
+                raise PaginationError("catalog_changed", "catalog search index is unavailable")
             names = _rank(index, _tokens(normalized_query), allowed_names=set(visible))
             ordered_items = [
                 {
@@ -250,6 +232,9 @@ class MetaDiscoveryService:
         if state is not None and offset >= total:
             raise PaginationError("invalid_cursor", "cursor offset is outside the result set")
         page_items = ordered_items[offset : offset + page_limit]
+        if include_top_schema and page_items:
+            top_entry = visible[page_items[0]["name"]]
+            page_items[0]["schema"] = _schema_result(top_entry)
         next_offset = offset + len(page_items)
         next_cursor = (
             encode_cursor(
@@ -264,24 +249,21 @@ class MetaDiscoveryService:
             if next_offset < total
             else None
         )
-        return {
+        result: DiscoveryPage = {
             "mode": mode,
             "items": page_items,
             "total": total,
             "next_cursor": next_cursor,
             "catalog_revision": revision,
         }
+        recorder = getattr(self.adapter, "record_performance", None)
+        if callable(recorder):
+            recorder((time.perf_counter() - started) * 1000)
+        return result
 
     async def get_schema(self, tool_name: str) -> dict[str, Any]:
         """Return one current request-visible entry's complete schema descriptor."""
-        entry = next(
-            (
-                entry
-                for entry in (await self.adapter.visible_catalog()).entries
-                if entry.name == tool_name
-            ),
-            None,
-        )
+        entry = (await self.adapter.catalog_context()).view.by_name.get(tool_name)
         if entry is None:
             raise NotFoundError(f"Tool {tool_name!r} not found")
         return _schema_result(entry)
@@ -322,15 +304,10 @@ def _schema_result(entry: DynamicEntry) -> dict[str, Any]:
 def register_meta_discovery(
     mcp: FastMCP,
     *,
-    allowed_tags_provider: Callable[[], set[str]],
-    lookup_component_tags: TagsLookup,
     dynamic_adapter: DynamicAdapter,
-    enabled: Callable[[], bool] | None = None,
+    additional_public_tools: frozenset[str] = frozenset(),
 ) -> None:
     """Register the permanent direct three-tool discovery surface."""
-    # The adapter applies the same live tag closure as the request middleware.
-    # These parameters remain for compatibility with existing runtime wiring.
-    del allowed_tags_provider, lookup_component_tags, enabled
     service = MetaDiscoveryService(dynamic_adapter)
     register_catalog_resource(mcp, service)
 
@@ -348,20 +325,23 @@ def register_meta_discovery(
         query: str | None = None,
         cursor: str | None = None,
         limit: Annotated[Any, WithJsonSchema({"type": "integer"})] = None,
+        include_top_schema: bool = False,
     ) -> DiscoveryPage:
-        """
-        Search visible commands or browse the catalog.
-
-        Follow ``next_cursor`` for another page; fetch a schema only before invocation.
-
-        :param query: Search text, or empty to browse.
-        :param cursor: Previous page cursor.
-        :param limit: Page size, 1-50.
-        """
+        """Search visible commands or browse them with an opaque cursor."""
         try:
-            return await service.discover(query, cursor=cursor, limit=limit)
+            return await service.discover(
+                query,
+                cursor=cursor,
+                limit=limit,
+                include_top_schema=include_top_schema,
+            )
         except PaginationError as exc:
-            raise ToolError(f"{exc.code}: {exc}") from exc
+            code = (
+                ToolFailureCode.CATALOG_CHANGED
+                if exc.code == "catalog_changed"
+                else ToolFailureCode.INVALID_ARGUMENTS
+            )
+            raise tool_failure(code, str(exc)) from exc
 
     @mcp.tool(
         name=GET_TOOL_SCHEMA_NAME,
@@ -382,7 +362,13 @@ def register_meta_discovery(
 
         :param tool_name: Exact canonical ``ma_api:*`` name from ``search_tools``.
         """
-        return await service.get_schema(tool_name)
+        try:
+            return await service.get_schema(tool_name)
+        except NotFoundError as exc:
+            raise tool_failure(
+                ToolFailureCode.NOT_FOUND_OR_FORBIDDEN,
+                "Tool was not found or is not permitted",
+            ) from exc
 
     @mcp.tool(name=CALL_TOOL_NAME)  # type: ignore[untyped-decorator, unused-ignore]
     async def call_tool(
@@ -402,15 +388,11 @@ def register_meta_discovery(
         :param fields: Optional top-level fields to retain.
         :param max_items: Optional smaller item limit.
         """
-        if replacement := LEGACY_MIGRATIONS.get(name):
-            hint = (
-                f"ma_api:{replacement.command}"
-                if replacement.command is not None
-                else replacement.message
-            )
-            raise ToolError(f"Tool {name!r} was retired; use {hint!r}")
         if not name.startswith("ma_api:"):
-            raise ToolError(f"Tool {name!r} is not a canonical ma_api command")
+            raise tool_failure(
+                ToolFailureCode.INVALID_ARGUMENTS,
+                "Tool name must be a canonical ma_api command",
+            )
         if ctx is None:  # pragma: no cover - FastMCP always injects Context
             raise ToolError("MCP request context is unavailable")
         return await dynamic_adapter.call(
@@ -424,4 +406,4 @@ def register_meta_discovery(
 
     # Only the permanent discovery surface is exposed to model clients.
     mcp.disable(components={"tool"})
-    mcp.enable(names=_META_NAMES, components={"tool"})
+    mcp.enable(names=_META_NAMES | additional_public_tools, components={"tool"})

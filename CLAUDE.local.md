@@ -9,9 +9,10 @@ Provider repo for the Music Assistant `mcp_server` plugin. Synced into the
 ## Architecture
 
 - `provider/` — runtime code; `manifest.json` declares `type=plugin`, `domain=mcp_server`.
-- `provider/server.py::MCPServerRuntime` builds one root `FastMCP` with exactly three
-  permanent meta-tools: `search_tools`, `get_tool_schema`, and `call_tool`.
-- `provider/dynamic_api.py::DynamicAPIAdapter` exposes native `ma_api` commands from
+- `provider/server.py::MCPServerRuntime` builds one root `FastMCP` with three default
+  meta-tools and optionally one model-visible `app_music_assistant` entry.
+- `provider/catalog.py` owns immutable registry snapshots and request views;
+  `provider/execution.py::DynamicAPIAdapter` exposes native `ma_api` commands from
   MA's live command-handler registry. Eight registered provider-extension handlers
   remain available through that catalog rather than a sub-server tool surface.
 - `provider/catalog_pagination.py` compiles stable paginated catalog pages and
@@ -21,7 +22,8 @@ Provider repo for the Music Assistant `mcp_server` plugin. Synced into the
   under MA's webserver via `http_bridge.py`.
 - `provider/auth.py::MASTokenVerifier` is the only auth code — delegates to
   `mass.webserver.auth.authenticate_with_token`.
-- `provider/tags.py` maps the 25 permission `ConfigEntry` booleans to FastMCP tags.
+- `provider/capabilities.py` defines the 26 stable capability strings;
+  `policy.py` and `policy_config.py` resolve immutable per-request policy snapshots.
 
 ## Conventions
 
@@ -30,7 +32,8 @@ Provider repo for the Music Assistant `mcp_server` plugin. Synced into the
 - Stdlib `dataclass` for response shapes (FastMCP auto-generates JSON schema).
 - Reuse `music_assistant_models` types in resource responses; use `*Brief` dataclasses
   in tool responses to keep payloads small for LLM context.
-- Domain-component tool decorators always include `tags={Tag.…}`. The catalog
+- Domain-component tool decorators use `tags={Capability.…}` only for actual FastMCP
+  component tags. The catalog
   resource is intentionally untagged infrastructure and applies visibility per entry.
 
 ## AI assistants — commit attribution

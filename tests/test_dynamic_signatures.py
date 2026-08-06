@@ -14,7 +14,7 @@ from music_assistant_models.media_items import Track  # noqa: TC002
 
 from provider.dynamic_api import DynamicAPIAdapter
 from provider.dynamic_signatures import UnsupportedSignatureError, compile_signature
-from provider.tags import Tag
+from provider.policy import PolicyProfile, policy_snapshot
 
 
 async def library_items(
@@ -72,7 +72,8 @@ def _adapter(handler: Any) -> DynamicAPIAdapter:
         auth_required_provider=lambda: True,
         token_provider=lambda: AccessToken(token="secret", client_id="u1", scopes=[]),
         scope_checker=lambda _user, _scope: True,
-        allowed_tags_provider=lambda: {str(Tag.QUERY_LIBRARY)},
+        policy_provider=lambda _bearer: policy_snapshot(PolicyProfile.READ_ONLY),
+        default_policy_provider=lambda: policy_snapshot(PolicyProfile.READ_ONLY),
     )
 
 

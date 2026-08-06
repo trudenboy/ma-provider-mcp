@@ -152,6 +152,15 @@ async def health(
             log_errors = await asyncio.to_thread(SafeLogTail(mass).count_errors_last_5min)
         except Exception:
             disabled_capabilities.append("DEBUG_LOGS")
+    dynamic_diagnostics = (
+        dict(dynamic_diagnostics_provider()) if dynamic_diagnostics_provider is not None else None
+    )
+    performance = (
+        dict(dynamic_diagnostics.get("performance", {}))
+        if dynamic_diagnostics is not None
+        and isinstance(dynamic_diagnostics.get("performance"), Mapping)
+        else {}
+    )
     return HealthSummary(
         providers_loaded=loaded,
         providers_disabled=disabled,
@@ -169,15 +178,12 @@ async def health(
         events_per_min_by_type=events_per_min,
         log_errors_last_5min=log_errors,
         disabled_capabilities=disabled_capabilities,
-        dynamic_catalog=(
-            dict(dynamic_diagnostics_provider())
-            if dynamic_diagnostics_provider is not None
-            else None
-        ),
+        dynamic_catalog=dynamic_diagnostics,
         policy_schema_version=policy_schema_version,
         policy_profile=policy_profile,
         token_resolution_failures=token_resolution_failures,
         event_buffer_active=stats is not None and stats.subscribed_since is not None,
+        performance=performance,
     )
 
 

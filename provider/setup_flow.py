@@ -15,7 +15,7 @@ from .constants import (
     CONF_TRUST_FORWARDED_PROTO,
     DEFAULT_MOUNT_PATH,
 )
-from .tags import enabled_tags
+from .policy_config import build_policy_resolver
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -38,9 +38,11 @@ async def run_setup(session: SetupSession) -> None:
         unmount = await mount_connect_wizard(
             session.mass,
             mount_path,
-            enabled_tags_provider=lambda: [
-                str(tag) for tag in enabled_tags(cast("ProviderConfig", _ValuesConfig(values)))
-            ],
+            default_profile_provider=lambda: (
+                build_policy_resolver(cast("ProviderConfig", _ValuesConfig(values)))
+                .resolve(None)
+                .profile.value
+            ),
             extra_origins_csv=str(values.get(CONF_EXTRA_ALLOWED_ORIGINS) or ""),
             trust_forwarded_proto=bool(values.get(CONF_TRUST_FORWARDED_PROTO)),
         )

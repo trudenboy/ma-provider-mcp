@@ -195,3 +195,4 @@ class HealthSummary:
     policy_profile: str = "Read-only"
     token_resolution_failures: int = 0
     event_buffer_active: bool = False
+    performance: dict[str, int | float] = field(default_factory=dict)

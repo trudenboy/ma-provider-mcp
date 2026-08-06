@@ -1,9 +1,9 @@
 """
-Tests for ``MCPServerRuntime.apply_permission_change`` hot-swap vs restart routing.
+Tests for ``MCPServerRuntime.apply_config_change`` hot-swap vs restart routing.
 
 The provider's :meth:`update_config` strips ``values/`` prefixes from MA's
 ``changed_keys`` set and passes the normalised set to
-:meth:`MCPServerRuntime.apply_permission_change`. The runtime must decide
+:meth:`MCPServerRuntime.apply_config_change`. The runtime must decide
 hot-swap vs full restart from that explicit set — not from a re-diff of
 ``self._config`` vs the new config, because Music Assistant mutates
 :class:`ProviderConfig` in place, so the old and new references point to
@@ -26,7 +26,7 @@ async def test_resource_toggle_triggers_full_restart(
     """
     A ``res_*`` toggle must restart the runtime (resources are bound at start time).
 
-    The runtime can hot-swap only permission tags; resource registration
+    The runtime can hot-swap only capability policy; resource registration
     happens once during :meth:`start`. If a resource toggle is mis-routed
     to the hot-swap path, the user's change silently has no effect.
     """
@@ -36,7 +36,7 @@ async def test_resource_toggle_triggers_full_restart(
     runtime.stop = AsyncMock()
     runtime.start = AsyncMock()
 
-    await runtime.apply_permission_change(mock_config, changed_keys={"res_library"})
+    await runtime.apply_config_change(mock_config, changed_keys={"res_library"})
 
     runtime.stop.assert_awaited_once()
     runtime.start.assert_awaited_once()
@@ -52,16 +52,15 @@ async def test_empty_changed_keys_does_not_restart(
     MA's ``ConfigController`` short-circuits when there are no diffs, but the
     guard belongs here too: an empty set is by definition a subset of the
     permission keys, so classify as permission-only and let the hot-swap
-    path noop-rebuild the tag snapshot.
+    path noop-rebuild the policy snapshot.
     """
     from provider.server import MCPServerRuntime  # noqa: PLC0415
 
     runtime = MCPServerRuntime(mock_mass, mock_config, logging.getLogger("t"))
-    runtime._allowed_tags = {"query:library"}
     runtime.stop = AsyncMock()
     runtime.start = AsyncMock()
 
-    await runtime.apply_permission_change(mock_config, changed_keys=set())
+    await runtime.apply_config_change(mock_config, changed_keys=set())
 
     runtime.stop.assert_not_awaited()
     runtime.start.assert_not_awaited()
@@ -80,7 +79,7 @@ async def test_policy_change_hot_swaps_immutable_snapshot(
     runtime.start = AsyncMock()
     mock_config._values["policy_default"] = "Trusted"
 
-    await runtime.apply_permission_change(mock_config, changed_keys={"policy_default"})
+    await runtime.apply_config_change(mock_config, changed_keys={"policy_default"})
 
     runtime.stop.assert_not_awaited()
     runtime.start.assert_not_awaited()
@@ -99,7 +98,7 @@ async def test_v1_dynamic_api_key_is_not_hot_swapped(
     runtime.stop = AsyncMock()
     runtime.start = AsyncMock()
 
-    await runtime.apply_permission_change(mock_config, changed_keys={"dynamic_api_control"})
+    await runtime.apply_config_change(mock_config, changed_keys={"dynamic_api_control"})
 
     runtime.stop.assert_awaited_once()
     runtime.start.assert_awaited_once()

@@ -77,7 +77,7 @@ async def wizard_client(wizard_mass: MagicMock) -> AsyncIterator[TestClient]:
     unmount = await mount_connect_wizard(
         wizard_mass,
         mount_path="/mcp/v1",
-        enabled_tags_provider=lambda: ["query:library", "control:playback"],
+        default_profile_provider=lambda: "Trusted",
         extra_origins_csv="",
     )
     async with TestClient(TestServer(build_aiohttp_app(wizard_mass.webserver))) as client:
@@ -278,7 +278,7 @@ async def wizard_client_trust_proxy(wizard_mass: MagicMock) -> AsyncIterator[Tes
     unmount = await mount_connect_wizard(
         wizard_mass,
         mount_path="/mcp/v1",
-        enabled_tags_provider=lambda: ["query:library", "control:playback"],
+        default_profile_provider=lambda: "Trusted",
         extra_origins_csv="",
         trust_forwarded_proto=True,
     )
@@ -394,7 +394,7 @@ async def test_info_endpoint_shape(wizard_client: TestClient) -> None:
         "mount_path",
         "mcp_url_loopback",
         "mcp_url_advertised",
-        "permissions",
+        "default_policy",
         "clients",
         "well_known_url",
     ):
@@ -403,24 +403,27 @@ async def test_info_endpoint_shape(wizard_client: TestClient) -> None:
     assert data["mcp_url_loopback"].endswith("/mcp/v1")
     assert isinstance(data["clients"], list)
     assert len(data["clients"]) >= 10
-    assert isinstance(data["permissions"], list)
-    assert all(isinstance(p, str) for p in data["permissions"])
+    assert data["default_policy"] == {"profile": "Trusted"}
+    assert "permissions" not in data
 
 
-async def test_info_reflects_enabled_tags(wizard_mass: MagicMock) -> None:
-    """``info.permissions`` reflects whatever ``enabled_tags_provider()`` returns."""
+async def test_info_exposes_only_default_profile(wizard_mass: MagicMock) -> None:
+    """Connect metadata never exposes capability matrices or token overrides."""
     unmount = await mount_connect_wizard(
         wizard_mass,
         mount_path="/mcp/v1",
-        enabled_tags_provider=lambda: ["control:playback", "edit:queue"],
+        default_profile_provider=lambda: "Trusted",
         extra_origins_csv="",
     )
     try:
         async with TestClient(TestServer(build_aiohttp_app(wizard_mass.webserver))) as client:
             resp = await client.get("/mcp/v1/connect/info")
             data = await resp.json()
-            assert "control:playback" in data["permissions"]
-            assert "edit:queue" in data["permissions"]
+            assert data["default_policy"] == {"profile": "Trusted"}
+            assert "permissions" not in data
+            assert "allow" not in data["default_policy"]
+            assert "confirm" not in data["default_policy"]
+            assert "deny" not in data["default_policy"]
     finally:
         unmount()
 
@@ -765,7 +768,7 @@ async def test_mount_unmount_cycle(wizard_mass: MagicMock) -> None:
     unmount = await mount_connect_wizard(
         wizard_mass,
         mount_path="/mcp/v1",
-        enabled_tags_provider=list,
+        default_profile_provider=lambda: "Read-only",
         extra_origins_csv="",
     )
     assert len(fake_ws.routes) == 5
@@ -778,7 +781,7 @@ async def test_mount_path_relative(wizard_mass: MagicMock) -> None:
     unmount = await mount_connect_wizard(
         wizard_mass,
         mount_path="/custom",
-        enabled_tags_provider=list,
+        default_profile_provider=lambda: "Read-only",
         extra_origins_csv="",
     )
     try:
@@ -799,7 +802,6 @@ async def test_action_handler_signals_url_with_bootstrap(
         wizard_mass,
         current_user=mock_user,
         mount_path="/mcp/v1",
-        base_url="http://localhost:8095",
     )
 
     wizard_mass.webserver.auth.create_token.assert_awaited_with(
@@ -830,7 +832,6 @@ async def test_action_handler_uses_url_fragment_for_bootstrap(
         wizard_mass,
         current_user=mock_user,
         mount_path="/mcp/v1",
-        base_url="http://localhost:8095",
     )
 
     assert isinstance(url, str)
@@ -848,7 +849,6 @@ async def test_action_handler_no_user_signals_plain_url(wizard_mass: MagicMock) 
         wizard_mass,
         current_user=None,
         mount_path="/mcp/v1",
-        base_url="http://localhost:8095",
     )
 
     wizard_mass.webserver.auth.create_token.assert_not_called()

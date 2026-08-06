@@ -13,9 +13,9 @@ from fastmcp.server.auth.auth import AccessToken
 from music_assistant_models.auth import Scope
 
 from provider.audit import AuditRecord
+from provider.capabilities import Capability
 from provider.policy import PolicyMode, PolicyProfile, policy_snapshot
 from provider.resource_authorization import ResourceAuthorizer
-from provider.tags import Tag
 from provider.token_identity import TokenIdentityRegistry
 
 
@@ -68,9 +68,9 @@ def _authorizer(
         identity_provider=identities.lookup,
         policy_provider=lambda _token: _policy(
             **{
-                str(Tag.QUERY_LIBRARY): PolicyMode.ALLOW,
-                str(Tag.QUERY_PLAYERS): PolicyMode.ALLOW,
-                str(Tag.QUERY_QUEUE): PolicyMode.ALLOW,
+                str(Capability.QUERY_LIBRARY): PolicyMode.ALLOW,
+                str(Capability.QUERY_PLAYERS): PolicyMode.ALLOW,
+                str(Capability.QUERY_QUEUE): PolicyMode.ALLOW,
             }
         ),
         default_policy_provider=lambda: _policy(),
@@ -82,13 +82,13 @@ def _authorizer(
 @pytest.mark.parametrize(
     ("uri", "tag", "scope"),
     [
-        ("library://track/17", Tag.QUERY_LIBRARY, Scope.LIBRARY_READ),
-        ("player://player-1", Tag.QUERY_PLAYERS, Scope.PLAYERS_READ),
-        ("queue://player-1", Tag.QUERY_QUEUE, Scope.QUEUES_READ),
+        ("library://track/17", Capability.QUERY_LIBRARY, Scope.LIBRARY_READ),
+        ("player://player-1", Capability.QUERY_PLAYERS, Scope.PLAYERS_READ),
+        ("queue://player-1", Capability.QUERY_QUEUE, Scope.QUEUES_READ),
     ],
 )
 async def test_resource_authorization_uses_fresh_exact_identity_and_ma_scope(
-    uri: str, tag: Tag, scope: Scope
+    uri: str, tag: Capability, scope: Scope
 ) -> None:
     """Every resource family authenticates the bearer and checks its MA read scope."""
     checked_scopes: list[Scope] = []
@@ -104,10 +104,10 @@ async def test_resource_authorization_rejects_changed_exact_token_identity_once(
     audits: list[AuditRecord] = []
     authorizer = _authorizer(resolved_id="replacement", audits=audits)
     with pytest.raises(ResourceError, match="Authentication is required"):
-        await authorizer.authorize("player://player-1", {str(Tag.QUERY_PLAYERS)})
+        await authorizer.authorize("player://player-1", {str(Capability.QUERY_PLAYERS)})
     assert len(audits) == 1
     assert audits[0].command == "resource:player"
-    assert audits[0].capability == str(Tag.QUERY_PLAYERS)
+    assert audits[0].capability == str(Capability.QUERY_PLAYERS)
     assert audits[0].mode == "allow"
     assert audits[0].outcome == "authorization.denied"
 
@@ -116,14 +116,14 @@ async def test_resource_policy_allow_to_deny_during_auth_uses_live_denial() -> N
     """The request policy is resolved only after all authentication awaits."""
     user = _user()
     policies = [
-        _policy(**{str(Tag.QUERY_PLAYERS): PolicyMode.ALLOW}),
+        _policy(**{str(Capability.QUERY_PLAYERS): PolicyMode.ALLOW}),
     ]
     bearer = AccessToken(token="bearer", client_id="token-id", scopes=[])
     identities = TokenIdentityRegistry()
     identities.bind("bearer", user_id="user-1", token_id="token-id")
 
     async def authenticate_then_revoke(_bearer: str) -> Any:
-        policies[0] = _policy(**{str(Tag.QUERY_PLAYERS): PolicyMode.DENY})
+        policies[0] = _policy(**{str(Capability.QUERY_PLAYERS): PolicyMode.DENY})
         return user
 
     audits: list[AuditRecord] = []
@@ -146,7 +146,7 @@ async def test_resource_policy_allow_to_deny_during_auth_uses_live_denial() -> N
     )
 
     with pytest.raises(ResourceError, match="request policy"):
-        await authorizer.authorize("player://player-1", {str(Tag.QUERY_PLAYERS)})
+        await authorizer.authorize("player://player-1", {str(Capability.QUERY_PLAYERS)})
     assert len(audits) == 1
     assert audits[0].mode == "deny"
 
@@ -174,13 +174,13 @@ async def test_resource_user_disabled_during_token_id_lookup_is_denied() -> None
         auth_required_provider=lambda: True,
         token_provider=lambda: bearer,
         identity_provider=identities.lookup,
-        policy_provider=lambda _token: _policy(**{str(Tag.QUERY_PLAYERS): PolicyMode.ALLOW}),
+        policy_provider=lambda _token: _policy(**{str(Capability.QUERY_PLAYERS): PolicyMode.ALLOW}),
         default_policy_provider=lambda: _policy(),
         scope_checker=lambda _user, _scope: True,
     )
 
     with pytest.raises(ResourceError, match="Authentication is required"):
-        await authorizer.authorize("player://player-1", {str(Tag.QUERY_PLAYERS)})
+        await authorizer.authorize("player://player-1", {str(Capability.QUERY_PLAYERS)})
 
 
 async def test_unknown_resource_denial_uses_fixed_redacted_audit_fields() -> None:
@@ -202,7 +202,8 @@ async def test_player_and_queue_resources_apply_user_player_filter(uri: str) -> 
     authorizer = _authorizer()
     with pytest.raises(ResourceError, match="not permitted"):
         await authorizer.authorize(
-            uri, {str(Tag.QUERY_QUEUE if uri.startswith("queue") else Tag.QUERY_PLAYERS)}
+            uri,
+            {str(Capability.QUERY_QUEUE if uri.startswith("queue") else Capability.QUERY_PLAYERS)},
         )
 
 
@@ -210,7 +211,7 @@ async def test_library_resource_provider_filter_hides_foreign_item_and_audits_on
     """A fetched library item outside provider_filter is suppressed without leaking values."""
     audits: list[AuditRecord] = []
     authorizer = _authorizer(audits=audits)
-    request = await authorizer.authorize("library://track/17", {str(Tag.QUERY_LIBRARY)})
+    request = await authorizer.authorize("library://track/17", {str(Capability.QUERY_LIBRARY)})
     assert request is not None
     foreign = SimpleNamespace(provider="tidal--2", provider_mappings=set())
     assert request.library_item_allowed(foreign) is False
@@ -220,7 +221,7 @@ async def test_library_resource_provider_filter_hides_foreign_item_and_audits_on
         user_id="user-1",
         client_id="token-id",
         command="resource:library",
-        capability=str(Tag.QUERY_LIBRARY),
+        capability=str(Capability.QUERY_LIBRARY),
         mode="allow",
         outcome="authorization.denied",
     )
@@ -229,7 +230,7 @@ async def test_library_resource_provider_filter_hides_foreign_item_and_audits_on
 async def test_library_resource_provider_filter_accepts_one_allowed_mapping() -> None:
     """Any exact allowed provider mapping keeps the library item visible."""
     authorizer = _authorizer()
-    request = await authorizer.authorize("library://track/17", {str(Tag.QUERY_LIBRARY)})
+    request = await authorizer.authorize("library://track/17", {str(Capability.QUERY_LIBRARY)})
     assert request is not None
     item = SimpleNamespace(
         provider="library",

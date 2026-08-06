@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from provider.constants import (
     CONF_DEFAULT_POLICY,
+    CONF_ENABLE_MCP_APP,
     RESOURCE_KEYS,
     is_hot_swappable_key,
     is_policy_key,
@@ -18,6 +19,7 @@ def test_v2_policy_and_resource_changes_are_hot_swappable() -> None:
     assert all(is_hot_swappable_key(key) for key in RESOURCE_KEYS)
     assert is_hot_swappable_key("policy_token_query_library_deadbeef")
     assert not is_hot_swappable_key("mount_path")
+    assert not is_hot_swappable_key(CONF_ENABLE_MCP_APP)
 
 
 def test_v1_keys_are_not_recognized_as_policy_or_hot_swappable() -> None:

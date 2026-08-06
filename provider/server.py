@@ -4,22 +4,25 @@ from __future__ import annotations
 
 import contextlib
 import logging
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from .audit import NO_TOKEN_CLIENT_ID
 from .auth import LEGACY_TOKEN_CLIENT_ID, LOOKUP_FAILURE_CLIENT_ID
-from .config import build_policy_resolver
+from .capabilities import Capability
 from .constants import (
+    CONF_ENABLE_MCP_APP,
     CONF_ENFORCE_AUDIENCE,
     CONF_EXTRA_ALLOWED_ORIGINS,
     CONF_MOUNT_PATH,
     CONF_REQUIRE_AUTH,
+    CONF_RES_PROMPTS,
     CONF_TRUST_FORWARDED_PROTO,
     DEFAULT_MOUNT_PATH,
     is_policy_key,
 )
 from .policy import POLICY_SCHEMA_VERSION
-from .tags import Tag, enabled_tags
+from .policy_config import build_policy_resolver
 from .token_identity import AuthenticatedPolicyResolver, TokenIdentityRegistry
 
 if TYPE_CHECKING:
@@ -44,7 +47,7 @@ class MCPServerRuntime:
       the three meta-tools, applies tag filtering, and exposes the
       streamable-HTTP ASGI app on MA's webserver under :pyattr:`mount_path`.
     * :meth:`stop` unregisters the dynamic route.
-    * :meth:`apply_permission_change` rebuilds the runtime in place when
+    * :meth:`apply_config_change` rebuilds the runtime in place when
       only permission flags / resource toggles changed (no port collision
       since we reuse MA's webserver).
     """
@@ -73,9 +76,6 @@ class MCPServerRuntime:
         self._unmount: Callable[[], Awaitable[None]] | None = None
         self._unmount_well_known: Callable[[], None] | None = None
         self._unmount_connect: Callable[[], None] | None = None
-        # Mutable so apply_permission_change can hot-swap the allowed-tag set
-        # without re-instantiating the TagFilterMiddleware closure.
-        self._allowed_tags: set[str] = set()
         self._dynamic_adapter: Any = None
         self._token_identities = TokenIdentityRegistry(on_change=self._refresh_policy_resolver)
         self._request_policies = AuthenticatedPolicyResolver(
@@ -151,16 +151,13 @@ class MCPServerRuntime:
             self._unmount_connect = None
         self._mcp = None
 
-    async def apply_permission_change(
-        self, new_config: ProviderConfig, changed_keys: set[str]
-    ) -> None:
+    async def apply_config_change(self, new_config: ProviderConfig, changed_keys: set[str]) -> None:
         """
-        Hot-swap the allowed-tag set, or restart when resources are involved.
+        Hot-swap the resolver for policy-only changes, or restart the surface.
 
         Resource toggles (``CONF_RES_*``) require a rebuild because resource
-        registration is decided at :meth:`start` time; permission flags flip the
-        tag set in the closure read by :class:`TagFilterMiddleware` and take
-        effect on the next request without a restart.
+        registration is decided at :meth:`start` time. Policy-only changes replace
+        the immutable resolver and take effect on the next request without a restart.
 
         :param new_config: the new provider config; assigned to ``self._config``
             before any restart so ``start`` reads the updated values.
@@ -175,11 +172,7 @@ class MCPServerRuntime:
         self._config = new_config
         if policy_only:
             self._refresh_policy_resolver()
-            self._allowed_tags = {str(t) for t in enabled_tags(new_config)}
-            self._logger.debug(
-                "MCP runtime: hot-swapped policy snapshot and %d visible tags",
-                len(self._allowed_tags),
-            )
+            self._logger.debug("MCP runtime: hot-swapped policy resolver")
             return
 
         await self.stop()
@@ -196,6 +189,10 @@ class MCPServerRuntime:
             policy_schema_version=POLICY_SCHEMA_VERSION,
             token_resolution_failures=self._token_identities.token_resolution_failures,
         )
+        if self._dynamic_adapter is not None:
+            performance = self._dynamic_adapter.performance()
+            if isinstance(performance, Mapping):
+                diagnostics["performance"] = dict(performance)
         return diagnostics
 
     async def _start_impl(self) -> None:
@@ -207,7 +204,8 @@ class MCPServerRuntime:
         from .prompts import register_prompts  # noqa: PLC0415
         from .resources import register_resources  # noqa: PLC0415
 
-        require_auth = bool(self._config.get_value(CONF_REQUIRE_AUTH))
+        require_auth_value = self._config.get_value(CONF_REQUIRE_AUTH)
+        require_auth = True if require_auth_value is None else bool(require_auth_value)
         base_url = str(self._mass.webserver.base_url or "").rstrip("/")
         public_resource_uri = f"{base_url}{self._mount_path}" if base_url else None
         enforce_audience = bool(self._config.get_value(CONF_ENFORCE_AUDIENCE))
@@ -238,7 +236,7 @@ class MCPServerRuntime:
         register_resources(mcp, self._mass, self._config)
         register_prompts(mcp, self._config)
 
-        self._apply_tag_filter(mcp, enabled_tags(self._config))
+        self._apply_tag_filter(mcp)
         self._register_meta_discovery(mcp)
 
         self._mcp = mcp
@@ -261,7 +259,7 @@ class MCPServerRuntime:
                 # Lazy provider so hot-swapped permissions update the
                 # advertised `scopes_supported` immediately, without
                 # rebuilding the runtime.
-                scopes_supported=lambda: [str(capability) for capability in Tag],
+                scopes_supported=lambda: [str(capability) for capability in Capability],
                 resource_name="Music Assistant MCP",
             )
 
@@ -273,7 +271,7 @@ class MCPServerRuntime:
             self._unmount_connect = await mount_connect_wizard(
                 self._mass,
                 self._mount_path,
-                enabled_tags_provider=lambda: [str(t) for t in enabled_tags(self._config)],
+                default_profile_provider=lambda: self.policy_resolver.resolve(None).profile.value,
                 extra_origins_csv=extra_origins,
                 trust_forwarded_proto=bool(self._config.get_value(CONF_TRUST_FORWARDED_PROTO)),
             )
@@ -281,17 +279,16 @@ class MCPServerRuntime:
             self._logger.warning("Connect Wizard: mount failed", exc_info=True)
 
         self._logger.debug(
-            "MCP runtime started: mount=%s, auth=%s, tags=%d",
+            "MCP runtime started: mount=%s, auth=%s",
             self._mount_path,
             bool(verifier),
-            len(enabled_tags(self._config)),
         )
 
     def _register_meta_discovery(self, mcp: Any) -> None:
         """Install the permanent dynamic command discovery layer."""
         from fastmcp.server.dependencies import get_access_token  # noqa: PLC0415
 
-        from .dynamic_api import DynamicAPIAdapter  # noqa: PLC0415
+        from .execution import DynamicAPIAdapter  # noqa: PLC0415
         from .meta_discovery import register_meta_discovery  # noqa: PLC0415
 
         def config_bool(key: str, *, default: bool = False) -> bool:
@@ -308,24 +305,33 @@ class MCPServerRuntime:
             identity_provider=self._token_identities.lookup,
         )
         self._dynamic_adapter = adapter
+        additional_public_tools: frozenset[str] = frozenset()
+        if config_bool(CONF_ENABLE_MCP_APP):
+            # Keep Prefab/FastMCP App imports out of the default runtime path.
+            from .app_music_assistant import (  # noqa: PLC0415
+                APP_TOOL_NAME,
+                register_music_assistant_app,
+            )
+
+            register_music_assistant_app(mcp, adapter)
+            additional_public_tools = frozenset({APP_TOOL_NAME})
         register_meta_discovery(
             mcp,
-            allowed_tags_provider=lambda: self._allowed_tags,
-            lookup_component_tags=build_tag_lookup(mcp),
             dynamic_adapter=adapter,
+            additional_public_tools=additional_public_tools,
         )
 
-    def _apply_tag_filter(self, mcp: Any, allowed: set[Any]) -> None:
-        """Install the tag-filter middleware on the given FastMCP server."""
+    def _apply_tag_filter(self, mcp: Any) -> None:
+        """Install request-policy component visibility on FastMCP."""
         from fastmcp.server.dependencies import get_access_token  # noqa: PLC0415
 
         from .middleware import TagFilterMiddleware  # noqa: PLC0415
         from .resource_authorization import ResourceAuthorizer  # noqa: PLC0415
 
-        # Snapshot tags into the closure-captured set declared in __init__.
-        # apply_permission_change mutates the same set later, so the
-        # middleware sees the new permissions without rebuilding FastMCP.
-        self._allowed_tags = {str(t) for t in allowed}
+        def config_bool(key: str, *, default: bool = False) -> bool:
+            """Read booleans while preserving defaults for older installations."""
+            value = self._config.get_value(key)
+            return default if value is None else bool(value)
 
         def request_policy() -> PolicySnapshot:
             token = get_access_token()
@@ -335,17 +341,17 @@ class MCPServerRuntime:
 
         mcp.add_middleware(
             TagFilterMiddleware(
-                lambda: self._allowed_tags,
                 build_tag_lookup(mcp),
                 policy_provider=request_policy,
                 resource_authorizer=ResourceAuthorizer(
                     self._mass,
-                    auth_required_provider=lambda: bool(self._config.get_value(CONF_REQUIRE_AUTH)),
+                    auth_required_provider=lambda: config_bool(CONF_REQUIRE_AUTH, default=True),
                     token_provider=get_access_token,
                     identity_provider=self._token_identities.lookup,
                     policy_provider=self.resolve_policy,
                     default_policy_provider=lambda: self.policy_resolver.resolve(None),
                 ),
+                prompts_enabled_provider=lambda: config_bool(CONF_RES_PROMPTS, default=True),
             )
         )
 
@@ -382,7 +388,10 @@ async def _tag_lookup(mcp: Any, kind: str, key: str) -> set[str] | None:
     ``FastMCP.get_resource`` only finds statically-registered resources,
     so a request for a concrete URI backed by a
     ``@mcp.resource("scheme://{x}")`` template would otherwise be
-    misreported as not-found.
+    misreported as not-found. Prefab renderers are synthesized only by
+    ``list_resources`` and ``read_resource``; an exact match against the
+    middleware-free listing keeps those virtual resources addressable without
+    treating arbitrary Prefab-looking URIs as infrastructure.
     """
     try:
         if kind == "tool":
@@ -391,6 +400,8 @@ async def _tag_lookup(mcp: Any, kind: str, key: str) -> set[str] | None:
             obj = await mcp.get_resource(key)
             if obj is None:
                 obj = await mcp.get_resource_template(key)
+            if obj is None:
+                obj = await _listed_prefab_resource(mcp, key)
         elif kind == "prompt":
             obj = await mcp.get_prompt(key)
         else:  # pragma: no cover - kind is Literal-typed at the caller
@@ -400,6 +411,14 @@ async def _tag_lookup(mcp: Any, kind: str, key: str) -> set[str] | None:
     if obj is None:
         return None
     return {str(t) for t in (getattr(obj, "tags", None) or set())}
+
+
+async def _listed_prefab_resource(mcp: Any, uri: str) -> Any | None:
+    """Return an exact synthetic Prefab listing match without running middleware."""
+    if not uri.startswith("ui://prefab/tool/"):
+        return None
+    resources = await mcp.list_resources(run_middleware=False)
+    return next((resource for resource in resources if str(resource.uri) == uri), None)
 
 
 def build_tag_lookup(mcp: Any) -> Callable[[str, str], Awaitable[set[str] | None]]:
