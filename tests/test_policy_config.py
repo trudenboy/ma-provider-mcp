@@ -153,15 +153,19 @@ def test_dynamic_entries_have_conditional_matrices_and_hashed_token_keys(
     assert selector_key in by_key
     assert by_key[CONF_DEFAULT_POLICY].advanced is False
     assert by_key[selector_key].advanced is False
+    assert by_key[selector_key].label is None
+    assert by_key[selector_key].description is None
+    assert by_key[selector_key].translation_key == "policy_token"
+    assert by_key[selector_key].translation_params == ["MCP — Claude"]
     assert by_key[selector_key].value == "Custom"
     assert by_key[debug_key].value == "confirm"
     assert by_key[CONF_POLICY_TOKEN_SUFFIXES].value == [policy_token_suffix(raw_id)]
     assert [(option.value, option.title) for option in by_key[CONF_DEFAULT_POLICY].options] == [
-        ("Read-only", "Read-only"),
-        ("Home control", "Home control"),
-        ("Interactive admin", "Interactive admin"),
-        ("Trusted", "Trusted"),
-        ("Custom", "Custom (Advanced mode required)"),
+        ("Read-only", None),
+        ("Home control", None),
+        ("Interactive admin", None),
+        ("Trusted", None),
+        ("Custom", None),
     ]
     assert [option.value for option in by_key[selector_key].options] == [
         "Inherit",
@@ -171,10 +175,7 @@ def test_dynamic_entries_have_conditional_matrices_and_hashed_token_keys(
         "Trusted",
         "Custom",
     ]
-    assert [(option.value, option.title) for option in by_key[selector_key].options][-1] == (
-        "Custom",
-        "Custom (Advanced mode required)",
-    )
+    assert all(option.title is None for option in by_key[selector_key].options)
     assert raw_id not in selector_key
     assert token_policy_key(raw_id) == token_policy_key(raw_id)
     assert token_policy_key(raw_id) != token_policy_key("replacement-id")
@@ -194,9 +195,6 @@ def test_dynamic_entries_have_conditional_matrices_and_hashed_token_keys(
     assert len(token_matrix) == len(Tag) == 26
     assert all(entry.advanced is True for entry in default_matrix)
     assert all(entry.advanced is True for entry in token_matrix)
-    assert by_key[selector_key].description == (
-        "Select Custom and enable Advanced mode to edit individual capability modes."
-    )
 
 
 def test_v1_entries_are_removed_even_if_stored_values_exist(mock_mass: MagicMock) -> None:

@@ -20,11 +20,14 @@ The Music Assistant frontend therefore applies both independent visibility
 conditions. A capability field is shown only when Advanced mode is enabled and
 its owning selector is set to `Custom`.
 
-The default and per-token selectors remain non-advanced. In both selectors, the
-Custom option keeps the stored value `Custom` but uses the visible title
-`Custom (Advanced mode required)`. Their descriptions also tell users that Custom
-capability settings are available in Advanced mode, so selecting `Custom` in the
-normal view does not look like a broken or empty form.
+The default and per-token selectors remain non-advanced. Music Assistant's native
+translation mechanism owns all selector UI text: the default selector uses its
+structural `policy_default` key, while dynamic selectors use the stable
+`policy_token` translation key and pass the token name through
+`translation_params`. Both translation entries define the profile option titles.
+The Custom option therefore keeps the stored value `Custom` but renders as
+`Custom (Advanced mode required)`, and selector descriptions explain where its
+capability settings appear.
 
 ## Configuration behavior
 
@@ -32,6 +35,8 @@ This is a presentation-only change. Configuration keys, stored values, defaults,
 profile resolution, hot swapping, and the v2 policy schema remain unchanged.
 Changing the visible option title does not change the value passed to or returned
 by Music Assistant configuration APIs.
+Hashed per-token entry keys never need matching `strings.json` records because
+their labels, descriptions, and option titles resolve through `policy_token`.
 
 Selecting `Custom` while Advanced mode is disabled does not remove existing mode
 values. Previously unset Custom modes continue to resolve as `deny`. Enabling
@@ -50,6 +55,9 @@ Tests will verify that:
 - default and per-token profile selectors remain `advanced=False`;
 - both selectors expose `Custom (Advanced mode required)` as the Custom option
   title while retaining `Custom` as its value;
+- dynamic selectors expose `translation_key=policy_token` and pass their token
+  name as the sole translation parameter instead of embedding UI text;
+- selector labels, descriptions, and profile option titles live in `strings.json`;
 - all 26 capabilities are still emitted for every matrix;
 - policy parsing and stored Custom values are unchanged.
 

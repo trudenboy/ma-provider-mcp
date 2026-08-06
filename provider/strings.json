@@ -34,7 +34,26 @@
     },
     "policy_default": {
       "label": "Default policy",
-      "description": "Policy used when a token has no explicit override. Missing v2 configuration defaults to Read-only. Select Custom and enable Advanced mode to edit individual capability modes."
+      "description": "Policy used when a token has no explicit override. Missing v2 configuration defaults to Read-only. Select Custom and enable Advanced mode to edit individual capability modes.",
+      "options": {
+        "Read-only": "Read-only",
+        "Home control": "Home control",
+        "Interactive admin": "Interactive admin",
+        "Trusted": "Trusted",
+        "Custom": "Custom (Advanced mode required)"
+      }
+    },
+    "policy_token": {
+      "label": "{0}",
+      "description": "Select Custom and enable Advanced mode to edit individual capability modes.",
+      "options": {
+        "Inherit": "Inherit",
+        "Read-only": "Read-only",
+        "Home control": "Home control",
+        "Interactive admin": "Interactive admin",
+        "Trusted": "Trusted",
+        "Custom": "Custom (Advanced mode required)"
+      }
     },
     "policy_manual_token_ids": {
       "label": "Manual MCP token IDs",

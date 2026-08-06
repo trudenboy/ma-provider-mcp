@@ -84,8 +84,21 @@ def test_strings_expose_only_v2_policy_configuration_contract() -> None:
     data = _load_strings()
     entries = data["config_entries"]
 
-    assert entries.keys() >= {"policy_default", "policy_manual_token_ids"}
+    assert entries.keys() >= {"policy_default", "policy_manual_token_ids", "policy_token"}
     assert "Advanced mode" in entries["policy_default"]["description"]
+    expected_profile_options = {
+        "Read-only": "Read-only",
+        "Home control": "Home control",
+        "Interactive admin": "Interactive admin",
+        "Trusted": "Trusted",
+        "Custom": "Custom (Advanced mode required)",
+    }
+    assert entries["policy_default"]["options"] == expected_profile_options
+    assert entries["policy_token"]["label"] == "{0}"
+    assert entries["policy_token"]["options"] == {
+        "Inherit": "Inherit",
+        **expected_profile_options,
+    }
     assert set(entries).isdisjoint(
         {
             "require_confirmation",

@@ -205,3 +205,84 @@ git add provider/config.py tests/test_policy_config.py \
   docs/superpowers/plans/2026-08-06-custom-policy-advanced-fields.md
 git commit -m "fix: label Custom profile as Advanced-only"
 ```
+
+### Task 3: Move dynamic selector text to Music Assistant translations
+
+**Files:**
+- Modify: `tests/test_policy_config.py`
+- Modify: `tests/test_strings_json.py`
+- Modify: `provider/config.py`
+- Modify: `provider/strings.json`
+
+**Interfaces:**
+- Consumes: Music Assistant `ConfigEntry.translation_key`, `translation_params`, and structural option localization
+- Produces: dynamic selectors localized through `config_entries.policy_token` without inline user-facing text
+
+- [x] **Step 1: Add failing schema and strings tests**
+
+Require dynamic selectors to expose no inline label or description, use the stable
+translation key and token-name parameter, and leave option titles for serialization:
+
+```python
+assert by_key[selector_key].label is None
+assert by_key[selector_key].description is None
+assert by_key[selector_key].translation_key == "policy_token"
+assert by_key[selector_key].translation_params == ["MCP — Claude"]
+assert all(option.title is None for option in by_key[selector_key].options)
+```
+
+Require `strings.json` to define `policy_default` and `policy_token` option maps,
+including `"Custom": "Custom (Advanced mode required)"`.
+
+- [x] **Step 2: Run focused tests and confirm RED**
+
+Run:
+
+```bash
+uv run pytest -q \
+  tests/test_policy_config.py::test_dynamic_entries_have_conditional_matrices_and_hashed_token_keys \
+  tests/test_strings_json.py::test_strings_expose_only_v2_policy_configuration_contract
+```
+
+Expected: both tests fail because the selector still carries inline text and
+`policy_token` does not exist.
+
+- [x] **Step 3: Implement stable translation routing**
+
+Build value-only options and route dynamically named selectors through the stable key:
+
+```python
+options=[ConfigValueOption(value=value) for value in values],
+translation_key="policy_token" if label is not None else None,
+translation_params=[label] if label is not None else None,
+```
+
+Define the default and token selector labels, descriptions, and all profile option
+titles in `provider/strings.json`.
+
+- [x] **Step 4: Run focused tests and confirm GREEN**
+
+Run:
+
+```bash
+uv run pytest -q tests/test_policy_config.py tests/test_strings_json.py
+```
+
+Expected: all policy configuration and string contract tests pass.
+
+- [x] **Step 5: Run the upstream config-entry checker and complete quality gate**
+
+Validate the inlined provider with Music Assistant's current
+`scripts.check_config_entries`, then run the repository pytest, Ruff, mypy, and
+pre-commit gates.
+
+- [x] **Step 6: Commit and push the translation refactor**
+
+```bash
+git add provider/config.py provider/strings.json \
+  tests/test_policy_config.py tests/test_strings_json.py \
+  docs/superpowers/specs/2026-08-06-custom-policy-advanced-fields-design.md \
+  docs/superpowers/plans/2026-08-06-custom-policy-advanced-fields.md
+git commit -m "refactor: use MA translations for policy selectors"
+git push
+```
