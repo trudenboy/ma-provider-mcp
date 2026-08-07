@@ -1403,3 +1403,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 8 sub-servers (`library`, `queue`, `playback`, `players`, `playlists`,
   `volume`, `media`, `metadata`); `library://`, `player://`, `queue://`
   resources; canned prompts.
+- Reverse-synced upstream PR #5402 (WIP)
