@@ -18,7 +18,7 @@ export default defineConfig({
 			sidebar: [
 				{ label: 'Home', slug: 'index' },
 				{ label: 'Configuration', slug: 'configuration' },
-				{ label: 'Features', items: [{ autogenerate: { directory: 'features' } }] },
+				{ label: 'Features', autogenerate: { directory: 'features' } },
 				{ label: 'Development', items: [
 					{ label: 'Dev Environment', slug: 'development' },
 					{ label: 'Docker', slug: 'dev-docker' },

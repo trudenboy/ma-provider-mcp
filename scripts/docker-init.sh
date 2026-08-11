@@ -4,15 +4,12 @@
 set -e
 
 echo "==> Setting up FastMCP Server provider..."
-
-# Run the checked-out MA source, with this provider bind-mounted inside it.
 export PYTHONPATH="/ma-server${PYTHONPATH:+:$PYTHONPATH}"
 SOURCE_FILE=$(/app/venv/bin/python3 -c "import music_assistant; print(music_assistant.__file__)")
 case "$SOURCE_FILE" in
   /ma-server/*) echo "==> MA source overlay: $SOURCE_FILE" ;;
   *) echo "ERROR: MA source overlay is inactive ($SOURCE_FILE)" >&2; exit 1 ;;
 esac
-echo "==> Provider overlay: /ma-server/music_assistant/providers/fastmcp_server"
 
 # Install provider-specific runtime dependencies (skips music_assistant itself)
 DEPS=$(/app/venv/bin/python3 - <<'PYEOF'
@@ -46,18 +43,10 @@ if [ -n "$DEPS" ]; then
     fi
 fi
 
-# Verify that both imported packages resolve from the bind-mounted source tree.
-# This catches an image/site-packages fallback before the server accepts a test run.
-PROVIDER_FILE=$(/app/venv/bin/python3 -c \
-    "import music_assistant.providers.fastmcp_server as provider; print(provider.__file__)")
+PROVIDER_FILE=$(/app/venv/bin/python3 -c "import music_assistant.providers.fastmcp_server; print(music_assistant.providers.fastmcp_server.__file__)")
 case "$PROVIDER_FILE" in
-  /ma-server/music_assistant/providers/fastmcp_server/*)
-    echo "==> Provider source overlay: $PROVIDER_FILE"
-    ;;
-  *)
-    echo "ERROR: provider overlay is inactive ($PROVIDER_FILE)" >&2
-    exit 1
-    ;;
+  /ma-server/music_assistant/providers/fastmcp_server/*) echo "==> Provider source overlay: $PROVIDER_FILE" ;;
+  *) echo "ERROR: provider source overlay is inactive ($PROVIDER_FILE)" >&2; exit 1 ;;
 esac
 
 echo "==> Starting Music Assistant..."

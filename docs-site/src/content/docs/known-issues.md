@@ -1,37 +1,41 @@
 ---
 title: Known Issues
+---# Known Issues
+
+## OAuth Token Expiry
+
+**Symptoms:** The provider stops working after several days or weeks with no obvious configuration errors.
+
+**Cause:** FastMCP Server OAuth tokens have a limited lifetime. After expiry, the provider loses API access.
+
+**Fix:** Re-authorise in the provider settings: remove the current configuration, add the provider again, and complete the authorisation flow.
+
 ---
 
-# Known Issues
+## API Disconnects During Long Sessions
 
-## Client cannot confirm an operation
+**Symptoms:** Playback stops or tracks fail to load after several hours of use.
 
-**Symptoms:** A command fails with an error naming a capability and suggesting `Allow`
-or an elicitation-capable client.
+**Cause:** The FastMCP Server API closes long-lived connections. This is upstream service behaviour.
 
-**Cause:** The token's effective mode is `Confirm`, but the MCP client does not support
-elicitation.
+**Fix:** Restart Music Assistant or reconnect the provider. The error resolves itself on the next request.
 
-**Fix:** Prefer an elicitation-capable client. Otherwise, review the requested access
-and set only that capability for that token to `Allow`. Confirm-mode resource reads
-remain unavailable because resources cannot safely elicit.
+---
 
-## Commands disappear after upgrading to v2
+## Geo-Restricted Playlists and Tracks
 
-**Symptoms:** Only query commands are visible after a version 2 upgrade.
+**Symptoms:** Some playlists or tracks are unavailable even though they open fine in the FastMCP Server app.
 
-**Cause:** V1 permission booleans, `dynamic_api_*`, and `require_confirmation` are
-ignored. Missing v2 policy configuration resolves to `Read-only`.
+**Cause:** Certain content is restricted by geography or subscription tier.
 
-**Fix:** Select a v2 default profile and configure any per-token overrides. Do not
-restore the old keys; they have no effect.
+**Fix:** Content blocked by geo-restrictions or subscription limits cannot be played through the provider. This is a FastMCP Server-side limitation.
 
-## Token override does not follow a replacement token
+---
 
-**Symptoms:** A newly minted token uses the default profile instead of a revoked
-token's override.
+## Multiple Accounts Not Yet Supported
 
-**Cause:** Overrides are keyed by exact Music Assistant token ID so replacement
-credentials cannot inherit prior authority.
+**Symptoms:** Adding a second FastMCP Server account causes the first to stop working.
 
-**Fix:** Add an explicit override for the new token after verifying its owner and use.
+**Cause:** The provider currently supports only one FastMCP Server account.
+
+**Fix:** Use a single account. Multi-account support is planned for a future release.
