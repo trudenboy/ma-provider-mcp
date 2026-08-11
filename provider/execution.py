@@ -758,7 +758,7 @@ class DynamicAPIAdapter:
         *,
         allow_impersonation: bool,
     ) -> dict[str, Any]:
-        """Add provider-owned aliases and impersonation to a compiled input schema."""
+        """Apply provider aliases, exclusions, and impersonation to an input schema."""
         schema = dict(input_schema)
         properties = dict(schema["properties"])
         schema["properties"] = properties

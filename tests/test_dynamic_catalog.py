@@ -1034,7 +1034,8 @@ async def test_play_media_rejects_dynamic_radio_arguments(argument: str) -> None
     assert calls == []
 
 
-async def test_play_media_passes_radio_uri_without_dynamic_mode() -> None:
+@pytest.mark.parametrize("media_argument", ["media", "uri"])
+async def test_play_media_passes_radio_uri_without_dynamic_mode(media_argument: str) -> None:
     """A Radio URI reaches the native handler with its default direct-play mode."""
     calls: list[tuple[str, str, bool]] = []
 
@@ -1049,7 +1050,7 @@ async def test_play_media_passes_radio_uri_without_dynamic_mode() -> None:
 
     await adapter.call(
         "ma_api:player_queues/play_media",
-        {"queue_id": "living-room", "media": "siriusxm://radio/real-jazz"},
+        {"queue_id": "living-room", media_argument: "siriusxm://radio/real-jazz"},
         response_mode="compact",
         fields=None,
         max_items=None,
