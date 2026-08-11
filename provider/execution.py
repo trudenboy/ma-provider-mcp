@@ -355,6 +355,9 @@ class DynamicAPIAdapter:
                 ToolFailureCode.INVALID_ARGUMENTS,
                 "Arguments do not match the tool schema",
             ) from exc
+        if entry.profile is not None:
+            for excluded_name in entry.profile.excluded_arguments:
+                parsed.pop(excluded_name, None)
 
         initial_invocation = await self._authorize_call_audited(
             entry,
@@ -760,13 +763,16 @@ class DynamicAPIAdapter:
         *,
         allow_impersonation: bool,
     ) -> dict[str, Any]:
-        """Add provider-owned aliases and impersonation to a compiled input schema."""
+        """Apply provider aliases, exclusions, and impersonation to an input schema."""
         schema = dict(input_schema)
         properties = dict(schema["properties"])
         schema["properties"] = properties
         required = list(schema.get("required", []))
         alias_requirements: list[dict[str, Any]] = []
         if profile is not None:
+            for name in profile.excluded_arguments:
+                properties.pop(name, None)
+            required = [name for name in required if name not in profile.excluded_arguments]
             for alias, canonical in profile.argument_aliases.items():
                 canonical_schema = properties.get(canonical)
                 if canonical_schema is None:

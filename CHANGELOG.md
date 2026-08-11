@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [2.1.1] - 2026-08-11
 
 ### Fixed
+- Radio stations invoked through MCP now play directly instead of exposing
+  dynamic-radio flags that could route them into unsupported track generation.
 - Settings actions now return one-shot messages and URLs through Music
   Assistant's structured result contract without redrawing the form.
 - User impersonation works with Music Assistant's auth-provider identities,

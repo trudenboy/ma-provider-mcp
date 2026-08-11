@@ -1001,6 +1001,83 @@ async def test_adapter_executes_strictly_and_bounds_result() -> None:
     assert result["bytes"] <= 12_288
 
 
+async def test_play_media_schema_excludes_dynamic_radio_arguments() -> None:
+    """Radio stations play directly without ambiguous dynamic-radio flags."""
+
+    async def play_media(
+        queue_id: str,
+        media: str,
+        radio_mode: bool = False,
+    ) -> None:
+        del queue_id, media, radio_mode
+
+    adapter = _real_adapter(_handler("player_queues/play_media", play_media))
+    entry = (await adapter.visible_entries())[0]
+    properties = entry.input_schema["properties"]
+
+    assert "media" in properties
+    assert "uri" in properties
+    assert "radio" not in properties
+    assert "radio_mode" not in properties
+
+
+@pytest.mark.parametrize("argument", ["radio", "radio_mode"])
+async def test_play_media_rejects_dynamic_radio_arguments(argument: str) -> None:
+    """Hidden dynamic-radio arguments cannot bypass the published contract."""
+    calls: list[tuple[str, str, bool]] = []
+
+    async def play_media(
+        queue_id: str,
+        media: str,
+        radio_mode: bool = False,
+    ) -> None:
+        calls.append((queue_id, media, radio_mode))
+
+    adapter = _real_adapter(_handler("player_queues/play_media", play_media))
+
+    with pytest.raises(ToolError, match=r"\[invalid_arguments\]"):
+        await adapter.call(
+            "ma_api:player_queues/play_media",
+            {
+                "queue_id": "living-room",
+                "media": "siriusxm://radio/real-jazz",
+                argument: True,
+            },
+            response_mode="compact",
+            fields=None,
+            max_items=None,
+            ctx=MagicMock(),
+        )
+
+    assert calls == []
+
+
+@pytest.mark.parametrize("media_argument", ["media", "uri"])
+async def test_play_media_passes_radio_uri_without_dynamic_mode(media_argument: str) -> None:
+    """A Radio URI reaches the native handler with its default direct-play mode."""
+    calls: list[tuple[str, str, bool]] = []
+
+    async def play_media(
+        queue_id: str,
+        media: str,
+        radio_mode: bool = False,
+    ) -> None:
+        calls.append((queue_id, media, radio_mode))
+
+    adapter = _real_adapter(_handler("player_queues/play_media", play_media))
+
+    await adapter.call(
+        "ma_api:player_queues/play_media",
+        {"queue_id": "living-room", media_argument: "siriusxm://radio/real-jazz"},
+        response_mode="compact",
+        fields=None,
+        max_items=None,
+        ctx=MagicMock(),
+    )
+
+    assert calls == [("living-room", "siriusxm://radio/real-jazz", False)]
+
+
 async def test_config_action_result_localizes_in_dynamic_response() -> None:
     """Native config action messages use MA's translation resolver in MCP output."""
 
