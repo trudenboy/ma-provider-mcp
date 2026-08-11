@@ -72,6 +72,7 @@ class CommandProfile:
     command: str
     search_aliases: tuple[str, ...] = ()
     argument_aliases: Mapping[str, str] = field(default_factory=dict)
+    excluded_arguments: frozenset[str] = frozenset()
     list_arguments: frozenset[str] = frozenset()
     compact_fields: tuple[str, ...] = ()
     operation_override: str | None = None
@@ -80,6 +81,8 @@ class CommandProfile:
 
     def convert_arguments(self, arguments: Mapping[str, Any]) -> dict[str, Any]:
         """Translate ergonomic aliases without overriding canonical values."""
+        if self.excluded_arguments.intersection(arguments):
+            raise ValueError("One or more arguments are unavailable through MCP")
         converted = dict(arguments)
         for alias, canonical in self.argument_aliases.items():
             if alias not in converted:
@@ -205,7 +208,8 @@ def _build_profiles() -> dict[str, CommandProfile]:
             "list_arguments": frozenset({"media_types", "providers"}),
         },
         "player_queues/play_media": {
-            "argument_aliases": {"uri": "media", "radio": "radio_mode"},
+            "argument_aliases": {"uri": "media"},
+            "excluded_arguments": frozenset({"radio_mode"}),
         },
         "music/playlists/add_playlist_tracks": {
             "argument_aliases": {"track_uri": "uris"},
