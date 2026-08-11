@@ -9,8 +9,8 @@ from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from music_assistant_models.config_entries import ConfigEntry
-from music_assistant_models.enums import ConfigEntryType
+from music_assistant_models.config_entries import ConfigActionResult
+from music_assistant_models.errors import ActionUnavailable
 
 from music_assistant.models.plugin import PluginProvider
 from provider import _init_helpers, server
@@ -57,6 +57,7 @@ def _provider(mass: Any, config: MagicMock) -> MCPServerProvider:
     provider = MCPServerProvider.__new__(MCPServerProvider)
     provider.mass = mass
     provider.config = config
+    provider.manifest = cast("Any", SimpleNamespace(domain="fastmcp_server"))
     provider.logger = logging.getLogger("task-7-lifecycle")
     provider._runtime = None
     return provider
@@ -74,55 +75,57 @@ def _config(*, debug_events: bool = False) -> MagicMock:
 
 
 @pytest.mark.asyncio
-async def test_open_connect_action_returns_a_one_shot_url_entry(
+async def test_open_connect_action_returns_a_one_shot_result(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The MA frontend receives a URL entry it can open after the action completes."""
+    """The frontend receives a one-shot URL without rebuilding the config form."""
     provider = _provider(MagicMock(), _config())
-    existing = ConfigEntry(key="info", type=ConfigEntryType.LABEL, label="MCP endpoint")
-    monkeypatch.setattr(
-        MCPServerProvider, "get_config_entries", AsyncMock(return_value=(existing,))
-    )
+    get_entries = AsyncMock()
+    monkeypatch.setattr(MCPServerProvider, "get_config_entries", get_entries)
     monkeypatch.setattr(MCPServerProvider, "get_config_value", MagicMock(return_value="/mcp/v1"))
     wizard_url = "https://ma.example/mcp/v1/connect?bootstrap=one-shot"
     monkeypatch.setattr(_init_helpers, "_dispatch_open_connect", AsyncMock(return_value=wizard_url))
 
-    entries = await provider.handle_config_action("open_connect")
+    result = await provider.handle_config_action("open_connect")
 
-    assert entries is not None
-    assert entries[:-1] == (existing,)
-    assert entries[-1].type is ConfigEntryType.URL
-    assert entries[-1].value == wizard_url
-
-
-@pytest.mark.asyncio
-async def test_unknown_config_action_uses_plugin_provider_handler(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Future MA config actions retain the framework's native handling."""
-    provider = _provider(MagicMock(), _config())
-    expected = (ConfigEntry(key="ma_result", type=ConfigEntryType.LABEL, label="Handled by MA"),)
-    base_handler = AsyncMock(return_value=expected)
-    monkeypatch.setattr(PluginProvider, "handle_config_action", base_handler)
-
-    entries = await provider.handle_config_action("future_ma_action")
-
-    assert entries == expected
-    base_handler.assert_awaited_once_with("future_ma_action")
+    assert isinstance(result, ConfigActionResult)
+    assert result.open_url == wizard_url
+    assert result.message is None
+    get_entries.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_unknown_config_action_normalizes_empty_plugin_result(
+async def test_open_connect_action_without_url_reports_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Optional MA action results remain compatible with the provider's tuple contract."""
+    """A missing wizard URL is a translated action failure, not a silent redraw."""
     provider = _provider(MagicMock(), _config())
-    base_handler = AsyncMock(return_value=None)
+    monkeypatch.setattr(MCPServerProvider, "get_config_value", MagicMock(return_value="/mcp/v1"))
+    monkeypatch.setattr(_init_helpers, "_dispatch_open_connect", AsyncMock(return_value=None))
+
+    with pytest.raises(ActionUnavailable) as error:
+        await provider.handle_config_action("open_connect")
+
+    assert error.value.translation_key == "connect_wizard_unavailable"
+    assert error.value.translation_owner == "provider.fastmcp_server"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "base_result", [None, ConfigActionResult(open_url="https://ma.example/result")]
+)
+async def test_unknown_config_action_preserves_native_result(
+    monkeypatch: pytest.MonkeyPatch,
+    base_result: ConfigActionResult | None,
+) -> None:
+    """Future MA action outcome types pass through without tuple coercion."""
+    provider = _provider(MagicMock(), _config())
+    base_handler = AsyncMock(return_value=base_result)
     monkeypatch.setattr(PluginProvider, "handle_config_action", base_handler)
 
-    entries = await provider.handle_config_action("future_ma_action")
+    result = await provider.handle_config_action("future_ma_action")
 
-    assert entries == ()
+    assert result is base_result
     base_handler.assert_awaited_once_with("future_ma_action")
 
 
