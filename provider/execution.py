@@ -20,6 +20,7 @@ from fastmcp.exceptions import ToolError
 from mcp.shared.exceptions import McpError
 from mcp.types import INVALID_REQUEST, METHOD_NOT_FOUND
 from music_assistant_models.auth import AuthProviderType, Scope
+from music_assistant_models.translations import TRANSLATION_RESOLVER
 
 from .audit import (
     ANONYMOUS_USER_ID,
@@ -414,14 +415,18 @@ class DynamicAPIAdapter:
             impersonated=impersonated,
             impersonating=impersonating,
         )
-        return self._bounded_envelope(
-            name,
-            result,
-            response_mode=response_mode,
-            fields=fields,
-            max_items=max_items,
-            profile=invocation.entry.profile,
-        )
+        translation_token = TRANSLATION_RESOLVER.set(self.mass.translations.get_translation)
+        try:
+            return self._bounded_envelope(
+                name,
+                result,
+                response_mode=response_mode,
+                fields=fields,
+                max_items=max_items,
+                profile=invocation.entry.profile,
+            )
+        finally:
+            TRANSLATION_RESOLVER.reset(translation_token)
 
     async def _execute_authorized(
         self,

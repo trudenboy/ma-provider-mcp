@@ -19,7 +19,7 @@ from fastmcp import Client, Context, FastMCP
 from fastmcp.exceptions import ToolError
 from fastmcp.server.auth import AccessToken
 from music_assistant_models.auth import AuthProviderType, Scope
-from music_assistant_models.config_entries import ConfigEntry
+from music_assistant_models.config_entries import ConfigActionResult, ConfigEntry
 from music_assistant_models.enums import ConfigEntryType
 
 from provider import meta_discovery
@@ -999,6 +999,60 @@ async def test_adapter_executes_strictly_and_bounds_result() -> None:
     assert result["truncated"] is True
     assert result["returned_count"] <= 25
     assert result["bytes"] <= 12_288
+
+
+async def test_config_action_result_localizes_in_dynamic_response() -> None:
+    """Native config action messages use MA's translation resolver in MCP output."""
+
+    async def invoke() -> ConfigActionResult:
+        return ConfigActionResult(
+            translation_key="cleanup.result",
+            translation_owner="core.cache",
+            translation_args=[3],
+        )
+
+    adapter = _real_adapter(_handler("config/core/invoke_action", invoke, "config.core.write"))
+    adapter.mass.translations.get_translation.side_effect = lambda key, owner=None, params=None: (
+        f"{key}|{owner}|{','.join(params or ())}"
+    )
+
+    response = await adapter.call(
+        "ma_api:config/core/invoke_action",
+        {},
+        response_mode="full",
+        fields=None,
+        max_items=None,
+        ctx=MagicMock(),
+    )
+
+    assert response["data"] == {
+        "message": "config_actions.cleanup.result|core.cache|3",
+        "open_url": None,
+    }
+
+
+async def test_config_action_open_url_survives_dynamic_response() -> None:
+    """A one-shot action URL reaches MCP clients without translation metadata."""
+
+    async def invoke() -> ConfigActionResult:
+        return ConfigActionResult(open_url="https://ma.example/result")
+
+    adapter = _real_adapter(
+        _handler("config/providers/invoke_action", invoke, "config.providers.write")
+    )
+    response = await adapter.call(
+        "ma_api:config/providers/invoke_action",
+        {},
+        response_mode="full",
+        fields=None,
+        max_items=None,
+        ctx=MagicMock(),
+    )
+
+    assert response["data"] == {
+        "message": None,
+        "open_url": "https://ma.example/result",
+    }
 
 
 async def test_empty_upstream_exception_names_type_and_command() -> None:
