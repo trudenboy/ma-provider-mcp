@@ -107,7 +107,7 @@ async def test_open_connect_action_without_url_reports_failure(
         await provider.handle_config_action("open_connect")
 
     assert error.value.translation_key == "connect_wizard_unavailable"
-    assert error.value.translation_owner == "provider.fastmcp_server"
+    assert error.value.translation_owner == provider.translation_owner
 
 
 @pytest.mark.asyncio
