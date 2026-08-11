@@ -4,15 +4,12 @@
 set -e
 
 echo "==> Setting up FastMCP Server provider..."
-
-# Locate MA providers directory inside the container venv
-PROVIDERS_DIR=$(/app/venv/bin/python3 -c \
-    "import music_assistant.providers, os; print(os.path.dirname(music_assistant.providers.__file__))")
-
-# Remove any existing yandex_music provider (image may bundle one), then symlink ours
-rm -rf "${PROVIDERS_DIR}/fastmcp_server"
-ln -s /tmp/provider "${PROVIDERS_DIR}/fastmcp_server"
-echo "==> Provider linked: ${PROVIDERS_DIR}/fastmcp_server"
+export PYTHONPATH="/ma-server${PYTHONPATH:+:$PYTHONPATH}"
+SOURCE_FILE=$(/app/venv/bin/python3 -c "import music_assistant; print(music_assistant.__file__)")
+case "$SOURCE_FILE" in
+  /ma-server/*) echo "==> MA source overlay: $SOURCE_FILE" ;;
+  *) echo "ERROR: MA source overlay is inactive ($SOURCE_FILE)" >&2; exit 1 ;;
+esac
 
 # Install provider-specific runtime dependencies (skips music_assistant itself)
 DEPS=$(/app/venv/bin/python3 - <<'PYEOF'
@@ -45,6 +42,12 @@ if [ -n "$DEPS" ]; then
         /app/venv/bin/pip install --quiet $DEPS
     fi
 fi
+
+PROVIDER_FILE=$(/app/venv/bin/python3 -c "import music_assistant.providers.fastmcp_server; print(music_assistant.providers.fastmcp_server.__file__)")
+case "$PROVIDER_FILE" in
+  /ma-server/music_assistant/providers/fastmcp_server/*) echo "==> Provider source overlay: $PROVIDER_FILE" ;;
+  *) echo "ERROR: provider source overlay is inactive ($PROVIDER_FILE)" >&2; exit 1 ;;
+esac
 
 echo "==> Starting Music Assistant..."
 exec /usr/local/bin/entrypoint.sh --data-dir /data --cache-dir /data/.cache
