@@ -18,7 +18,7 @@ import pytest
 from fastmcp import Client, Context, FastMCP
 from fastmcp.exceptions import ToolError
 from fastmcp.server.auth import AccessToken
-from music_assistant_models.auth import Scope
+from music_assistant_models.auth import AuthProviderType, Scope
 from music_assistant_models.config_entries import ConfigEntry
 from music_assistant_models.enums import ConfigEntryType
 
@@ -672,6 +672,24 @@ def _bypass_ma_argument_parser(monkeypatch: pytest.MonkeyPatch) -> None:
         "provider.dynamic_signatures.CompiledSignature.parse",
         lambda _signature, arguments: dict(arguments),
     )
+
+
+async def test_impersonation_resolves_a_builtin_ma_user(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A legacy string user identifier is scoped to MA's built-in auth provider."""
+    adapter = _real_adapter(_handler("music/search", lambda: None))
+    expected_user = MagicMock(user_id="listener")
+    resolve = AsyncMock(return_value=expected_user)
+    monkeypatch.setattr(
+        "music_assistant.controllers.webserver.helpers.auth_middleware.resolve_impersonated_user",
+        resolve,
+    )
+
+    result = await adapter._resolve_impersonated_user(None, "listener")
+
+    assert result is expected_user
+    resolve.assert_awaited_once_with(adapter.mass, AuthProviderType.BUILTIN, "listener")
 
 
 async def test_adapter_discovers_handler_and_compiles_schema() -> None:

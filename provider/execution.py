@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any
 from fastmcp.exceptions import ToolError
 from mcp.shared.exceptions import McpError
 from mcp.types import INVALID_REQUEST, METHOD_NOT_FOUND
-from music_assistant_models.auth import Scope
+from music_assistant_models.auth import AuthProviderType, Scope
 
 from .audit import (
     ANONYMOUS_USER_ID,
@@ -1430,7 +1430,11 @@ class DynamicAPIAdapter:
                 auth_middleware,
             )
 
-            return await auth_middleware.resolve_impersonated_user(self.mass, requested_user)
+            return await auth_middleware.resolve_impersonated_user(
+                self.mass,
+                AuthProviderType.BUILTIN,
+                requested_user,
+            )
         except Exception as exc:
             raise ToolError(f"Unable to impersonate requested user: {exc}") from exc
         finally:
