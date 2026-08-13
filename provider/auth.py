@@ -158,7 +158,7 @@ class MASTokenVerifier(TokenVerifier):
         except Exception:
             self._identity_registry.discard(token)
             self._identity_registry.record_resolution_failure()
-            LOGGER.error("MA token identity lookup raised; using Read-only policy")
+            LOGGER.error("MA token identity lookup raised; using Safe queries policy")
         else:
             if token_id is None:
                 self._identity_registry.bind(
@@ -178,7 +178,7 @@ class MASTokenVerifier(TokenVerifier):
                 self._identity_registry.discard(token)
                 self._identity_registry.record_resolution_failure()
                 LOGGER.error(
-                    "MA token identity lookup returned invalid data; using Read-only policy"
+                    "MA token identity lookup returned invalid data; using Safe queries policy"
                 )
 
         # MCP SDK's AccessToken pydantic model has no `claims` field — extras

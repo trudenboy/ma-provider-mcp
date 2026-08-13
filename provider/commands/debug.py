@@ -110,7 +110,7 @@ async def health(
     logs_enabled: bool,
     dynamic_diagnostics_provider: Callable[[], Mapping[str, Any]] | None = None,
     policy_schema_version: int = 2,
-    policy_profile: str = "Read-only",
+    policy_profile: str = "Safe queries",
     token_resolution_failures: int = 0,
 ) -> HealthSummary:
     """Roll up provider, queue, event, and permitted log diagnostics."""

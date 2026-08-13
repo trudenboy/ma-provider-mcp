@@ -163,7 +163,7 @@ def _catalog_server(entry_count: int, *, middleware: bool = False) -> FastMCP:
         mcp.add_middleware(
             TagFilterMiddleware(
                 build_tag_lookup(mcp),
-                lambda: policy_snapshot(PolicyProfile.READ_ONLY),
+                lambda: policy_snapshot(PolicyProfile.SAFE_QUERIES),
             )
         )
     return mcp

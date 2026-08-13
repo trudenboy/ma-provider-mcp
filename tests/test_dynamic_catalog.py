@@ -655,7 +655,7 @@ def _real_adapter(
                 for capability in Capability
             },
         ),
-        default_policy_provider=lambda: policy_snapshot(PolicyProfile.READ_ONLY),
+        default_policy_provider=lambda: policy_snapshot(PolicyProfile.SAFE_QUERIES),
         audit_sink=audit_sink,
     )
     adapter._test_allowed_capabilities_provider = lambda: (
@@ -874,7 +874,7 @@ async def test_cached_snapshot_keeps_visibility_request_specific() -> None:
         token_provider=current_token.get,
         scope_checker=lambda user, scope: scope in user.scopes,
         policy_provider=lambda _bearer: policy_snapshot(PolicyProfile.TRUSTED),
-        default_policy_provider=lambda: policy_snapshot(PolicyProfile.READ_ONLY),
+        default_policy_provider=lambda: policy_snapshot(PolicyProfile.SAFE_QUERIES),
     )
 
     async def catalog_for(user_id: str) -> Any:
@@ -1164,8 +1164,8 @@ async def test_adapter_hides_catalog_when_mcp_auth_is_disabled() -> None:
         auth_required_provider=lambda: False,
         token_provider=lambda: None,
         scope_checker=lambda _user, _scope: True,
-        policy_provider=lambda _bearer: policy_snapshot(PolicyProfile.READ_ONLY),
-        default_policy_provider=lambda: policy_snapshot(PolicyProfile.READ_ONLY),
+        policy_provider=lambda _bearer: policy_snapshot(PolicyProfile.SAFE_QUERIES),
+        default_policy_provider=lambda: policy_snapshot(PolicyProfile.SAFE_QUERIES),
     )
     assert await adapter.visible_entries() == []
 

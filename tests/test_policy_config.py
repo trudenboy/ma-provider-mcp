@@ -38,13 +38,41 @@ def _config(values: Mapping[str, object]) -> MagicMock:
 
 
 def test_missing_and_malformed_v2_defaults_fail_closed() -> None:
-    """Absent or malformed profile values resolve Read-only, never admin."""
+    """Absent or malformed profile values resolve Safe queries, never admin."""
     missing = build_policy_resolver(_config({}))
     malformed = build_policy_resolver(_config({CONF_DEFAULT_POLICY: "typo-admin"}))
 
-    assert missing.resolve(None).profile is PolicyProfile.READ_ONLY
-    assert malformed.resolve(None).profile is PolicyProfile.READ_ONLY
+    assert missing.resolve(None).profile.value == "Safe queries"
+    assert malformed.resolve(None).profile.value == "Safe queries"
     assert malformed.resolve(None).mode(Capability.CONFIG_WRITE_CORE) is PolicyMode.DENY
+
+
+def test_legacy_read_only_value_resolves_safe_queries() -> None:
+    """Existing installations retain their restrictive policy after the rename."""
+    resolver = build_policy_resolver(_config({CONF_DEFAULT_POLICY: "Read-only"}))
+
+    assert resolver.resolve(None).profile.value == "Safe queries"
+    assert resolver.resolve(None).mode(Capability.QUERY_LIBRARY) is PolicyMode.ALLOW
+    assert resolver.resolve(None).mode(Capability.CONFIG_READ) is PolicyMode.DENY
+
+
+def test_provider_config_accepts_legacy_read_only_value(mock_mass: MagicMock) -> None:
+    """MA persisted config can load the renamed profile's legacy value."""
+    values = {CONF_DEFAULT_POLICY: "Read-only"}
+    raw = {
+        "values": values,
+        "type": ProviderType.PLUGIN.value,
+        "domain": "mcp_server",
+        "instance_id": "mcp_server--legacy",
+        "enabled": True,
+    }
+    config = cast(
+        "ProviderConfig",
+        ProviderConfig.parse(build_config_entries(mock_mass, DEFAULT_MOUNT_PATH), raw),
+    )
+
+    resolver = build_policy_resolver(config, raw_value_provider=values.get)
+    assert resolver.resolve(None).profile is PolicyProfile.SAFE_QUERIES
 
 
 def test_default_named_and_custom_policy_parsing() -> None:
@@ -74,7 +102,7 @@ def test_override_manual_unknown_and_replacement_resolution() -> None:
     replacement_id = "replacement-id"
     manual_id = "foreign-manual-id"
     values = {
-        CONF_DEFAULT_POLICY: "Read-only",
+        CONF_DEFAULT_POLICY: "Safe queries",
         CONF_MANUAL_TOKEN_IDS: [manual_id],
         token_policy_key(revoked_id): "Trusted",
         token_policy_key(replacement_id): "Inherit",
@@ -83,9 +111,9 @@ def test_override_manual_unknown_and_replacement_resolution() -> None:
     }
     resolver = build_policy_resolver(_config(values), active_token_ids={replacement_id})
 
-    assert resolver.resolve(revoked_id).profile is PolicyProfile.READ_ONLY
-    assert resolver.resolve(replacement_id).profile is PolicyProfile.READ_ONLY
-    assert resolver.resolve("unknown-id").profile is PolicyProfile.READ_ONLY
+    assert resolver.resolve(revoked_id).profile is PolicyProfile.SAFE_QUERIES
+    assert resolver.resolve(replacement_id).profile is PolicyProfile.SAFE_QUERIES
+    assert resolver.resolve("unknown-id").profile is PolicyProfile.SAFE_QUERIES
     assert resolver.resolve(manual_id).profile is PolicyProfile.CUSTOM
     assert resolver.resolve(manual_id).mode(Capability.CONTROL_PLAYBACK) is PolicyMode.ALLOW
 
@@ -103,7 +131,7 @@ def test_malformed_token_profile_fails_closed() -> None:
         active_token_ids={token_id},
     )
 
-    assert resolver.resolve(token_id).profile is PolicyProfile.READ_ONLY
+    assert resolver.resolve(token_id).profile is PolicyProfile.SAFE_QUERIES
     assert resolver.resolve(token_id).mode(Capability.SYSTEM_ADMIN) is PolicyMode.DENY
 
 
@@ -176,7 +204,7 @@ def test_dynamic_entries_have_conditional_matrices_and_hashed_token_keys(
     assert by_key[debug_key].value == "confirm"
     assert by_key[CONF_POLICY_TOKEN_SUFFIXES].value == [policy_token_suffix(raw_id)]
     assert [(option.value, option.title) for option in by_key[CONF_DEFAULT_POLICY].options] == [
-        ("Read-only", None),
+        ("Safe queries", None),
         ("Home control", None),
         ("Interactive admin", None),
         ("Trusted", None),
@@ -184,7 +212,7 @@ def test_dynamic_entries_have_conditional_matrices_and_hashed_token_keys(
     ]
     assert [option.value for option in by_key[selector_key].options] == [
         "Inherit",
-        "Read-only",
+        "Safe queries",
         "Home control",
         "Interactive admin",
         "Trusted",
@@ -252,7 +280,7 @@ def test_actual_provider_config_roundtrip_preserves_exact_cold_token_policies(
     raw_values = {
         CONF_DEFAULT_POLICY: "Trusted",
         CONF_POLICY_TOKEN_SUFFIXES: [readonly_suffix, debug_suffix],
-        token_policy_key(readonly_id): "Read-only",
+        token_policy_key(readonly_id): "Safe queries",
         token_policy_key(debug_id): "Custom",
         policy_mode_key(Capability.DEBUG_EVENTS, debug_id): "allow",
     }
@@ -297,7 +325,7 @@ def test_actual_provider_config_roundtrip_preserves_exact_cold_token_policies(
     )
 
     assert cold.get_value(CONF_POLICY_TOKEN_SUFFIXES) == [readonly_suffix, debug_suffix]
-    assert resolver.resolve(readonly_id).profile is PolicyProfile.READ_ONLY
+    assert resolver.resolve(readonly_id).profile is PolicyProfile.SAFE_QUERIES
     assert resolver.resolve(replacement_id).profile is PolicyProfile.TRUSTED
     assert policy_event_buffer_enabled(cold, raw_value_provider=raw_value) is True
     assert readonly_id not in repr(persisted)

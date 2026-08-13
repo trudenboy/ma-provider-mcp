@@ -52,11 +52,15 @@ def build_config_entries(
     """Return endpoint, resource, prompt, and dynamic v2 policy entries."""
     base_url = mass.webserver.base_url.rstrip("/")
     mount_path = "/" + mount_path.strip("/")
+    info_label = (
+        f"MCP endpoint: {base_url}{mount_path}\n"
+        "Create tokens in Profile → Long-lived access tokens."
+    )
     entries: list[ConfigEntry] = [
         ConfigEntry(
             key="info_label",
             type=ConfigEntryType.LABEL,
-            translation_params=[f"{base_url}{mount_path}"],
+            label=info_label,
             category="server",
             required=False,
         ),
@@ -199,7 +203,7 @@ def _policy_selector(key: str, label: str | None, *, allow_inherit: bool) -> Con
     return ConfigEntry(
         key=key,
         type=ConfigEntryType.STRING,
-        default_value=INHERIT_POLICY if allow_inherit else PolicyProfile.READ_ONLY.value,
+        default_value=INHERIT_POLICY if allow_inherit else PolicyProfile.SAFE_QUERIES.value,
         options=[ConfigValueOption(value=value) for value in values],
         translation_key="policy_token" if label is not None else None,
         translation_params=[label] if label is not None else None,

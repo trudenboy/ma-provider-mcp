@@ -402,7 +402,30 @@ async def test_info_endpoint_shape(wizard_client: TestClient) -> None:
     assert data["mount_path"] == "/mcp/v1"
     assert data["mcp_url_loopback"].endswith("/mcp/v1")
     assert isinstance(data["clients"], list)
-    assert len(data["clients"]) >= 10
+    assert len(data["clients"]) == 15
+    clients = {client["id"]: client for client in data["clients"]}
+    assert {
+        client_id: [method["id"] for method in client["methods"]]
+        for client_id, client in clients.items()
+    } == {
+        "claude-code": ["cli", "project-config"],
+        "cursor": ["user-config", "project-config"],
+        "opencode": ["user-config", "project-config"],
+        "windsurf": ["devin-user", "devin-project", "legacy-cascade"],
+        "vscode": ["user-config", "workspace-config"],
+        "github-copilot-cli": ["cli", "interactive", "user-config", "project-config"],
+        "codex-cli": ["cli", "user-config"],
+        "gemini-cli": ["cli", "user-config", "project-config"],
+        "cline": ["user-config", "cli-wizard"],
+        "roo-code": ["global-config", "project-config"],
+        "zed": ["settings-ui", "user-config", "project-config"],
+        "openclaw": ["cli", "user-config"],
+        "openhands": ["cli", "user-config"],
+        "hermes": ["cli", "user-config", "desktop-editor"],
+        "custom": ["parameters"],
+    }
+    assert "claude-desktop" not in clients
+    assert "chatgpt" not in clients
     assert data["default_policy"] == {"profile": "Trusted"}
     assert "permissions" not in data
 
@@ -768,7 +791,7 @@ async def test_mount_unmount_cycle(wizard_mass: MagicMock) -> None:
     unmount = await mount_connect_wizard(
         wizard_mass,
         mount_path="/mcp/v1",
-        default_profile_provider=lambda: "Read-only",
+        default_profile_provider=lambda: "Safe queries",
         extra_origins_csv="",
     )
     assert len(fake_ws.routes) == 5
@@ -781,7 +804,7 @@ async def test_mount_path_relative(wizard_mass: MagicMock) -> None:
     unmount = await mount_connect_wizard(
         wizard_mass,
         mount_path="/custom",
-        default_profile_provider=lambda: "Read-only",
+        default_profile_provider=lambda: "Safe queries",
         extra_origins_csv="",
     )
     try:
@@ -1228,7 +1251,9 @@ def test_cursor_template_round_trips() -> None:
     """The Cursor template renders to valid JSON with url + Authorization Bearer header."""
     cursor = lookup_client("cursor")
     assert cursor is not None
-    rendered = cursor.template.replace("{{URL}}", "http://localhost:8095/mcp/v1").replace(
+    method = cursor.methods[0]
+    assert method.id == "user-config"
+    rendered = method.template.replace("{{URL}}", "http://localhost:8095/mcp/v1").replace(
         "{{TOKEN}}", "TOK-123"
     )
     parsed = json.loads(rendered)
@@ -1241,8 +1266,10 @@ def test_opencode_template_round_trips() -> None:
     """The OpenCode preset renders an authenticated remote MCP configuration."""
     spec = lookup_client("opencode")
     assert spec is not None
-    rendered = spec.template.replace("{{URL}}", "http://localhost:8095/mcp/v1").replace(
-        "{{TOKEN}}", "TOK-123"
+    rendered = (
+        spec.methods[0]
+        .template.replace("{{URL}}", "http://localhost:8095/mcp/v1")
+        .replace("{{TOKEN}}", "TOK-123")
     )
     parsed = json.loads(rendered)
     server = parsed["mcp"]["ma"]
@@ -1258,8 +1285,10 @@ def test_openhands_template_uses_http_transport_and_bearer_header() -> None:
     """The OpenHands preset follows the documented remote-server CLI syntax."""
     spec = lookup_client("openhands")
     assert spec is not None
-    rendered = spec.template.replace("{{URL}}", "http://localhost:8095/mcp/v1").replace(
-        "{{TOKEN}}", "TOK-123"
+    rendered = (
+        spec.methods[0]
+        .template.replace("{{URL}}", "http://localhost:8095/mcp/v1")
+        .replace("{{TOKEN}}", "TOK-123")
     )
     assert rendered.startswith("openhands mcp add ma --transport http")
     assert '--header "Authorization: Bearer TOK-123"' in rendered
@@ -1270,8 +1299,10 @@ def test_github_copilot_cli_template_uses_mcp_add_form() -> None:
     """The Copilot CLI preset supplies every value requested by ``/mcp add``."""
     spec = lookup_client("github-copilot-cli")
     assert spec is not None
-    rendered = spec.template.replace("{{URL}}", "http://localhost:8095/mcp/v1").replace(
-        "{{TOKEN}}", "TOK-123"
+    rendered = (
+        spec.methods[1]
+        .template.replace("{{URL}}", "http://localhost:8095/mcp/v1")
+        .replace("{{TOKEN}}", "TOK-123")
     )
     assert rendered.startswith("/mcp add\n")
     assert "Server Name: ma" in rendered
@@ -1290,45 +1321,137 @@ def test_claude_code_template_uses_positional_url() -> None:
     """
     spec = lookup_client("claude-code")
     assert spec is not None
-    rendered = spec.template.replace("{{URL}}", "http://localhost:8095/mcp/v1").replace(
-        "{{TOKEN}}", "TOK-123"
+    assert [method.id for method in spec.methods] == ["cli", "project-config"]
+    rendered = (
+        spec.methods[0]
+        .template.replace("{{URL}}", "http://localhost:8095/mcp/v1")
+        .replace("{{TOKEN}}", "TOK-123")
     )
     assert "--url" not in rendered, "claude mcp add does not accept a --url flag"
     # URL must appear right after the server name (the positional slot).
-    assert "claude mcp add ma http://localhost:8095/mcp/v1" in rendered
+    assert "ma http://localhost:8095/mcp/v1" in rendered
     assert "--transport http" in rendered
+    assert "--scope user" in rendered
     assert '--header "Authorization: Bearer TOK-123"' in rendered
 
 
-def test_openclaw_template_round_trips() -> None:
-    """
-    The OpenClaw preset renders a valid ``openclaw mcp set`` command.
-
-    The embedded JSON must pin the streamable-HTTP transport and carry the
-    minted token as an ``Authorization: Bearer`` header — OpenClaw's bundle-mcp
-    client speaks streamable-HTTP and reads custom headers from this object.
-    """
-    spec = lookup_client("openclaw")
+def test_claude_code_manual_config_round_trips() -> None:
+    """Claude Code's alternate project config remains valid authenticated JSON."""
+    spec = lookup_client("claude-code")
     assert spec is not None
-    rendered = spec.template.replace("{{URL}}", "http://localhost:8095/mcp/v1").replace(
+    method = spec.methods[1]
+    rendered = method.template.replace("{{URL}}", "http://localhost:8095/mcp/v1").replace(
         "{{TOKEN}}", "TOK-123"
     )
-    assert rendered.startswith("openclaw mcp set ma ")
-    # The JSON payload is the single-quoted argument to `openclaw mcp set`.
-    start = rendered.index("'")
-    end = rendered.rindex("'")
-    payload = json.loads(rendered[start + 1 : end])
-    assert payload["url"] == "http://localhost:8095/mcp/v1"
-    assert payload["transport"] == "streamable-http"
-    assert payload["headers"]["Authorization"] == "Bearer TOK-123"
+    server = json.loads(rendered)["mcpServers"]["ma"]
+    assert server == {
+        "type": "http",
+        "url": "http://localhost:8095/mcp/v1",
+        "headers": {"Authorization": "Bearer TOK-123"},
+    }
+
+
+def test_current_cli_templates_use_streamable_http_and_bearer_options() -> None:
+    """Reviewed CLI presets use each product's current first-party syntax."""
+    rendered: dict[str, str] = {}
+    for client_id in ("github-copilot-cli", "gemini-cli", "openclaw", "openhands"):
+        spec = lookup_client(client_id)
+        assert spec is not None
+        rendered[client_id] = (
+            spec.methods[0].template.replace("{{URL}}", "URL").replace("{{TOKEN}}", "TOKEN")
+        )
+    assert rendered["github-copilot-cli"].startswith("copilot mcp add --transport http")
+    assert '--header "Authorization: Bearer TOKEN"' in rendered["github-copilot-cli"]
+    assert rendered["gemini-cli"].startswith("gemini mcp add --scope user --transport http")
+    assert rendered["openclaw"].startswith("openclaw mcp add ma")
+    assert "--transport streamable-http" in rendered["openclaw"]
+    assert rendered["openhands"].startswith("openhands mcp add ma")
+
+
+def test_current_config_templates_use_product_specific_http_keys() -> None:
+    """Reviewed JSON presets retain each client's distinct transport schema."""
+    windsurf = lookup_client("windsurf")
+    vscode = lookup_client("vscode")
+    cline = lookup_client("cline")
+    assert windsurf is not None
+    assert vscode is not None
+    assert cline is not None
+    devin = json.loads(
+        windsurf.methods[0].template.replace("{{URL}}", "URL").replace("{{TOKEN}}", "TOKEN")
+    )["mcpServers"]["ma"]
+    vs_server = json.loads(
+        vscode.methods[0].template.replace("{{URL}}", "URL").replace("{{TOKEN}}", "TOKEN")
+    )["servers"]["ma"]
+    cline_server = json.loads(
+        cline.methods[0].template.replace("{{URL}}", "URL").replace("{{TOKEN}}", "TOKEN")
+    )["mcpServers"]["ma"]
+    assert devin["transport"] == "http"
+    assert vs_server["type"] == "http"
+    assert cline_server["type"] == "streamableHttp"
+
+
+def test_custom_template_exposes_connection_parameters() -> None:
+    """Custom renders product-neutral values needed by any MCP client."""
+    spec = lookup_client("custom")
+    assert spec is not None
+    assert spec.label == "Custom"
+    assert len(spec.methods) == 1
+    method = spec.methods[0]
+    assert method.id == "parameters"
+    assert method.kind == "text"
+    rendered = method.template.replace("{{URL}}", "https://ma.example/mcp/v1").replace(
+        "{{TOKEN}}", "TOK-123"
+    )
+    assert "Server name: ma" in rendered
+    assert "Transport: Streamable HTTP" in rendered
+    assert "URL: https://ma.example/mcp/v1" in rendered
+    assert "Header name: Authorization" in rendered
+    assert "Header value: Bearer TOK-123" in rendered
+
+
+def test_roo_code_template_uses_streamable_http() -> None:
+    """Roo Code renders its documented remote server configuration."""
+    spec = lookup_client("roo-code")
+    assert spec is not None
+    assert [method.id for method in spec.methods] == ["global-config", "project-config"]
+    rendered = (
+        spec.methods[0]
+        .template.replace("{{URL}}", "https://ma.example/mcp/v1")
+        .replace("{{TOKEN}}", "TOK-123")
+    )
+    server = json.loads(rendered)["mcpServers"]["ma"]
+    assert server == {
+        "type": "streamable-http",
+        "url": "https://ma.example/mcp/v1",
+        "headers": {"Authorization": "Bearer TOK-123"},
+        "disabled": False,
+        "alwaysAllow": [],
+    }
+    assert "global" in spec.methods[0].config_path_hint.lower()
+    assert spec.methods[1].config_path_hint == ".roo/mcp.json in the project root."
+
+
+def test_openclaw_template_round_trips() -> None:
+    """The OpenClaw preset uses its current add command and HTTP transport."""
+    spec = lookup_client("openclaw")
+    assert spec is not None
+    rendered = (
+        spec.methods[0]
+        .template.replace("{{URL}}", "http://localhost:8095/mcp/v1")
+        .replace("{{TOKEN}}", "TOK-123")
+    )
+    assert rendered.startswith("openclaw mcp add ma --url http://localhost:8095/mcp/v1")
+    assert "--transport streamable-http" in rendered
+    assert '--header "Authorization: Bearer TOK-123"' in rendered
 
 
 def test_hermes_template_round_trips() -> None:
     """The Hermes preset renders valid YAML with url + Authorization Bearer header."""
     spec = lookup_client("hermes")
     assert spec is not None
-    assert spec.kind == "yaml"
-    rendered = spec.template.replace("{{URL}}", "http://localhost:8095/mcp/v1").replace(
+    method = spec.methods[1]
+    assert method.kind == "yaml"
+    rendered = method.template.replace("{{URL}}", "http://localhost:8095/mcp/v1").replace(
         "{{TOKEN}}", "TOK-123"
     )
     parsed = yaml.safe_load(rendered)
@@ -1345,7 +1468,36 @@ def test_all_clients_have_required_fields() -> None:
         assert spec.id not in seen_ids
         seen_ids.add(spec.id)
         assert spec.label
-        assert spec.kind in {"json", "shell", "toml", "yaml"}
-        assert "{{URL}}" in spec.template
-        assert "{{TOKEN}}" in spec.template
-        assert spec.config_path_hint  # non-empty doc hint
+        assert spec.methods
+        seen_method_ids: set[str] = set()
+        for method in spec.methods:
+            assert method.id
+            assert method.id not in seen_method_ids
+            seen_method_ids.add(method.id)
+            assert method.label
+            assert method.kind in {"json", "shell", "text", "toml", "yaml"}
+            assert method.action in {"copy", "download"}
+            assert "{{URL}}" in method.template
+            assert "{{TOKEN}}" in method.template
+            assert method.config_path_hint
+            if method.kind in {"json", "toml", "yaml"}:
+                assert method.action == "download"
+                assert method.filename
+
+
+def test_page_selects_recommended_method_without_minting() -> None:
+    """Method selection is client-local presentation and cannot mint credentials."""
+    assert "selectedMethodIds: {}" in HTML
+    assert "c.methods[0].id" in HTML
+    assert "selectMethod(c.id, method.id)" in HTML
+    select_method = HTML.split("function selectMethod", 1)[1].split("function ", 1)[0]
+    assert "mintForSelected" not in select_method
+    assert "method-label recommended" in HTML
+
+
+def test_page_uses_network_url_by_default() -> None:
+    """Generated connection details prefer the advertised network endpoint."""
+    assert '<button data-which="network" class="active">Network</button>' in HTML
+    assert '<button data-which="loopback">Loopback</button>' in HTML
+    assert 'urlMode: "network"' in HTML
+    assert 'mode === "network"' in HTML

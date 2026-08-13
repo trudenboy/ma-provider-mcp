@@ -110,7 +110,7 @@ async def test_malformed_lookup_result_uses_lookup_failure_policy(
     mock_mass: MagicMock,
     mock_user: MagicMock,
 ) -> None:
-    """Only exact None is legacy; every malformed token ID remains Read-only."""
+    """Only exact None is legacy; every malformed token ID remains Safe queries."""
     registry = TokenIdentityRegistry()
     registry.bind("bearer", user_id="u1", token_id="stale-id")
     mock_mass.webserver.auth.authenticate_with_token = AsyncMock(return_value=mock_user)
@@ -124,11 +124,11 @@ async def test_malformed_lookup_result_uses_lookup_failure_policy(
     assert access_token is not None
     assert access_token.client_id == LOOKUP_FAILURE_CLIENT_ID
     assert registry.lookup("bearer") is None
-    assert resolver.resolve("bearer").profile is PolicyProfile.READ_ONLY
+    assert resolver.resolve("bearer").profile is PolicyProfile.SAFE_QUERIES
 
 
 def test_authenticated_policy_resolution_distinguishes_legacy_and_lookup_failure() -> None:
-    """Legacy bindings inherit the default while missing bindings are Read-only."""
+    """Legacy bindings inherit the default while missing bindings are Safe queries."""
     registry = TokenIdentityRegistry()
     registry.bind("legacy", user_id="u1", token_id=None)
     registry.bind("known", user_id="u1", token_id="known-id")
@@ -141,6 +141,6 @@ def test_authenticated_policy_resolution_distinguishes_legacy_and_lookup_failure
     assert resolver.resolve("legacy").profile is PolicyProfile.TRUSTED
     assert resolver.resolve("known").profile is PolicyProfile.HOME_CONTROL
     failed = resolver.resolve("lookup-failed")
-    assert failed.profile is PolicyProfile.READ_ONLY
+    assert failed.profile is PolicyProfile.SAFE_QUERIES
     assert failed.mode(Capability.QUERY_LIBRARY) is PolicyMode.ALLOW
     assert failed.mode(Capability.CONTROL_PLAYBACK) is PolicyMode.DENY
