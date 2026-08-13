@@ -77,6 +77,29 @@ def test_system_health_keeps_annotations_separate_from_capability() -> None:
     assert decision.annotations["idempotentHint"] is True
 
 
+@pytest.mark.parametrize(
+    ("command", "capability"),
+    [
+        ("music/radios/radio_tracks", Capability.QUERY_LIBRARY),
+        ("players/tts_engines", Capability.QUERY_PLAYERS),
+    ],
+)
+def test_current_ma_read_commands_have_explicit_capabilities(
+    command: str, capability: Capability
+) -> None:
+    """New authenticated MA readers remain visible without weakening fail-closed policy."""
+    decision = resolve_command_policy(command, "read", profile=None)
+
+    assert decision.hard_denied is False
+    assert decision.required_capabilities == frozenset({str(capability)})
+    assert decision.annotations == {
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    }
+
+
 @pytest.mark.parametrize("scope", [None, "library.read", "system.read"])
 def test_unknown_command_fails_closed_instead_of_inheriting_scope(scope: str | None) -> None:
     """Upstream scope metadata alone cannot classify an unknown command family."""

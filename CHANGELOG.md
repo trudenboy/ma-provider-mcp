@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The Connect Wizard now provides ready-to-use onboarding for OpenCode,
   OpenHands CLI, and GitHub Copilot CLI.
 
+### Fixed
+- Current Music Assistant radio-track and text-to-speech engine queries are
+  available through the expected read-only permissions.
+
 ## [2.1.3] - 2026-08-11
 
 ### Security
