@@ -68,8 +68,9 @@ in the provider's config panel. Pick your AI client — the wizard mints a
 per-client token (`MCP — <Client>`, revocable individually under
 Profile → Long-lived access tokens) and shows the ready-to-paste snippet.
 Cursor users get an extra **Add to Cursor** one-click deeplink. Supports
-Claude Desktop, Claude Code, Cursor, Windsurf, VSCode, ChatGPT
-Connectors, Codex CLI, Gemini CLI, Cline, Zed, OpenClaw, and Hermes.
+Claude Desktop, Claude Code, Cursor, OpenCode, Windsurf, VSCode, GitHub
+Copilot CLI, ChatGPT Connectors, Codex CLI, Gemini CLI, Cline, Zed,
+OpenClaw, OpenHands, and Hermes.
 
 ### Manual
 

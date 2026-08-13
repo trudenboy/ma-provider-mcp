@@ -1237,6 +1237,50 @@ def test_cursor_template_round_trips() -> None:
     assert server["headers"]["Authorization"] == "Bearer TOK-123"
 
 
+def test_opencode_template_round_trips() -> None:
+    """The OpenCode preset renders an authenticated remote MCP configuration."""
+    spec = lookup_client("opencode")
+    assert spec is not None
+    rendered = spec.template.replace("{{URL}}", "http://localhost:8095/mcp/v1").replace(
+        "{{TOKEN}}", "TOK-123"
+    )
+    parsed = json.loads(rendered)
+    server = parsed["mcp"]["ma"]
+    assert parsed["$schema"] == "https://opencode.ai/config.json"
+    assert server["type"] == "remote"
+    assert server["url"] == "http://localhost:8095/mcp/v1"
+    assert server["enabled"] is True
+    assert server["oauth"] is False
+    assert server["headers"]["Authorization"] == "Bearer TOK-123"
+
+
+def test_openhands_template_uses_http_transport_and_bearer_header() -> None:
+    """The OpenHands preset follows the documented remote-server CLI syntax."""
+    spec = lookup_client("openhands")
+    assert spec is not None
+    rendered = spec.template.replace("{{URL}}", "http://localhost:8095/mcp/v1").replace(
+        "{{TOKEN}}", "TOK-123"
+    )
+    assert rendered.startswith("openhands mcp add ma --transport http")
+    assert '--header "Authorization: Bearer TOK-123"' in rendered
+    assert rendered.endswith("http://localhost:8095/mcp/v1")
+
+
+def test_github_copilot_cli_template_uses_mcp_add_form() -> None:
+    """The Copilot CLI preset supplies every value requested by ``/mcp add``."""
+    spec = lookup_client("github-copilot-cli")
+    assert spec is not None
+    rendered = spec.template.replace("{{URL}}", "http://localhost:8095/mcp/v1").replace(
+        "{{TOKEN}}", "TOK-123"
+    )
+    assert rendered.startswith("/mcp add\n")
+    assert "Server Name: ma" in rendered
+    assert "Server Type: HTTP" in rendered
+    assert "URL: http://localhost:8095/mcp/v1" in rendered
+    assert 'HTTP Headers: {"Authorization":"Bearer TOK-123"}' in rendered
+    assert "Tools: *" in rendered
+
+
 def test_claude_code_template_uses_positional_url() -> None:
     """
     ``claude mcp add`` takes the URL as a positional argument, not via ``--url``.

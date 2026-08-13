@@ -40,7 +40,7 @@ class ClientSpec:
 # token is an MA-minted JWT (alphabet ``[A-Za-z0-9_-.]``) and the URL is the
 # server's own base URL — neither can contain a quote, backslash, ``$`` or
 # whitespace. If MA ever issues opaque tokens from a wider alphabet, the
-# shell (OpenClaw) and YAML (Hermes) templates would need escaping.
+# shell and YAML templates would need escaping.
 CLIENTS: tuple[ClientSpec, ...] = (
     ClientSpec(
         id="claude-code",
@@ -94,6 +94,28 @@ CLIENTS: tuple[ClientSpec, ...] = (
         filename="mcp.json",
     ),
     ClientSpec(
+        id="opencode",
+        label="OpenCode",
+        kind="json",
+        template=(
+            "{\n"
+            '  "$schema": "https://opencode.ai/config.json",\n'
+            '  "mcp": {\n'
+            '    "ma": {\n'
+            '      "type": "remote",\n'
+            '      "url": "{{URL}}",\n'
+            '      "enabled": true,\n'
+            '      "oauth": false,\n'
+            '      "headers": { "Authorization": "Bearer {{TOKEN}}" }\n'
+            "    }\n"
+            "  }\n"
+            "}"
+        ),
+        config_path_hint=("~/.config/opencode/opencode.json (global) or opencode.json (project)."),
+        notes="OAuth discovery is disabled because this preset uses a dedicated MA token.",
+        filename="opencode.json",
+    ),
+    ClientSpec(
         id="windsurf",
         label="Windsurf",
         kind="json",
@@ -127,6 +149,22 @@ CLIENTS: tuple[ClientSpec, ...] = (
         ),
         config_path_hint=".vscode/mcp.json (workspace) or User Settings JSON.",
         filename="mcp.json",
+    ),
+    ClientSpec(
+        id="github-copilot-cli",
+        label="GitHub Copilot CLI",
+        kind="shell",
+        template=(
+            "/mcp add\n"
+            "Server Name: ma\n"
+            "Server Type: HTTP\n"
+            "URL: {{URL}}\n"
+            'HTTP Headers: {"Authorization":"Bearer {{TOKEN}}"}\n'
+            "Tools: *"
+        ),
+        config_path_hint="Enter /mcp add in an interactive Copilot CLI session.",
+        notes="Fill the form with these values, then press Ctrl+S to save.",
+        filename="copilot-mcp.txt",
     ),
     ClientSpec(
         id="chatgpt",
@@ -226,6 +264,18 @@ CLIENTS: tuple[ClientSpec, ...] = (
             "Needs an OpenClaw build whose bundle-mcp forwards custom headers "
             "over streamable-http (the fix for issue #65590, Apr 2026)."
         ),
+        filename="add-ma.sh",
+    ),
+    ClientSpec(
+        id="openhands",
+        label="OpenHands CLI",
+        kind="shell",
+        template=(
+            "openhands mcp add ma --transport http \\\n"
+            '  --header "Authorization: Bearer {{TOKEN}}" \\\n'
+            "  {{URL}}"
+        ),
+        config_path_hint="Run this in any terminal; it updates ~/.openhands/mcp.json.",
         filename="add-ma.sh",
     ),
     ClientSpec(
