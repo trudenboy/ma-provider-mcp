@@ -257,7 +257,7 @@ async def test_auto_discovered_debug_override_activates_buffer_before_authentica
         side_effect=AssertionError("startup must not enumerate user tokens")
     )
     values = {
-        CONF_DEFAULT_POLICY: "Read-only",
+        CONF_DEFAULT_POLICY: "Safe queries",
         CONF_POLICY_TOKEN_SUFFIXES: [policy_token_suffix(token_id)],
         token_policy_key(token_id): "Custom",
         policy_mode_key(Capability.DEBUG_EVENTS, token_id): "allow",

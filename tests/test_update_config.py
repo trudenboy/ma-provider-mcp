@@ -210,7 +210,7 @@ async def test_runtime_replacement_preserves_raw_event_buffer_override(
     """A new empty registry still honors the context-free hashed config override."""
     token_id = "discovered-token-id"
     values = {
-        CONF_DEFAULT_POLICY: "Read-only",
+        CONF_DEFAULT_POLICY: "Safe queries",
         CONF_POLICY_TOKEN_SUFFIXES: [policy_token_suffix(token_id)],
         token_policy_key(token_id): "Custom",
         policy_mode_key(Capability.DEBUG_EVENTS, token_id): "allow",

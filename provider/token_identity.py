@@ -88,7 +88,7 @@ class AuthenticatedPolicyResolver:
         """Bind the identity registry to one immutable policy resolver."""
         self._identities = identities
         self._policies = policies
-        self._lookup_failure = policy_snapshot(PolicyProfile.READ_ONLY)
+        self._lookup_failure = policy_snapshot(PolicyProfile.SAFE_QUERIES)
 
     @property
     def policies(self) -> PolicyResolver:

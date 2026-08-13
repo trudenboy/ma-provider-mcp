@@ -68,6 +68,9 @@ reuse its token. No MCP runtime or authentication behavior changes.
     Network/Loopback changes, and does not prescribe a configuration syntax.
 18. Roo Code is available with its current `streamable-http` configuration for
     both global and project scopes, including the static Bearer header.
+19. The default restrictive profile is presented as `Safe queries`; stored
+    `Read-only` selections resolve to the renamed profile without broadening or
+    losing access.
 
 ## Test Plan
 
@@ -91,6 +94,8 @@ reuse its token. No MCP runtime or authentication behavior changes.
   placeholder is present in the rendered copyable text.
 - The Roo Code template test verifies its required transport type, URL, header,
   enabled state, and global-before-project method order.
+- Policy tests verify the `Safe queries` public value, unchanged `query:*`
+  semantics, and compatibility with the legacy stored `Read-only` value.
 - Run the complete test suite and repository pre-commit checks.
 
 ## Sequence Diagram

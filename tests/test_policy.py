@@ -54,7 +54,7 @@ def test_capability_vocabulary_is_the_stable_26_value_snapshot() -> None:
 @pytest.mark.parametrize(
     ("profile", "allowed_prefixes", "confirmed_prefixes"),
     [
-        (PolicyProfile.READ_ONLY, ("query:",), ()),
+        (PolicyProfile.SAFE_QUERIES, ("query:",), ()),
         (
             PolicyProfile.HOME_CONTROL,
             ("query:", "control:", "edit:"),
@@ -138,12 +138,12 @@ def test_resolver_uses_token_id_overrides_and_inherit() -> None:
     resolver = PolicyResolver(
         default=PolicySelection.profile(PolicyProfile.HOME_CONTROL),
         overrides={
-            "token-read": PolicySelection.profile(PolicyProfile.READ_ONLY),
+            "token-read": PolicySelection.profile(PolicyProfile.SAFE_QUERIES),
             "token-custom": PolicySelection.custom({"debug:logs": PolicyMode.CONFIRM}),
             "token-inherit": PolicySelection.inherit(),
         },
     )
-    assert resolver.resolve("token-read").profile is PolicyProfile.READ_ONLY
+    assert resolver.resolve("token-read").profile is PolicyProfile.SAFE_QUERIES
     assert resolver.resolve("token-custom").mode("debug:logs") is PolicyMode.CONFIRM
     assert resolver.resolve("token-custom").mode("query:library") is PolicyMode.DENY
     assert resolver.resolve("token-inherit").profile is PolicyProfile.HOME_CONTROL
@@ -156,7 +156,7 @@ def test_resolver_copies_selection_and_override_inputs() -> None:
     custom = {"query:queue": PolicyMode.ALLOW}
     overrides = {"token": PolicySelection.custom(custom)}
     resolver = PolicyResolver(
-        default=PolicySelection.profile(PolicyProfile.READ_ONLY),
+        default=PolicySelection.profile(PolicyProfile.SAFE_QUERIES),
         overrides=overrides,
     )
     custom["query:queue"] = PolicyMode.DENY

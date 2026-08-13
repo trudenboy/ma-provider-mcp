@@ -199,7 +199,7 @@ def _policy_selector(key: str, label: str | None, *, allow_inherit: bool) -> Con
     return ConfigEntry(
         key=key,
         type=ConfigEntryType.STRING,
-        default_value=INHERIT_POLICY if allow_inherit else PolicyProfile.READ_ONLY.value,
+        default_value=INHERIT_POLICY if allow_inherit else PolicyProfile.SAFE_QUERIES.value,
         options=[ConfigValueOption(value=value) for value in values],
         translation_key="policy_token" if label is not None else None,
         translation_params=[label] if label is not None else None,

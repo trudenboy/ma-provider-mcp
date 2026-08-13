@@ -16,6 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Roo Code onboarding now provides its documented Streamable HTTP configuration
   for global and project scopes.
 
+### Changed
+- The restrictive `Read-only` policy is now named `Safe queries` to clarify
+  that it exposes only `query:*` capabilities, not every non-mutating command;
+  existing stored `Read-only` selections retain the same policy automatically.
+
 ### Fixed
 - Connect presets now use current product-specific HTTP commands, configuration
   keys, and scopes; unsupported Cursor deeplinks and static-token presets for

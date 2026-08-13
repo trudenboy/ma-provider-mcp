@@ -402,7 +402,7 @@ async def test_provider_debug_guard_uses_exact_request_policy_not_global_config(
     """Provider debug handlers resolve the current bearer instead of global tags."""
     mass = CommandRegistry()
     policies = {
-        "deny": policy_snapshot(PolicyProfile.READ_ONLY),
+        "deny": policy_snapshot(PolicyProfile.SAFE_QUERIES),
         "allow": policy_snapshot(
             PolicyProfile.CUSTOM,
             {Capability.DEBUG_PROVIDERS: PolicyMode.ALLOW},
@@ -506,7 +506,7 @@ async def test_provider_owned_denial_audits_once(
     command_set = ProviderCommandSet(
         mass,
         _config(),
-        policy_provider=lambda _bearer: policy_snapshot(PolicyProfile.READ_ONLY),
+        policy_provider=lambda _bearer: policy_snapshot(PolicyProfile.SAFE_QUERIES),
         audit_sink=records.append,
         audit_client_id_provider=lambda _bearer: "exact-token-id",
     )
@@ -915,7 +915,7 @@ def test_manual_token_policy_activates_event_buffer() -> None:
     mass = CommandRegistry()
     token_id = "foreign-token-id"
     values = {
-        CONF_DEFAULT_POLICY: "Read-only",
+        CONF_DEFAULT_POLICY: "Safe queries",
         CONF_MANUAL_TOKEN_IDS: [token_id],
         token_policy_key(token_id): "Custom",
         policy_mode_key(Capability.DEBUG_EVENTS, token_id): "confirm",
@@ -939,7 +939,7 @@ def test_authenticated_discovered_token_policy_activates_event_buffer() -> None:
     mass = CommandRegistry()
     token_id = "discovered-token-id"
     values = {
-        CONF_DEFAULT_POLICY: "Read-only",
+        CONF_DEFAULT_POLICY: "Safe queries",
         token_policy_key(token_id): "Custom",
         policy_mode_key(Capability.DEBUG_EVENTS, token_id): "allow",
         "debug_event_buffer_capacity": 100,
@@ -969,7 +969,7 @@ def test_hashed_token_override_hot_update_activates_event_buffer_without_identit
 
     def configured(debug_mode: str | None) -> MagicMock:
         values = {
-            CONF_DEFAULT_POLICY: "Read-only",
+            CONF_DEFAULT_POLICY: "Safe queries",
             "debug_event_buffer_capacity": 100,
         }
         if debug_mode is not None:

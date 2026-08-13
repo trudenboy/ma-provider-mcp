@@ -242,7 +242,7 @@ def make_info(ctx: WizardContext) -> Callable[[web.Request], Any]:
             profile = str(ctx.default_profile_provider())
         except AttributeError, RuntimeError, TypeError, ValueError:
             LOGGER.warning("Connect Wizard: default policy provider failed")
-            profile = "Read-only"
+            profile = "Safe queries"
 
         return web.json_response(
             {

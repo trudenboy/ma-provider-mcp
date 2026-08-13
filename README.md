@@ -26,7 +26,7 @@ configuration, and provider diagnostics without maintaining a parallel tool API.
   `mass.webserver.auth.authenticate_with_token` (handles both JWT and legacy tokens).
 - **Permissions & Confirmations v2** — five named profiles and per-token overrides
   resolve all 26 stable capabilities to `Deny`, `Allow`, or `Confirm`. New and
-  unconfigured installations fail closed to the `Read-only` profile.
+  unconfigured installations fail closed to the `Safe queries` profile.
 - **Mounted into MA's existing webserver** at `/mcp/v1` — reuses TLS, reverse proxy,
   and Home Assistant ingress out of the box. No second port, no extra firewall rule.
 - The default MCP surface contains exactly three tools: `search_tools`,
@@ -100,7 +100,7 @@ override for each `MCP — …` token (or add a Music Assistant token ID manuall
 
 | Profile | Behavior |
 |---|---|
-| `Read-only` | Allows `query:*`; denies everything else. |
+| `Safe queries` | Allows `query:*`; denies everything else. |
 | `Home control` | Allows query, control, and edit; confirms delete; denies debug, config, and system. |
 | `Interactive admin` | Allows query and control; confirms edit, delete, debug, config, and system. |
 | `Trusted` | Allows all capabilities without elicitation. |

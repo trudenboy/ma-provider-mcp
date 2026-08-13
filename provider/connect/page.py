@@ -233,7 +233,7 @@ HTML: str = """<!doctype html>
     container.innerHTML = "";
     const el = document.createElement("span");
     el.className = "perm-pill on";
-    el.textContent = state.info.default_policy?.profile || "Read-only";
+    el.textContent = state.info.default_policy?.profile || "Safe queries";
     container.appendChild(el);
   }
 

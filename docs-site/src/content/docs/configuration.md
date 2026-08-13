@@ -7,6 +7,10 @@ title: Configuration
 The public endpoint remains `/mcp/v1`. By default the model sees `search_tools`,
 `get_tool_schema`, and `call_tool`.
 
+The default **Safe queries** policy exposes library, queue, player, and metadata
+queries. It intentionally excludes configuration, diagnostics, control, edit,
+delete, and system capabilities even when an individual operation is read-only.
+
 ## Connect Wizard
 
 The Connect Wizard represents each target application once. If an application

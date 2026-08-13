@@ -791,7 +791,7 @@ async def test_mount_unmount_cycle(wizard_mass: MagicMock) -> None:
     unmount = await mount_connect_wizard(
         wizard_mass,
         mount_path="/mcp/v1",
-        default_profile_provider=lambda: "Read-only",
+        default_profile_provider=lambda: "Safe queries",
         extra_origins_csv="",
     )
     assert len(fake_ws.routes) == 5
@@ -804,7 +804,7 @@ async def test_mount_path_relative(wizard_mass: MagicMock) -> None:
     unmount = await mount_connect_wizard(
         wizard_mass,
         mount_path="/custom",
-        default_profile_provider=lambda: "Read-only",
+        default_profile_provider=lambda: "Safe queries",
         extra_origins_csv="",
     )
     try:

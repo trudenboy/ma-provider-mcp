@@ -72,8 +72,8 @@ def _adapter(handler: Any) -> DynamicAPIAdapter:
         auth_required_provider=lambda: True,
         token_provider=lambda: AccessToken(token="secret", client_id="u1", scopes=[]),
         scope_checker=lambda _user, _scope: True,
-        policy_provider=lambda _bearer: policy_snapshot(PolicyProfile.READ_ONLY),
-        default_policy_provider=lambda: policy_snapshot(PolicyProfile.READ_ONLY),
+        policy_provider=lambda _bearer: policy_snapshot(PolicyProfile.SAFE_QUERIES),
+        default_policy_provider=lambda: policy_snapshot(PolicyProfile.SAFE_QUERIES),
     )
 
 

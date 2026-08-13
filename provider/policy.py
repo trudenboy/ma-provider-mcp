@@ -23,7 +23,7 @@ class PolicyMode(StrEnum):
 class PolicyProfile(StrEnum):
     """Named policy profiles exposed by provider configuration."""
 
-    READ_ONLY = "Read-only"
+    SAFE_QUERIES = "Safe queries"
     HOME_CONTROL = "Home control"
     INTERACTIVE_ADMIN = "Interactive admin"
     TRUSTED = "Trusted"
@@ -155,7 +155,7 @@ def policy_snapshot(
         value = str(capability)
         if profile is PolicyProfile.TRUSTED:
             mode = PolicyMode.ALLOW
-        elif profile is PolicyProfile.READ_ONLY:
+        elif profile is PolicyProfile.SAFE_QUERIES:
             mode = PolicyMode.ALLOW if value.startswith("query:") else PolicyMode.DENY
         elif profile is PolicyProfile.HOME_CONTROL:
             mode = (

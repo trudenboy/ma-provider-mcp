@@ -35,6 +35,7 @@ if TYPE_CHECKING:
 LOGGER = logging.getLogger(__name__)
 
 INHERIT_POLICY = "Inherit"
+LEGACY_READ_ONLY_POLICY = "Read-only"
 # Bandit B105: this is a UI display-name prefix, not credential material.
 MCP_TOKEN_NAME_PREFIX = "MCP — "  # nosec B105
 
@@ -207,16 +208,18 @@ def _parse_selection(
         return (
             PolicySelection.inherit()
             if allow_inherit
-            else PolicySelection.profile(PolicyProfile.READ_ONLY)
+            else PolicySelection.profile(PolicyProfile.SAFE_QUERIES)
         )
     if allow_inherit and raw == INHERIT_POLICY:
         return PolicySelection.inherit()
     if not isinstance(raw, str):
-        return PolicySelection.profile(PolicyProfile.READ_ONLY)
+        return PolicySelection.profile(PolicyProfile.SAFE_QUERIES)
+    if raw == LEGACY_READ_ONLY_POLICY:
+        return PolicySelection.profile(PolicyProfile.SAFE_QUERIES)
     try:
         profile = PolicyProfile(raw)
     except TypeError, ValueError:
-        return PolicySelection.profile(PolicyProfile.READ_ONLY)
+        return PolicySelection.profile(PolicyProfile.SAFE_QUERIES)
     if profile is not PolicyProfile.CUSTOM:
         return PolicySelection.profile(profile)
     modes = {

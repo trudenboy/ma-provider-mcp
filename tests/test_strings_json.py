@@ -97,7 +97,7 @@ def test_strings_expose_only_v2_policy_configuration_contract() -> None:
     assert entries["info_label"]["label"].startswith("MCP endpoint: {0}")
     assert "Advanced mode" in entries["policy_default"]["description"]
     expected_profile_options = {
-        "Read-only": "Read-only",
+        "Safe queries": "Safe queries",
         "Home control": "Home control",
         "Interactive admin": "Interactive admin",
         "Trusted": "Trusted",

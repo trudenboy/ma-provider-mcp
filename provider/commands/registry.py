@@ -291,7 +291,7 @@ class ProviderCommandSet:
 
         bearer = authorization.current_bearer_token()
         if bearer is None and self._auth_required():
-            return PolicyProfile.READ_ONLY.value
+            return PolicyProfile.SAFE_QUERIES.value
         return self._policy_provider(bearer).profile.value
 
     def _runtime_diagnostics(self) -> dict[str, Any]:
