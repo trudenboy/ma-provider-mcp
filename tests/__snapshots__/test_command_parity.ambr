@@ -523,6 +523,9 @@
     'music/radios/library_items': list([
       'query:library',
     ]),
+    'music/radios/radio_tracks': list([
+      'query:library',
+    ]),
     'music/radios/radio_versions': list([
       'query:library',
     ]),
@@ -798,6 +801,9 @@
     ]),
     'players/sleep_timer/set': list([
       'control:playback',
+    ]),
+    'players/tts_engines': list([
+      'query:players',
     ]),
     'providers': list([
       'debug:providers',

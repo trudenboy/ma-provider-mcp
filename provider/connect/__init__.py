@@ -3,8 +3,7 @@ Connect Wizard — one-click onboarding UI for MCP-aware AI clients.
 
 Provides a single-page web UI mounted under ``<mcp-mount>/connect`` that mints
 per-client long-lived MA tokens (``"MCP — <Client>"``) and renders ready-to-paste
-configuration snippets, deeplinks, and share-URLs for Claude Desktop, Claude
-Code, Cursor, Windsurf, VSCode, ChatGPT, Codex CLI, Gemini CLI, Cline, and Zed.
+configuration snippets, deeplinks, and share-URLs for supported MCP clients.
 """
 
 from __future__ import annotations

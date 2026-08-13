@@ -263,6 +263,14 @@ def _destructive_write(capability: Capability) -> CommandDecision:
 
 
 EXACT_POLICIES: dict[str, CommandDecision] = {
+    "music/radios/radio_tracks": CommandDecision(
+        _READ_ANNOTATIONS,
+        frozenset({str(Capability.QUERY_LIBRARY)}),
+    ),
+    "players/tts_engines": CommandDecision(
+        _READ_ANNOTATIONS,
+        frozenset({str(Capability.QUERY_PLAYERS)}),
+    ),
     "player_queues/delete_item": _destructive_write(Capability.DELETE_QUEUE),
     "player_queues/clear": _destructive_write(Capability.DELETE_QUEUE),
     "fastmcp/queue/remove_items_safe": _destructive_write(Capability.DELETE_QUEUE),
