@@ -22,6 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   existing stored `Read-only` selections retain the same policy automatically.
 
 ### Fixed
+- The provider's Server settings now render the actual MCP endpoint guidance
+  instead of exposing the structural `info_label` key in the Music Assistant UI.
 - Connect presets now use current product-specific HTTP commands, configuration
   keys, and scopes; unsupported Cursor deeplinks and static-token presets for
   OAuth-only Claude Desktop and ChatGPT connectors are no longer offered.

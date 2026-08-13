@@ -1,9 +1,5 @@
 {
   "config_entries": {
-    "info_label": {
-      "label": "MCP endpoint: {0}\nCreate tokens in Profile → Long-lived access tokens.",
-      "description": "The MCP endpoint and where to manage its Music Assistant access tokens."
-    },
     "open_connect": {
       "label": "Open Connect Wizard",
       "description": "Guided setup for Claude Code, Cursor, OpenCode, VSCode and other static-token MCP clients. Mints a per-client token labelled `MCP — <Client>` (revocable in Profile → Long-lived access tokens) and provides reviewed connection methods."

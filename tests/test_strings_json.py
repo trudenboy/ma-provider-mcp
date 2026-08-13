@@ -88,13 +88,11 @@ def test_strings_expose_only_v2_policy_configuration_contract() -> None:
     entries = data["config_entries"]
 
     assert entries.keys() >= {
-        "info_label",
         "policy_capability",
         "policy_default",
         "policy_manual_token_ids",
         "policy_token",
     }
-    assert entries["info_label"]["label"].startswith("MCP endpoint: {0}")
     assert "Advanced mode" in entries["policy_default"]["description"]
     expected_profile_options = {
         "Safe queries": "Safe queries",
