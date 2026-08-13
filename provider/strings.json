@@ -6,7 +6,7 @@
     },
     "open_connect": {
       "label": "Open Connect Wizard",
-      "description": "One-click setup for Claude Desktop, Claude Code, Cursor, Windsurf, VSCode, ChatGPT and other MCP clients. Mints a per-client token labelled `MCP — <Client>` (revocable in Profile → Long-lived access tokens) and copies the ready-to-paste snippet for you."
+      "description": "Guided setup for Claude Code, Cursor, OpenCode, VSCode and other static-token MCP clients. Mints a per-client token labelled `MCP — <Client>` (revocable in Profile → Long-lived access tokens) and provides reviewed connection methods."
     },
     "require_auth": {
       "label": "Require authentication",

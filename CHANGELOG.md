@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.5] - 2026-08-13
+
+### Added
+- Clients with multiple setup paths now show recommended-first connection
+  methods in one card, with one shared per-client token across CLI, config-file,
+  and guided UI alternatives.
+- A Custom client card now provides copyable server name, Streamable HTTP URL,
+  transport, and Bearer-header parameters for manually configured MCP clients.
+- Roo Code onboarding now provides its documented Streamable HTTP configuration
+  for global and project scopes.
+
+### Fixed
+- Connect presets now use current product-specific HTTP commands, configuration
+  keys, and scopes; unsupported Cursor deeplinks and static-token presets for
+  OAuth-only Claude Desktop and ChatGPT connectors are no longer offered.
+- Generated connection details now default to the advertised Network MCP URL
+  instead of Loopback, which remains available as an explicit option.
+
 ## [2.1.4] - 2026-08-13
 
 ### Added

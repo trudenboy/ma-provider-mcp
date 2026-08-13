@@ -67,10 +67,14 @@ After enabling the plugin in MA settings, click **Open Connect Wizard**
 in the provider's config panel. Pick your AI client — the wizard mints a
 per-client token (`MCP — <Client>`, revocable individually under
 Profile → Long-lived access tokens) and shows the ready-to-paste snippet.
-Cursor users get an extra **Add to Cursor** one-click deeplink. Supports
-Claude Desktop, Claude Code, Cursor, OpenCode, Windsurf, VSCode, GitHub
-Copilot CLI, ChatGPT Connectors, Codex CLI, Gemini CLI, Cline, Zed,
-OpenClaw, OpenHands, and Hermes.
+When a client supports multiple connection methods, the simplest method is
+recommended first and alternate CLI, config-file, or guided UI methods remain
+in the same client card and reuse its token. Supports Claude Code, Cursor,
+OpenCode, Windsurf/Devin, VSCode, GitHub Copilot CLI, Codex CLI, Gemini CLI,
+Cline, Roo Code, Zed, OpenClaw, OpenHands, Hermes, and a product-neutral Custom option.
+Claude Desktop Chat/Cowork and
+ChatGPT custom connectors are omitted because they support OAuth rather than
+the wizard's static Bearer token.
 
 ### Manual
 
@@ -83,8 +87,8 @@ curl -sS -H "Authorization: Bearer $TOKEN" \
      http://localhost:8095/mcp/v1
 
 # Connect Claude Code
-claude mcp add ma --transport http \
-  --url http://localhost:8095/mcp/v1 \
+claude mcp add --scope user --transport http ma \
+  http://localhost:8095/mcp/v1 \
   --header "Authorization: Bearer $TOKEN"
 ```
 
