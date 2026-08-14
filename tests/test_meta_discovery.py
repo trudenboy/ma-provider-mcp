@@ -9,6 +9,7 @@ from urllib.parse import urlencode
 
 import pytest
 from fastmcp import Client, FastMCP
+from fastmcp.exceptions import ToolError
 from mcp.shared.exceptions import McpError
 
 from provider import meta_discovery
@@ -71,6 +72,47 @@ class _Adapter:
         raise AssertionError("unreachable")
 
 
+@dataclass(frozen=True, slots=True)
+class _RecordedCall:
+    """One adapter invocation captured after MCP-boundary normalization."""
+
+    name: str
+    arguments: dict[str, Any]
+    response_mode: str
+    fields: list[str] | None
+    max_items: int | None
+
+
+class _RecordingAdapter(_Adapter):
+    """Record call-tool inputs that crossed the real FastMCP transport."""
+
+    def __init__(self) -> None:
+        self.calls: list[_RecordedCall] = []
+
+    async def call(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+        *,
+        response_mode: str,
+        fields: list[str] | None,
+        max_items: int | None,
+        ctx: Any,
+    ) -> dict[str, Any]:
+        """Capture normalized containers and return a minimal envelope."""
+        del ctx
+        self.calls.append(_RecordedCall(name, arguments, response_mode, fields, max_items))
+        return {"ok": True}
+
+
+def _recording_server() -> tuple[FastMCP, _RecordingAdapter]:
+    """Build a call-tool server with an adapter-side transport probe."""
+    mcp: FastMCP = FastMCP(name="call-tool-test")
+    adapter = _RecordingAdapter()
+    register_meta_discovery(mcp, dynamic_adapter=adapter)
+    return mcp, adapter
+
+
 async def test_registers_exactly_three_real_tools() -> None:
     """The direct MCP registration exposes no transform-time virtual tools."""
     mcp: FastMCP = FastMCP(name="test")
@@ -86,6 +128,158 @@ async def test_registers_exactly_three_real_tools() -> None:
     async with Client(mcp) as client:
         names = {tool.name for tool in await client.list_tools()}
     assert names == {"search_tools", "call_tool", "get_tool_schema"}
+
+
+async def test_call_tool_decodes_json_encoded_containers_once() -> None:
+    """Stringified top-level containers reach the adapter as native values."""
+    mcp, adapter = _recording_server()
+    async with Client(mcp) as client:
+        await client.call_tool(
+            "call_tool",
+            {
+                "name": "ma_api:music/search",
+                "arguments": '{"query":"jazz","nested":"[1]"}',
+                "fields": '["name","uri"]',
+            },
+        )
+
+    assert adapter.calls == [
+        _RecordedCall(
+            "ma_api:music/search",
+            {"query": "jazz", "nested": "[1]"},
+            "compact",
+            ["name", "uri"],
+            None,
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    ("arguments", "fields", "expected_arguments", "expected_fields"),
+    [
+        ({"query": "jazz"}, ["name"], {"query": "jazz"}, ["name"]),
+        (None, None, {}, None),
+    ],
+)
+async def test_call_tool_preserves_native_containers_and_defaults(
+    arguments: object,
+    fields: object,
+    expected_arguments: dict[str, Any],
+    expected_fields: list[str] | None,
+) -> None:
+    """Compatibility decoding does not alter native values or None defaults."""
+    mcp, adapter = _recording_server()
+    async with Client(mcp) as client:
+        await client.call_tool(
+            "call_tool",
+            {
+                "name": "ma_api:music/search",
+                "arguments": arguments,
+                "fields": fields,
+            },
+        )
+
+    assert adapter.calls[0].arguments == expected_arguments
+    assert adapter.calls[0].fields == expected_fields
+
+
+@pytest.mark.parametrize(
+    ("parameter", "value", "message"),
+    [
+        (
+            "arguments",
+            '{"private":"secret-274-payload"',
+            "arguments must be an object or a JSON-encoded object",
+        ),
+        (
+            "arguments",
+            "secret-274-payload",
+            "arguments must be an object or a JSON-encoded object",
+        ),
+        (
+            "arguments",
+            "null",
+            "arguments must be an object or a JSON-encoded object",
+        ),
+        (
+            "arguments",
+            '["secret-274-payload"]',
+            "arguments must be an object or a JSON-encoded object",
+        ),
+        (
+            "arguments",
+            ["secret-274-payload"],
+            "arguments must be an object or a JSON-encoded object",
+        ),
+        (
+            "arguments",
+            '{"private":"secret-274-payload","value":NaN}',
+            "arguments must be an object or a JSON-encoded object",
+        ),
+        (
+            "fields",
+            '["name","secret-274-payload"',
+            "fields must be an array of strings or a JSON-encoded array of strings",
+        ),
+        (
+            "fields",
+            "secret-274-payload",
+            "fields must be an array of strings or a JSON-encoded array of strings",
+        ),
+        (
+            "fields",
+            "null",
+            "fields must be an array of strings or a JSON-encoded array of strings",
+        ),
+        (
+            "fields",
+            '{"private":"secret-274-payload"}',
+            "fields must be an array of strings or a JSON-encoded array of strings",
+        ),
+        (
+            "fields",
+            ["name", 274, "secret-274-payload"],
+            "fields must be an array of strings or a JSON-encoded array of strings",
+        ),
+        (
+            "fields",
+            '["name",274,"secret-274-payload"]',
+            "fields must be an array of strings or a JSON-encoded array of strings",
+        ),
+    ],
+)
+async def test_call_tool_rejects_invalid_containers_without_echoing_payload(
+    parameter: str,
+    value: object,
+    message: str,
+) -> None:
+    """Invalid compatibility inputs produce stable redacted tool errors."""
+    mcp, adapter = _recording_server()
+    async with Client(mcp) as client:
+        with pytest.raises(ToolError) as raised:
+            await client.call_tool(
+                "call_tool",
+                {"name": "ma_api:music/search", parameter: value},
+            )
+
+    assert str(raised.value) == f"[invalid_arguments] {message}"
+    assert "secret-274-payload" not in str(raised.value)
+    assert "Traceback" not in str(raised.value)
+    assert adapter.calls == []
+
+
+async def test_call_tool_schema_keeps_container_only_contract() -> None:
+    """Compatibility decoding does not advertise string-valued containers."""
+    mcp, _adapter = _recording_server()
+    async with Client(mcp) as client:
+        tool = next(item for item in await client.list_tools() if item.name == "call_tool")
+
+    arguments = tool.inputSchema["properties"]["arguments"]
+    fields = tool.inputSchema["properties"]["fields"]
+    assert {variant["type"] for variant in arguments["anyOf"]} == {"object", "null"}
+    assert {variant["type"] for variant in fields["anyOf"]} == {"array", "null"}
+    array_schema = next(variant for variant in fields["anyOf"] if variant["type"] == "array")
+    assert array_schema["items"] == {"type": "string"}
 
 
 async def test_catalog_resource_template_is_discoverable_and_matches_tool_browse() -> None:

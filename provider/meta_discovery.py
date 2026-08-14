@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import math
 import re
 import time
@@ -49,6 +50,53 @@ CALL_TOOL_NAME = "call_tool"
 SEARCH_TOOL_NAME = "search_tools"
 _META_NAMES = {CALL_TOOL_NAME, SEARCH_TOOL_NAME, GET_TOOL_SCHEMA_NAME}
 _TOKEN_RE = re.compile(r"[^\W_]+", re.UNICODE)
+_ARGUMENTS_CONTAINER_ERROR = "arguments must be an object or a JSON-encoded object"
+_FIELDS_CONTAINER_ERROR = "fields must be an array of strings or a JSON-encoded array of strings"
+
+
+def _reject_nonstandard_json_constant(value: str) -> None:
+    """Reject JSON extensions such as NaN and Infinity."""
+    raise ValueError(value)
+
+
+def _normalize_arguments_container(value: Any) -> dict[str, Any]:
+    """Accept a native object or decode exactly one JSON object layer."""
+    if value is None:
+        return {}
+    if isinstance(value, str):
+        try:
+            value = json.loads(value, parse_constant=_reject_nonstandard_json_constant)
+        except ValueError:
+            raise tool_failure(
+                ToolFailureCode.INVALID_ARGUMENTS,
+                _ARGUMENTS_CONTAINER_ERROR,
+            ) from None
+    if not isinstance(value, dict):
+        raise tool_failure(
+            ToolFailureCode.INVALID_ARGUMENTS,
+            _ARGUMENTS_CONTAINER_ERROR,
+        )
+    return value
+
+
+def _normalize_fields_container(value: Any) -> list[str] | None:
+    """Accept a native string array or decode exactly one JSON array layer."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        try:
+            value = json.loads(value, parse_constant=_reject_nonstandard_json_constant)
+        except ValueError:
+            raise tool_failure(
+                ToolFailureCode.INVALID_ARGUMENTS,
+                _FIELDS_CONTAINER_ERROR,
+            ) from None
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise tool_failure(
+            ToolFailureCode.INVALID_ARGUMENTS,
+            _FIELDS_CONTAINER_ERROR,
+        )
+    return value
 
 
 def _discovery_policy_mode(entry: DynamicEntry) -> Literal["allow", "confirm"]:
@@ -373,9 +421,17 @@ def register_meta_discovery(
     @mcp.tool(name=CALL_TOOL_NAME)  # type: ignore[untyped-decorator, unused-ignore]
     async def call_tool(
         name: str,
-        arguments: dict[str, Any] | None = None,
+        arguments: Annotated[
+            Any,
+            WithJsonSchema({"type": "object", "additionalProperties": True}),
+        ]
+        | None = None,
         response_mode: str = "compact",
-        fields: list[str] | None = None,
+        fields: Annotated[
+            Any,
+            WithJsonSchema({"type": "array", "items": {"type": "string"}}),
+        ]
+        | None = None,
         max_items: int | None = None,
         ctx: Context | None = None,
     ) -> dict[str, Any]:
@@ -397,9 +453,9 @@ def register_meta_discovery(
             raise ToolError("MCP request context is unavailable")
         return await dynamic_adapter.call(
             name,
-            dict(arguments or {}),
+            _normalize_arguments_container(arguments),
             response_mode=response_mode,
-            fields=fields,
+            fields=_normalize_fields_container(fields),
             max_items=max_items,
             ctx=ctx,
         )

@@ -22,6 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   existing stored `Read-only` selections retain the same policy automatically.
 
 ### Fixed
+- `call_tool` now accepts MCP clients that serialize its `arguments` object and
+  `fields` array as JSON strings while keeping the published container schemas.
 - The provider's Server settings now render the actual MCP endpoint guidance
   instead of exposing the structural `info_label` key in the Music Assistant UI.
 - Connect presets now use current product-specific HTTP commands, configuration
