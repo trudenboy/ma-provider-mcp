@@ -6,7 +6,7 @@ description: Setting up the development environment for FastMCP Server provider
 
 ## Requirements
 
-- Python 3.12+
+- Python 3.14+
 - [uv](https://docs.astral.sh/uv/) — `curl -LsSf https://astral.sh/uv/install.sh | sh`
 - ffmpeg 6.1+ (for MA integration tests)
   - macOS: `brew install ffmpeg`
@@ -25,13 +25,13 @@ Re-run after `git pull` — MA model versions may change.
 
 ```bash
 # Unit tests only (no MA server needed)
-uv run pytest provider/tests/ -m "not integration"
+uv run pytest tests/ -m "not integration"
 
 # Full test suite
-uv run pytest provider/tests/
+uv run pytest tests/
 
 # With coverage report
-uv run pytest provider/tests/ --cov=provider/ --cov-report=html
+uv run pytest tests/ --cov=provider/ --cov-report=html
 ```
 
 ## Branch Naming
@@ -49,7 +49,7 @@ git checkout dev && git pull
 git checkout -b feature/my-feature
 
 # develop + test
-uv run pytest provider/tests/
+uv run pytest tests/
 pre-commit run --all-files
 
 # PR: feature/* → dev
@@ -103,5 +103,5 @@ python3 scripts/dev-workspace.py run --dir ~/ma-workspace
 python3 scripts/dev-workspace.py status --dir ~/ma-workspace
 ```
 
-The workspace uses a single `trudenboy/ma-server` fork and shared `.venv` (Python 3.12).
+The workspace uses a single `trudenboy/ma-server` fork and shared `.venv`.
 Each provider is connected via symlink into `ma-server/music_assistant/providers/`.
