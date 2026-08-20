@@ -9,13 +9,13 @@ title: Testing
 ## Quick Start
 
 ```bash
-uv run pytest provider/tests/ -v
+uv run pytest tests/ -v
 ```
 
 With coverage report:
 
 ```bash
-uv run pytest provider/tests/ -v --cov=provider/ --cov-report=term-missing
+uv run pytest tests/ -v --cov=provider/ --cov-report=term-missing
 ```
 
 ## CI Pipeline
@@ -36,7 +36,7 @@ Tests run against `trudenboy/ma-server@dev` (plugin-enabled fork — full CI wit
 | Tool | Purpose |
 |------|---------|
 | `uv` | Virtual environment and dependency management |
-| `Python 3.12` | Target Python version |
+| `Python 3.14` | Target Python version |
 | `pytest` | Test framework |
 | `pytest-cov` | Coverage collection |
 | `Codecov` | Coverage report upload (automatic in CI) |
@@ -72,7 +72,7 @@ Coverage reports are automatically uploaded to Codecov on every CI push.
 To view coverage locally:
 
 ```bash
-uv run pytest provider/tests/ --cov=provider/ --cov-report=html
+uv run pytest tests/ --cov=provider/ --cov-report=html
 open htmlcov/index.html
 ```
 
