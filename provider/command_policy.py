@@ -125,8 +125,10 @@ _PLAYBACK_COMMANDS = frozenset(
         "players/cmd/play",
         "players/cmd/play_pause",
         "players/cmd/previous",
+        "players/cmd/repeat",
         "players/cmd/resume",
         "players/cmd/seek",
+        "players/cmd/shuffle",
         "players/cmd/stop",
     }
 )
