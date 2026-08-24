@@ -733,6 +733,9 @@
     'players/cmd/previous': list([
       'control:playback',
     ]),
+    'players/cmd/repeat': list([
+      'control:playback',
+    ]),
     'players/cmd/resume': list([
       'control:playback',
     ]),
@@ -750,6 +753,9 @@
     ]),
     'players/cmd/set_option': list([
       'control:players',
+    ]),
+    'players/cmd/shuffle': list([
+      'control:playback',
     ]),
     'players/cmd/stop': list([
       'control:playback',
