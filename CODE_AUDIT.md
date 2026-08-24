@@ -12,7 +12,6 @@ The grade-D findings are retained deliberately:
 - `MetaDiscoveryService.discover` is the single cursor/search/schema state machine.
 - `to_brief_player` normalizes several version-dependent MA player shapes without
   trusting optional attributes.
-- `_build_prefab` is declarative UI composition; its branches only hide controls.
 - `DynamicAPIAdapter._finalize_invocation` is the fail-closed final authorization
   state machine immediately before a handler call.
 - `_bounded_json_value` is the depth, item, string, and byte-bound serializer.

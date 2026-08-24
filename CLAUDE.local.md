@@ -10,7 +10,7 @@ Provider repo for the Music Assistant `mcp_server` plugin. Synced into the
 
 - `provider/` — runtime code; `manifest.json` declares `type=plugin`, `domain=mcp_server`.
 - `provider/server.py::MCPServerRuntime` builds one root `FastMCP` with three default
-  meta-tools and optionally one model-visible `app_music_assistant` entry.
+  meta-tools.
 - `provider/catalog.py` owns immutable registry snapshots and request views;
   `provider/execution.py::DynamicAPIAdapter` exposes native `ma_api` commands from
   MA's live command-handler registry. Eight registered provider-extension handlers
