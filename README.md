@@ -29,9 +29,8 @@ configuration, and provider diagnostics without maintaining a parallel tool API.
   unconfigured installations fail closed to the `Safe queries` profile.
 - **Mounted into MA's existing webserver** at `/mcp/v1` — reuses TLS, reverse proxy,
   and Home Assistant ingress out of the box. No second port, no extra firewall rule.
-- The default MCP surface contains exactly three tools: `search_tools`,
-  `get_tool_schema`, and `call_tool`. Enabling **Enable MCP App** adds only
-  `app_music_assistant`; its state/action tools remain renderer-only.
+- The MCP surface contains exactly three tools: `search_tools`,
+  `get_tool_schema`, and `call_tool`.
 - Provider-owned `fastmcp/*` commands use that same registry and exist only for safe
   queue batch removal and diagnostics that Music Assistant does not expose natively.
 
@@ -116,11 +115,6 @@ elicitation, either keep the capability denied or deliberately change only that
 capability/token to `Allow`; the server returns an actionable error naming the
 capability. Resource reads require `Allow`, so a `Confirm` capability cannot be
 bypassed through `library://`, `player://`, or `queue://`.
-
-The optional Prefab MCP App uses the same dispatcher and repeats authentication,
-scope, filter, policy, and target checks after every elicitation. A UI click is not a
-confirmation. Hosts without MCP Apps support receive a text fallback. Changing
-`enable_mcp_app` restarts the runtime because it changes tools and resources.
 
 Authorization is resolved for discovery and repeated immediately before execution
 and after elicitation. Music Assistant scopes, disabled users, player/provider
