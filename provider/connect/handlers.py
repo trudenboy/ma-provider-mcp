@@ -364,7 +364,15 @@ def make_login(ctx: WizardContext) -> Callable[[web.Request], Any]:
             if isinstance(public_user, dict)
             else getattr(public_user, "user_id", "")
         )
-        if session_token:
+        if session_token and not user_id:
+            try:
+                live_user = await ctx.mass.webserver.auth.authenticate_with_token(
+                    str(session_token)
+                )
+            except Exception:
+                live_user = None
+            user_id = str(getattr(live_user, "user_id", "") or "")
+        if session_token and user_id:
             await _bind_request_identity(ctx, str(session_token), SimpleNamespace(user_id=user_id))
         return web.json_response(
             {

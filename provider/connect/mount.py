@@ -46,7 +46,7 @@ async def mount_connect_wizard(
         current default policy profile name.
     :param extra_origins_csv: Comma-separated additional ``Origin`` values to
         accept beyond the auto-derived loopback + base_url + publish_ip set.
-        :param trust_forwarded_proto: When True, accept a trusted reverse proxy's
+    :param trust_forwarded_proto: When True, accept a trusted reverse proxy's
         ``X-Forwarded-Proto: https`` as proof the public hop was HTTPS, so the
         credential-bearing endpoints work behind a TLS-terminating proxy.
     :param identity_binder: Optional bind(bearer, user_id, token_id) for minted tokens.

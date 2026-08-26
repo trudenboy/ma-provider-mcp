@@ -166,11 +166,13 @@ def filter_collection_result(user: Any, command: str, result: Any) -> Any:
     if isinstance(result, Mapping):
         return {
             key: (
-                _filter_rows(value, user, rule.kind) if isinstance(value, list | tuple) else value
+                _filter_rows(value, allowed, rule.row_attributes)
+                if isinstance(value, list | tuple)
+                else value
             )
             for key, value in result.items()
         }
-    return _filter_rows(result, user, rule.kind)
+    return _filter_rows(result, allowed, rule.row_attributes)
 
 
 _PLAYER_KINDS = frozenset({TargetKind.PLAYER, TargetKind.PLAYERS})
@@ -178,11 +180,11 @@ _SEQUENCE_KINDS = frozenset({TargetKind.PLAYERS, TargetKind.MUSIC_PROVIDERS})
 _INTERNAL_MUSIC_TARGETS = frozenset({"builtin", "database", "library"})
 
 
-def _filter_rows(result: Any, user: Any, kind: TargetKind) -> Any:
-    """Drop sequence rows that collection visibility hides."""
+def _filter_rows(result: Any, allowed: set[str], attributes: tuple[str, ...]) -> Any:
+    """Drop sequence rows whose declared identity is outside the allowlist."""
     if not isinstance(result, list | tuple):
         return result
-    filtered = tuple(item for item in result if collection_row_allowed(user, item, kind=kind))
+    filtered = tuple(item for item in result if _row_ids(item, attributes) & allowed)
     return filtered if isinstance(result, tuple) else list(filtered)
 
 

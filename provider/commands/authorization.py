@@ -110,6 +110,6 @@ def authorize_extension(
             f"Capability {required_capability!r} requires confirmation; set it to Allow or use an "
             "elicitation-capable client"
         )
-    if command is not None and user is not None and arguments:
+    if command is not None and user is not None and arguments is not None and mass is not None:
         enforce_target_filters(mass, user, command, arguments)
     return user  # type: ignore[no-any-return, unused-ignore]

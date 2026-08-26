@@ -405,10 +405,9 @@ class DynamicAPIAdapter:
         impersonating: bool,
     ) -> AuthorizedInvocation:
         """Re-bind request identity and re-run authorization after an await."""
-        auth = (
-            await self._authentication(revalidate=True) if self._auth_required_provider() else None
-        )
-        if auth is None and self._auth_required_provider():
+        require_auth = self._auth_required_provider()
+        auth = await self._authentication(revalidate=True) if require_auth else None
+        if auth is None and require_auth:
             self._audit_invocation(
                 invocation,
                 "authorization.denied",
