@@ -21,7 +21,7 @@ from .constants import (
     is_policy_key,
 )
 from .policy import POLICY_SCHEMA_VERSION
-from .policy_config import build_policy_resolver
+from .policy_config import build_policy_resolver, raw_provider_config_value
 from .token_identity import AuthenticatedPolicyResolver, TokenIdentityRegistry
 
 if TYPE_CHECKING:
@@ -354,12 +354,9 @@ class MCPServerRuntime:
 
     def _raw_policy_value(self, key: str) -> object:
         """Read one preserved policy value through MA's sanctioned raw API."""
-        instance_id = str(getattr(self._config, "instance_id", ""))
-        config_controller = getattr(self._mass, "config", None)
-        getter = getattr(config_controller, "get_raw_provider_config_value", None)
-        if not instance_id or not callable(getter):
-            return None
-        return getter(instance_id, key, None)
+        return raw_provider_config_value(
+            self._mass, str(getattr(self._config, "instance_id", "")), key
+        )
 
 
 async def _tag_lookup(mcp: Any, kind: str, key: str) -> set[str] | None:

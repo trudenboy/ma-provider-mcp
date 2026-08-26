@@ -161,6 +161,14 @@ def policy_event_buffer_enabled(
     return False
 
 
+def raw_provider_config_value(mass: Any, instance_id: str, key: str) -> Any:
+    """Read one preserved provider value through Music Assistant's raw config store."""
+    getter = getattr(getattr(mass, "config", None), "get_raw_provider_config_value", None)
+    if not instance_id or not callable(getter):
+        return None
+    return getter(instance_id, key, None)
+
+
 def policy_value(
     config: ProviderConfig,
     key: str,
