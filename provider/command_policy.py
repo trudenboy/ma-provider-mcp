@@ -13,7 +13,6 @@ from music_assistant_models.enums import ConfigEntryType
 
 from .capabilities import Capability
 from .config_io.secret_handler import is_secret_key
-from .known_commands import KNOWN_AUTHENTICATED_COMMANDS
 from .policy import PolicyMode, PolicySnapshot, combine_policy_modes
 
 if TYPE_CHECKING:
@@ -358,8 +357,6 @@ def resolve_command_policy(
         return CommandDecision({}, hard_denied=True)
     if exact := EXACT_POLICIES.get(command):
         return exact
-    if command not in KNOWN_AUTHENTICATED_COMMANDS:
-        return CommandDecision({}, hard_denied=True)
 
     if command.startswith(_SYSTEM_COMMAND_PREFIXES) or command in {
         "info",

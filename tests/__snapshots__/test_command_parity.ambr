@@ -523,9 +523,6 @@
     'music/radios/library_items': list([
       'query:library',
     ]),
-    'music/radios/radio_tracks': list([
-      'query:library',
-    ]),
     'music/radios/radio_versions': list([
       'query:library',
     ]),
@@ -731,9 +728,6 @@
     'players/cmd/previous': list([
       'control:playback',
     ]),
-    'players/cmd/repeat': list([
-      'control:playback',
-    ]),
     'players/cmd/resume': list([
       'control:playback',
     ]),
@@ -751,9 +745,6 @@
     ]),
     'players/cmd/set_option': list([
       'control:players',
-    ]),
-    'players/cmd/shuffle': list([
-      'control:playback',
     ]),
     'players/cmd/stop': list([
       'control:playback',
@@ -805,9 +796,6 @@
     ]),
     'players/sleep_timer/set': list([
       'control:playback',
-    ]),
-    'players/tts_engines': list([
-      'query:players',
     ]),
     'providers': list([
       'debug:providers',

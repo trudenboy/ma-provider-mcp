@@ -16,6 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   audit.
 - Library item reads and library listings apply the same music-provider filter.
 - Command response envelopes share one byte-budget fitter.
+- New Music Assistant commands in a known family inherit that family's
+  permissions instead of being hidden until a pin list is updated.
+- Connect Wizard session and client tokens are bound into request identity
+  as soon as they are minted.
 
 ## [2.1.9] - 2026-08-24
 

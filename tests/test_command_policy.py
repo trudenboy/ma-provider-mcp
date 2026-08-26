@@ -117,19 +117,21 @@ def test_unknown_command_fails_closed_instead_of_inheriting_scope(scope: str | N
 
 
 @pytest.mark.parametrize(
-    ("command", "scope"),
+    ("command", "scope", "capability"),
     [
-        ("music/future_command", "library.read"),
-        ("player_queues/future_command", "queues.control"),
-        ("config/core/future_command", "config.core.read"),
-        ("players/cmd/future_command", "players.control"),
+        ("music/future_command", "library.read", Capability.QUERY_LIBRARY),
+        ("player_queues/future_command", "queues.control", Capability.EDIT_QUEUE),
+        ("config/core/future_command", "config.core.read", Capability.CONFIG_READ),
+        ("players/cmd/future_command", "players.control", Capability.CONTROL_PLAYERS),
     ],
 )
-def test_unknown_descendant_of_known_family_fails_closed(command: str, scope: str) -> None:
-    """A recognized family cannot classify an unpinned future command."""
+def test_unknown_descendant_of_known_family_uses_the_family_policy(
+    command: str, scope: str, capability: Capability
+) -> None:
+    """The pin list is not a second allowlist; family policy classifies new descendants."""
     decision = resolve_command_policy(command, scope, None)
-    assert decision.hard_denied is True
-    assert decision.required_capabilities == frozenset()
+    assert decision.hard_denied is False
+    assert decision.required_capabilities == frozenset({str(capability)})
 
 
 @pytest.mark.parametrize("command", ["providers_elevated", "config/core_backup/read"])

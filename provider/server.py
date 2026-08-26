@@ -273,6 +273,9 @@ class MCPServerRuntime:
                 default_profile_provider=lambda: self.policy_resolver.resolve(None).profile.value,
                 extra_origins_csv=extra_origins,
                 trust_forwarded_proto=bool(self._config.get_value(CONF_TRUST_FORWARDED_PROTO)),
+                identity_binder=lambda bearer, user_id, token_id: self._token_identities.bind(
+                    bearer, user_id=user_id, token_id=token_id
+                ),
             )
         except Exception:
             self._logger.warning("Connect Wizard: mount failed", exc_info=True)

@@ -174,6 +174,29 @@ def test_authorization_rejects_wrong_scope_and_disabled_provider_tag(
         )
 
 
+def test_authorization_uses_command_classifier_and_target_filters(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Provider extensions classify and filter through the same command authorization."""
+    user = _user(UserRole.USER)
+    user.player_filter = ["kitchen"]
+    monkeypatch.setattr(authorization, "get_current_user", lambda: user)
+    monkeypatch.setattr(authorization, "get_current_token", lambda: "bearer")
+    monkeypatch.setattr(authorization, "has_scope", lambda _user, _scope: True, raising=False)
+    policy = policy_snapshot(PolicyProfile.CUSTOM, {Capability.DELETE_QUEUE: PolicyMode.ALLOW})
+
+    with pytest.raises(ToolError, match="not permitted"):
+        authorize_extension(
+            _config(Capability.DELETE_QUEUE),
+            required_scope="queues.control",
+            required_capability=str(Capability.DELETE_QUEUE),
+            policy_provider=lambda _bearer: policy,
+            command="fastmcp/queue/remove_items_safe",
+            arguments={"queue_id": "bedroom", "item_ids": ["1"]},
+            mass=MagicMock(),
+        )
+
+
 def test_scope_allowed_delegates_to_current_ma_scope_helper(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
