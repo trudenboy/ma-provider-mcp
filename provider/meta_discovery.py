@@ -40,6 +40,7 @@ from .catalog_pagination import (
     normalize_query,
     resolve_limit,
 )
+from .dynamic_serialization import COMMAND_ENVELOPE_SCHEMA
 from .errors import ToolFailureCode, tool_failure
 
 if TYPE_CHECKING:
@@ -343,9 +344,10 @@ def _schema_result(entry: DynamicEntry) -> dict[str, Any]:
         "allowImpersonation": entry.allow_impersonation,
         "annotations": entry.annotations,
         "policy_mode": entry.policy_mode.value,
+        "outputSchema": COMMAND_ENVELOPE_SCHEMA,
     }
     if entry.output_schema is not None:
-        result["outputSchema"] = entry.output_schema
+        result["dataSchema"] = entry.output_schema
     return result
 
 
@@ -452,7 +454,17 @@ def register_meta_discovery(
                 "Tool was not found or is not permitted",
             ) from exc
 
-    @mcp.tool(name=CALL_TOOL_NAME)  # type: ignore[untyped-decorator, unused-ignore]
+    @mcp.tool(
+        name=CALL_TOOL_NAME,
+        annotations=ToolAnnotations(
+            title="Call tool",
+            readOnlyHint=False,
+            destructiveHint=True,
+            idempotentHint=False,
+            openWorldHint=False,
+        ),
+        output_schema=COMMAND_ENVELOPE_SCHEMA,
+    )  # type: ignore[untyped-decorator, unused-ignore]
     async def call_tool(
         name: str,
         arguments: Annotated[

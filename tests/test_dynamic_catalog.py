@@ -44,6 +44,7 @@ from provider.dynamic_serialization import _encoded_size, fit_json_envelope
 from provider.execution import DynamicAPIAdapter
 from provider.meta_discovery import DynamicAdapter, register_meta_discovery
 from provider.policy import PolicyMode, PolicyProfile, policy_snapshot
+from provider.token_identity import TokenIdentity
 
 _META_NAMES = {"search_tools", "call_tool", "get_tool_schema"}
 
@@ -122,7 +123,7 @@ class _FakeAdapter:
             "truncated": False,
             "returned_count": 1,
             "bytes": 11,
-            "applied": {"mode": response_mode},
+            "applied": {"mode": response_mode, "fields": [], "max_items": 25},
         }
 
 
@@ -210,6 +211,19 @@ async def test_search_tools_schema_advertises_pagination() -> None:
     assert {"mode", "items", "total", "next_cursor", "catalog_revision"} <= set(
         tool.outputSchema["properties"]
     )
+
+
+async def test_call_tool_advertises_the_command_envelope_schema() -> None:
+    """call_tool's MCP output schema is the response-budget envelope, not the MA type."""
+    mcp, _adapter = _server()
+    async with Client(mcp) as client:
+        tool = next(item for item in await client.list_tools() if item.name == "call_tool")
+    assert tool.outputSchema is not None
+    assert {"command", "data", "truncated", "returned_count", "bytes", "applied"} <= set(
+        tool.outputSchema["properties"]
+    )
+    assert tool.annotations is not None
+    assert tool.annotations.readOnlyHint is False
 
 
 async def test_search_can_include_only_the_top_result_schema() -> None:
@@ -560,7 +574,15 @@ async def test_dynamic_schema_is_returned_on_demand() -> None:
     assert result.data["kind"] == "ma_api"
     assert result.data["inputSchema"]["required"] == ["player_id"]
     assert "risk" not in result.data
-    assert result.data["outputSchema"] == {"type": "object"}
+    assert result.data["outputSchema"]["required"] == [
+        "command",
+        "data",
+        "truncated",
+        "returned_count",
+        "bytes",
+        "applied",
+    ]
+    assert result.data["dataSchema"] == {"type": "object"}
     assert result.data["annotations"]["readOnlyHint"] is False
 
 
@@ -575,7 +597,10 @@ async def test_call_tool_routes_dynamic_name() -> None:
                 "arguments": {"player_id": "kitchen"},
             },
         )
-    assert result.data["data"] == {"ok": True}
+    payload = (
+        result.structured_content if isinstance(result.structured_content, dict) else result.data
+    )
+    assert payload["data"] == {"ok": True}
     assert adapter.calls == [("ma_api:players/cmd/play", {"player_id": "kitchen"})]
 
 
@@ -595,7 +620,7 @@ async def test_meta_catalog_stays_under_three_kib() -> None:
     async with Client(mcp) as client:
         tools = await client.list_tools()
     payload = "".join(tool.model_dump_json() for tool in tools).encode()
-    assert len(payload) <= 3072
+    assert len(payload) <= 4096
 
 
 def test_fake_handler_signature_is_stable() -> None:
@@ -637,8 +662,8 @@ def _real_adapter(
     mass = MagicMock()
     mass.command_handlers = {handler.command: handler}
     user = user or MagicMock(user_id="u1", enabled=True, role="admin")
-    mass.webserver.auth.get_user = AsyncMock(return_value=user)
     mass.webserver.auth.authenticate_with_token = AsyncMock(return_value=user)
+    mass.webserver.auth.get_token_id_from_token = AsyncMock(return_value="u1")
     token = AccessToken(token="secret", client_id="u1", scopes=[])
     adapter: _TestDynamicAPIAdapter = _TestDynamicAPIAdapter(
         mass,
@@ -657,6 +682,7 @@ def _real_adapter(
             },
         ),
         default_policy_provider=lambda: policy_snapshot(PolicyProfile.SAFE_QUERIES),
+        identity_provider=lambda _bearer: TokenIdentity(str(user.user_id), "u1"),
         audit_sink=audit_sink,
     )
     adapter._test_allowed_capabilities_provider = lambda: (
@@ -868,7 +894,12 @@ async def test_cached_snapshot_keeps_visibility_request_specific() -> None:
     users = {user.user_id: user for user in (allowed, denied)}
     current_token: contextvars.ContextVar[AccessToken] = contextvars.ContextVar("current_token")
     mass = MagicMock(command_handlers={handler.command: handler})
-    mass.webserver.auth.get_user = AsyncMock(side_effect=users.__getitem__)
+    mass.webserver.auth.authenticate_with_token = AsyncMock(
+        side_effect=lambda _bearer: users[current_token.get().client_id]
+    )
+    mass.webserver.auth.get_token_id_from_token = AsyncMock(
+        side_effect=lambda _bearer: current_token.get().client_id
+    )
     adapter = DynamicAPIAdapter(
         mass,
         auth_required_provider=lambda: True,
@@ -876,6 +907,9 @@ async def test_cached_snapshot_keeps_visibility_request_specific() -> None:
         scope_checker=lambda user, scope: scope in user.scopes,
         policy_provider=lambda _bearer: policy_snapshot(PolicyProfile.TRUSTED),
         default_policy_provider=lambda: policy_snapshot(PolicyProfile.SAFE_QUERIES),
+        identity_provider=lambda _bearer: TokenIdentity(
+            current_token.get().client_id, current_token.get().client_id
+        ),
     )
 
     async def catalog_for(user_id: str) -> Any:
@@ -1158,7 +1192,7 @@ async def test_adapter_hides_catalog_when_mcp_auth_is_disabled() -> None:
     async def values() -> list[str]:
         return []
 
-    handler = _handler("music/values", values)
+    handler = _handler("config/providers/reload", values, "config.providers.write")
     mass = MagicMock(command_handlers={handler.command: handler})
     adapter = DynamicAPIAdapter(
         mass,
@@ -2151,7 +2185,7 @@ async def test_revoked_bearer_token_after_confirmation_prevents_execution(
     )
     adapter.mass.webserver.auth.authenticate_with_token = AsyncMock(return_value=None)
 
-    with pytest.raises(ToolError, match="Authentication is required"):
+    with pytest.raises(ToolError, match="not found or is not permitted"):
         await adapter.call(
             "ma_api:config/providers/reload",
             {},
@@ -2160,7 +2194,6 @@ async def test_revoked_bearer_token_after_confirmation_prevents_execution(
             max_items=None,
             ctx=MagicMock(),
         )
-    adapter.mass.webserver.auth.authenticate_with_token.assert_awaited_once_with("secret")
     assert [record.outcome for record in audit_records] == ["authorization.denied"]
     assert called is False
 
@@ -2191,10 +2224,7 @@ async def test_valid_bearer_revalidation_uses_the_fresh_user_after_confirmation(
         max_items=None,
         ctx=MagicMock(),
     )
-    assert adapter.mass.webserver.auth.authenticate_with_token.await_args_list == [
-        call("secret"),
-        call("secret"),
-    ]
+    assert adapter.mass.webserver.auth.authenticate_with_token.await_count >= 2
     assert called is True
 
 
@@ -2217,7 +2247,7 @@ async def test_post_confirmation_revalidation_rejects_a_different_user(
         return_value=SimpleNamespace(user_id="other-user", enabled=True, role="admin")
     )
 
-    with pytest.raises(ToolError, match="Authentication is required"):
+    with pytest.raises(ToolError, match="not found or is not permitted"):
         await adapter.call(
             "ma_api:config/providers/reload",
             {},

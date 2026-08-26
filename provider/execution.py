@@ -28,7 +28,7 @@ from .audit import (
     emit_audit_record,
     is_privileged_capability,
 )
-from .auth import LEGACY_TOKEN_CLIENT_ID
+from .auth import request_identity_holds
 from .capabilities import Capability
 from .catalog import (
     CatalogFingerprint,
@@ -659,18 +659,11 @@ class DynamicAPIAdapter:
         if user is None or getattr(user, "enabled", True) is False:
             return None
         identity = self._identity_provider(token.token)
-        if identity is None:
-            return None
-        if str(getattr(user, "user_id", "")) != identity.user_id:
-            return None
-        expected_client_id = identity.token_id or LEGACY_TOKEN_CLIENT_ID
-        if token.client_id != expected_client_id:
-            return None
         try:
             live_token_id = await self.mass.webserver.auth.get_token_id_from_token(token.token)
         except Exception:
             return None
-        if live_token_id != identity.token_id:
+        if not request_identity_holds(token, user, identity, live_token_id=live_token_id):
             return None
         return token, user
 
@@ -1133,10 +1126,7 @@ class DynamicAPIAdapter:
         if self._identity_provider is None:
             return False
         identity = self._identity_provider(token.token)
-        if identity is None:
-            return False
-        expected = identity.token_id or LEGACY_TOKEN_CLIENT_ID
-        return str(getattr(user, "user_id", "")) == identity.user_id and token.client_id == expected
+        return request_identity_holds(token, user, identity)
 
     async def _audit_denied_name(self, name: str) -> None:
         """Record a denied canonical name without exposing request inputs."""

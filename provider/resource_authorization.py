@@ -19,7 +19,7 @@ from .audit import (
     AuditSink,
     emit_audit_record,
 )
-from .auth import LEGACY_TOKEN_CLIENT_ID
+from .auth import request_identity_holds
 from .capabilities import Capability
 from .commands.authorization import normalize_scope
 from .policy import PolicyMode, PolicySnapshot
@@ -195,16 +195,12 @@ class ResourceAuthorizer:
             or current_token.client_id != token.client_id
         ):
             return False
-        identity = self._identity(token.token)
-        if identity is None:
-            return False
-        if str(getattr(user, "user_id", "")) != identity.user_id:
-            return False
-        expected = identity.token_id or LEGACY_TOKEN_CLIENT_ID
-        return (
-            token.client_id == expected
-            and not evidence.token_id_lookup_failed
-            and evidence.live_token_id == identity.token_id
+        return request_identity_holds(
+            token,
+            user,
+            self._identity(token.token),
+            live_token_id=evidence.live_token_id,
+            lookup_failed=evidence.token_id_lookup_failed,
         )
 
     def _ma_denial(

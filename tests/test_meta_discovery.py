@@ -102,7 +102,14 @@ class _RecordingAdapter(_Adapter):
         """Capture normalized containers and return a minimal envelope."""
         del ctx
         self.calls.append(_RecordedCall(name, arguments, response_mode, fields, max_items))
-        return {"ok": True}
+        return {
+            "command": name,
+            "data": {"ok": True},
+            "truncated": False,
+            "returned_count": 1,
+            "bytes": 11,
+            "applied": {"mode": response_mode, "fields": fields or [], "max_items": 25},
+        }
 
 
 def _recording_server() -> tuple[FastMCP, _RecordingAdapter]:

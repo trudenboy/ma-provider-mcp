@@ -19,6 +19,20 @@ from fastmcp.exceptions import ToolError
 
 type JSONValue = None | bool | int | float | str | list["JSONValue"] | dict[str, "JSONValue"]
 
+COMMAND_ENVELOPE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "command": {"type": "string"},
+        "data": {},
+        "truncated": {"type": "boolean"},
+        "returned_count": {"type": "integer"},
+        "bytes": {"type": "integer"},
+        "applied": {"type": "object"},
+        "total_count": {"type": "integer"},
+    },
+    "required": ["command", "data", "truncated", "returned_count", "bytes", "applied"],
+}
+
 
 @dataclass(frozen=True, slots=True)
 class BoundedJSON:

@@ -20,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   permissions instead of being hidden until a pin list is updated.
 - Connect Wizard session and client tokens are bound into request identity
   as soon as they are minted.
+- `call_tool` and `get_tool_schema` advertise the bounded command envelope as
+  the output schema.
 
 ## [2.1.9] - 2026-08-24
 
