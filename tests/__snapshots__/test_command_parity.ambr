@@ -623,7 +623,10 @@
     'player_queues/get': list([
       'query:queue',
     ]),
-    'player_queues/items': list([)
+    'player_queues/get_active_queue': list([
+      'query:queue',
+    ]),
+    'player_queues/items': list([))
       'query:queue',
     ]),
     'player_queues/move_item': list([
