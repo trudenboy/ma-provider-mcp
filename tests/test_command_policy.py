@@ -158,6 +158,33 @@ def test_safe_queue_extension_keeps_destructive_annotation_and_capability() -> N
     assert decision.annotations["destructiveHint"] is True
 
 
+def test_library_remove_with_curated_profile_stays_a_delete() -> None:
+    """A curated profile cannot retag library removal as an edit."""
+    decision = resolve_command_policy(
+        "music/library/remove_item",
+        "library.write",
+        COMMAND_PROFILES["music/library/remove_item"],
+    )
+    assert decision.required_capabilities == frozenset({str(Capability.DELETE_LIBRARY)})
+
+
+def test_curated_destructive_profiles_do_not_claim_write() -> None:
+    """Remove, delete, and clear profiles advertise delete, not write."""
+    verbs = frozenset({"clear", "delete", "remove", "reset", "revoke"})
+    liars = [
+        profile.command
+        for profile in COMMAND_PROFILES.values()
+        if {
+            word
+            for segment in profile.command.replace("-", "_").split("/")
+            for word in segment.split("_")
+        }
+        & verbs
+        and profile.operation_override == "write"
+    ]
+    assert liars == []
+
+
 def test_save_as_playlist_requires_the_playlist_edit_capability() -> None:
     """Saving a queue as a playlist creates library playlists, not queue edits."""
     decision = resolve_command_policy("player_queues/save_as_playlist", "library.write", None)

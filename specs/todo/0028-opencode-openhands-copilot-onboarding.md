@@ -2,7 +2,7 @@
 id: "0028"
 title: "Connect Wizard client presets and connection methods"
 size: L
-status: inprogress
+status: todo
 priority: P1
 effort_minutes: 90
 feature_id:

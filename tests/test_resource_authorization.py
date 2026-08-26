@@ -16,6 +16,7 @@ from provider.audit import AuditRecord
 from provider.capabilities import Capability
 from provider.policy import PolicyMode, PolicyProfile, policy_snapshot
 from provider.resource_authorization import ResourceAuthorizer
+from provider.target_filters import filter_collection_result
 from provider.token_identity import TokenIdentityRegistry
 
 
@@ -225,6 +226,21 @@ async def test_library_resource_provider_filter_hides_foreign_item_and_audits_on
         mode="allow",
         outcome="authorization.denied",
     )
+
+
+async def test_library_resource_and_command_listing_agree_on_row_identity() -> None:
+    """library:// keeps a row only when the matching library listing would keep it."""
+    authorizer = _authorizer()
+    request = await authorizer.authorize("library://track/17", {str(Capability.QUERY_LIBRARY)})
+    assert request is not None
+    user = _user()
+    item = SimpleNamespace(
+        provider_mappings=(SimpleNamespace(provider_domain="spotify--1"),),
+    )
+
+    kept = filter_collection_result(user, "music/tracks/library_items", (item,))
+
+    assert request.library_item_allowed(item) is bool(kept)
 
 
 async def test_library_resource_provider_filter_accepts_one_allowed_mapping() -> None:

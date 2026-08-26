@@ -30,7 +30,7 @@ from .audit import (
     emit_audit_record,
     is_privileged_capability,
 )
-from .auth import LEGACY_TOKEN_CLIENT_ID, LOOKUP_FAILURE_CLIENT_ID
+from .auth import LEGACY_TOKEN_CLIENT_ID
 from .capabilities import Capability
 from .catalog import (
     CatalogFingerprint,
@@ -655,52 +655,31 @@ class DynamicAPIAdapter:
         revalidate: bool = False,
     ) -> tuple[AccessToken, Any] | None:
         """Resolve the MCP access token to an enabled MA user."""
+        del revalidate
         token = self._token_provider()
         if token is None:
             return None
-        if self._identity_provider is not None:
-            try:
-                user = await self.mass.webserver.auth.authenticate_with_token(token.token)
-            except Exception:
-                return None
-            if user is None or getattr(user, "enabled", True) is False:
-                return None
-            identity = self._identity_provider(token.token)
-            if identity is not None:
-                if str(getattr(user, "user_id", "")) != identity.user_id:
-                    return None
-                expected_client_id = identity.token_id or LEGACY_TOKEN_CLIENT_ID
-                if token.client_id != expected_client_id:
-                    return None
-                try:
-                    live_token_id = await self.mass.webserver.auth.get_token_id_from_token(
-                        token.token
-                    )
-                except Exception:
-                    return None
-                if live_token_id != identity.token_id:
-                    return None
-            elif token.client_id == LOOKUP_FAILURE_CLIENT_ID:
-                try:
-                    await self.mass.webserver.auth.get_token_id_from_token(token.token)
-                except Exception:
-                    return token, user
-                return None
-            else:
-                return None
-            return token, user
-        if revalidate:
-            try:
-                user = await self.mass.webserver.auth.authenticate_with_token(token.token)
-            except Exception:
-                return None
-            if getattr(user, "user_id", None) != token.client_id:
-                return None
-        else:
-            user = self.mass.webserver.auth.get_user(token.client_id)
-            if inspect.isawaitable(user):
-                user = await user
+        if self._identity_provider is None:
+            return None
+        try:
+            user = await self.mass.webserver.auth.authenticate_with_token(token.token)
+        except Exception:
+            return None
         if user is None or getattr(user, "enabled", True) is False:
+            return None
+        identity = self._identity_provider(token.token)
+        if identity is None:
+            return None
+        if str(getattr(user, "user_id", "")) != identity.user_id:
+            return None
+        expected_client_id = identity.token_id or LEGACY_TOKEN_CLIENT_ID
+        if token.client_id != expected_client_id:
+            return None
+        try:
+            live_token_id = await self.mass.webserver.auth.get_token_id_from_token(token.token)
+        except Exception:
+            return None
+        if live_token_id != identity.token_id:
             return None
         return token, user
 
@@ -1161,10 +1140,10 @@ class DynamicAPIAdapter:
         if current is None or current.token != token.token or current.client_id != token.client_id:
             return False
         if self._identity_provider is None:
-            return True
+            return False
         identity = self._identity_provider(token.token)
         if identity is None:
-            return token.client_id == LOOKUP_FAILURE_CLIENT_ID
+            return False
         expected = identity.token_id or LEGACY_TOKEN_CLIENT_ID
         return str(getattr(user, "user_id", "")) == identity.user_id and token.client_id == expected
 

@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.10] - 2026-08-26
+
+### Fixed
+- Restricted users no longer see other players in the full player list.
+- Restricted users no longer see other providers' library and search rows.
+- Tokens that never bound an identity can no longer run commands as that user.
+- Successful playback, volume, and debug commands are recorded in the security
+  audit.
+- Library item reads and library listings apply the same music-provider filter.
+
 ## [2.1.9] - 2026-08-24
 
 ### Fixed

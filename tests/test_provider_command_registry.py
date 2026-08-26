@@ -497,6 +497,32 @@ async def test_provider_owned_privileged_execution_audits_once_without_payloads(
         assert forbidden not in emitted
 
 
+async def test_debug_execution_audits_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Successful debug reads are privileged outcomes."""
+    mass = CommandRegistry()
+    records: list[Any] = []
+    policy = policy_snapshot(
+        PolicyProfile.CUSTOM,
+        {Capability.DEBUG_PROVIDERS: PolicyMode.ALLOW},
+    )
+    command_set = ProviderCommandSet(
+        mass,
+        _config(Capability.DEBUG_PROVIDERS),
+        policy_provider=lambda _bearer: policy,
+        audit_sink=records.append,
+        audit_client_id_provider=lambda _bearer: "exact-token-id",
+    )
+    command_set.start()
+    monkeypatch.setattr(authorization, "get_current_user", lambda: _user())
+    monkeypatch.setattr(authorization, "get_current_token", lambda: "debug-bearer")
+
+    await mass.handlers["fastmcp/debug/packages"]()
+
+    assert [record.outcome for record in records] == ["execution.succeeded"]
+    assert records[0].capability == "debug:providers"
+    assert "debug-bearer" not in repr(records)
+
+
 async def test_provider_owned_denial_audits_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

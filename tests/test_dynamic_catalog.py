@@ -1178,7 +1178,7 @@ def test_every_migrated_command_has_an_executable_profile() -> None:
         assert isinstance(profile, CommandProfile)
         assert legacy in profile.search_aliases
         assert profile.annotations
-        assert profile.operation_override in {"read", "control", "write", "system"}
+        assert profile.operation_override in {"read", "control", "write", "delete", "system"}
     assert COMMAND_PROFILES["providers"].compact_fields == (
         "instance_id",
         "domain",
