@@ -523,7 +523,10 @@
     'music/radios/library_items': list([
       'query:library',
     ]),
-    'music/radios/radio_versions': list([
+    'music/radios/radio_tracks': list([
+      'query:library',
+    ]),
+    'music/radios/radio_versions': list([)
       'query:library',
     ]),
     'music/radios/remove': list([
@@ -620,10 +623,7 @@
     'player_queues/get': list([
       'query:queue',
     ]),
-    'player_queues/get_active_queue': list([
-      'query:queue',
-    ]),
-    'player_queues/items': list([
+    'player_queues/items': list([)
       'query:queue',
     ]),
     'player_queues/move_item': list([
