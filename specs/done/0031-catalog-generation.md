@@ -2,7 +2,7 @@
 id: "0031"
 title: "One catalog generation type"
 size: S
-status: todo
+status: done
 priority: P1
 effort_minutes: 15
 feature_id:

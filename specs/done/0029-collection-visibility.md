@@ -2,7 +2,7 @@
 id: "0029"
 title: "One collection visibility for commands and resources"
 size: M
-status: inprogress
+status: done
 priority: P0
 effort_minutes: 20
 feature_id:

@@ -2,7 +2,7 @@
 id: "0030"
 title: "One command-authorization classifier"
 size: L
-status: todo
+status: done
 priority: P1
 effort_minutes: 45
 feature_id:
