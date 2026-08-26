@@ -13,14 +13,14 @@ from fastmcp.exceptions import ToolError
 from mcp.shared.exceptions import McpError
 
 from provider import meta_discovery
-from provider.config import build_config_entries
-from provider.constants import DEFAULT_MOUNT_PATH
-from provider.dynamic_api import (
+from provider.catalog import (
     CatalogSnapshot,
     CatalogView,
     DynamicEntry,
     RequestCatalogContext,
 )
+from provider.config import build_config_entries
+from provider.constants import DEFAULT_MOUNT_PATH
 from provider.meta_discovery import register_meta_discovery
 from provider.middleware import TagFilterMiddleware
 from provider.policy import PolicyProfile, policy_snapshot
@@ -102,7 +102,14 @@ class _RecordingAdapter(_Adapter):
         """Capture normalized containers and return a minimal envelope."""
         del ctx
         self.calls.append(_RecordedCall(name, arguments, response_mode, fields, max_items))
-        return {"ok": True}
+        return {
+            "command": name,
+            "data": {"ok": True},
+            "truncated": False,
+            "returned_count": 1,
+            "bytes": 11,
+            "applied": {"mode": response_mode, "fields": fields or [], "max_items": 25},
+        }
 
 
 def _recording_server() -> tuple[FastMCP, _RecordingAdapter]:

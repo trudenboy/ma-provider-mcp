@@ -10,7 +10,7 @@ from random import Random
 from typing import Any
 from uuid import UUID
 
-from provider.dynamic_serialization import bounded_json_value, json_value
+from provider.dynamic_serialization import bounded_json_value, fit_json_envelope, json_value
 
 
 @dataclass(frozen=True)
@@ -194,3 +194,24 @@ def test_bounded_json_value_truncates_long_strings_at_the_prefix() -> None:
 
     assert normalized.value == "abcd…"
     assert normalized.truncated is True
+
+
+def test_fit_json_envelope_reduces_lists_to_the_byte_cap() -> None:
+    """Command envelopes share one byte-budget fitter."""
+    envelope = {
+        "command": "ma_api:players/all",
+        "data": [f"player-{index:02}" * 8 for index in range(30)],
+        "truncated": False,
+        "returned_count": 30,
+        "bytes": 0,
+        "applied": {"mode": "compact", "fields": [], "max_items": 25},
+    }
+
+    fit_json_envelope(envelope, 400)
+
+    data = envelope["data"]
+    assert isinstance(data, list)
+    assert envelope["truncated"] is True
+    assert isinstance(envelope["bytes"], int)
+    assert envelope["bytes"] <= 400
+    assert envelope["returned_count"] == len(data)

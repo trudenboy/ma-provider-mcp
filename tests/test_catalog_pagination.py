@@ -8,6 +8,7 @@ from typing import cast
 
 import pytest
 
+from provider.catalog import DynamicEntry
 from provider.catalog_pagination import (
     CATALOG_DEFAULT_LIMIT,
     MAX_CURSOR_LENGTH,
@@ -21,7 +22,6 @@ from provider.catalog_pagination import (
     normalize_query,
     resolve_limit,
 )
-from provider.dynamic_api import DynamicEntry
 
 
 def _entry(
