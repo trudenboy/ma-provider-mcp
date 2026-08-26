@@ -357,21 +357,11 @@ class DynamicAPIAdapter:
             ctx,
             impersonating=impersonating,
         )
-        auth = (
-            await self._authentication(revalidate=True) if self._auth_required_provider() else None
-        )
-        if auth is None and self._auth_required_provider():
-            self._audit_invocation(
-                initial_invocation,
-                "authorization.denied",
-                impersonating=impersonating,
-            )
-            raise ToolError("Authentication is required")
-        invocation = await self._authorize_call_audited(
-            initial_invocation.entry,
-            auth,
+        invocation = await self._reauthorize(
+            initial_invocation,
             parsed,
             impersonated=impersonated,
+            impersonating=impersonating,
         )
         if not self._confirmation_evidence(invocation, impersonating=impersonating).issubset(
             confirmation_evidence
@@ -381,23 +371,11 @@ class DynamicAPIAdapter:
                 ctx,
                 impersonating=impersonating,
             )
-            auth = (
-                await self._authentication(revalidate=True)
-                if self._auth_required_provider()
-                else None
-            )
-            if auth is None and self._auth_required_provider():
-                self._audit_invocation(
-                    invocation,
-                    "authorization.denied",
-                    impersonating=impersonating,
-                )
-                raise ToolError("Authentication is required")
-            invocation = await self._authorize_call_audited(
-                invocation.entry,
-                auth,
+            invocation = await self._reauthorize(
+                invocation,
                 parsed,
                 impersonated=impersonated,
+                impersonating=impersonating,
             )
         invocation, result = await self._execute_authorized(
             invocation,
@@ -417,6 +395,32 @@ class DynamicAPIAdapter:
             )
         finally:
             TRANSLATION_RESOLVER.reset(translation_token)
+
+    async def _reauthorize(
+        self,
+        invocation: AuthorizedInvocation,
+        parsed: dict[str, Any],
+        *,
+        impersonated: Any,
+        impersonating: bool,
+    ) -> AuthorizedInvocation:
+        """Re-bind request identity and re-run authorization after an await."""
+        auth = (
+            await self._authentication(revalidate=True) if self._auth_required_provider() else None
+        )
+        if auth is None and self._auth_required_provider():
+            self._audit_invocation(
+                invocation,
+                "authorization.denied",
+                impersonating=impersonating,
+            )
+            raise ToolError("Authentication is required")
+        return await self._authorize_call_audited(
+            invocation.entry,
+            auth,
+            parsed,
+            impersonated=impersonated,
+        )
 
     async def _execute_authorized(
         self,
