@@ -29,8 +29,8 @@ from provider.constants import (
     CONF_POLICY_TOKEN_SUFFIXES,
     CONF_REQUIRE_AUTH,
 )
-from provider.dynamic_api import DynamicAPIAdapter
 from provider.dynamic_signatures import compile_signature
+from provider.execution import DynamicAPIAdapter
 from provider.models import (
     EventBufferStats,
     EventSnapshot,

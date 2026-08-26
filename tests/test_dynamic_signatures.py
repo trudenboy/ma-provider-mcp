@@ -12,9 +12,10 @@ import pytest
 from fastmcp.server.auth import AccessToken
 from music_assistant_models.media_items import Track  # noqa: TC002
 
-from provider.dynamic_api import DynamicAPIAdapter
 from provider.dynamic_signatures import UnsupportedSignatureError, compile_signature
+from provider.execution import DynamicAPIAdapter
 from provider.policy import PolicyProfile, policy_snapshot
+from provider.token_identity import TokenIdentity
 
 
 async def library_items(
@@ -65,8 +66,8 @@ def _adapter(handler: Any) -> DynamicAPIAdapter:
     mass = MagicMock()
     mass.command_handlers = {handler.command: handler}
     user = SimpleNamespace(user_id="u1", enabled=True, role="admin")
-    mass.webserver.auth.get_user = AsyncMock(return_value=user)
     mass.webserver.auth.authenticate_with_token = AsyncMock(return_value=user)
+    mass.webserver.auth.get_token_id_from_token = AsyncMock(return_value="u1")
     return DynamicAPIAdapter(
         mass,
         auth_required_provider=lambda: True,
@@ -74,6 +75,7 @@ def _adapter(handler: Any) -> DynamicAPIAdapter:
         scope_checker=lambda _user, _scope: True,
         policy_provider=lambda _bearer: policy_snapshot(PolicyProfile.SAFE_QUERIES),
         default_policy_provider=lambda: policy_snapshot(PolicyProfile.SAFE_QUERIES),
+        identity_provider=lambda _bearer: TokenIdentity("u1", "u1"),
     )
 
 

@@ -20,7 +20,7 @@ from music_assistant_models.enums import ConfigEntryType
 
 from provider.auth import LOOKUP_FAILURE_CLIENT_ID
 from provider.capabilities import Capability
-from provider.dynamic_api import DynamicAPIAdapter
+from provider.execution import DynamicAPIAdapter
 from provider.meta_discovery import MetaDiscoveryService
 from provider.middleware import TagFilterMiddleware
 from provider.policy import PolicyMode, PolicyProfile, PolicySnapshot, policy_snapshot

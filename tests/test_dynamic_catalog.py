@@ -24,6 +24,12 @@ from music_assistant_models.enums import ConfigEntryType
 
 from provider import dynamic_serialization, meta_discovery
 from provider.capabilities import Capability
+from provider.catalog import (
+    CatalogSnapshot,
+    CatalogView,
+    DynamicEntry,
+    RequestCatalogContext,
+)
 from provider.catalog_pagination import (
     PaginationError,
     decode_cursor,
@@ -34,14 +40,8 @@ from provider.command_profiles import (
     CURATED_PROFILE_MAPPINGS,
     CommandProfile,
 )
-from provider.dynamic_api import (
-    CatalogSnapshot,
-    CatalogView,
-    DynamicAPIAdapter,
-    DynamicEntry,
-    RequestCatalogContext,
-)
 from provider.dynamic_serialization import _encoded_size, fit_json_envelope
+from provider.execution import DynamicAPIAdapter
 from provider.meta_discovery import DynamicAdapter, register_meta_discovery
 from provider.policy import PolicyMode, PolicyProfile, policy_snapshot
 

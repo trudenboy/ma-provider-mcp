@@ -13,14 +13,14 @@ from fastmcp.exceptions import ToolError
 from mcp.shared.exceptions import McpError
 
 from provider import meta_discovery
-from provider.config import build_config_entries
-from provider.constants import DEFAULT_MOUNT_PATH
-from provider.dynamic_api import (
+from provider.catalog import (
     CatalogSnapshot,
     CatalogView,
     DynamicEntry,
     RequestCatalogContext,
 )
+from provider.config import build_config_entries
+from provider.constants import DEFAULT_MOUNT_PATH
 from provider.meta_discovery import register_meta_discovery
 from provider.middleware import TagFilterMiddleware
 from provider.policy import PolicyProfile, policy_snapshot
