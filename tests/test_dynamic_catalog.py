@@ -1171,6 +1171,19 @@ async def test_adapter_hides_catalog_when_mcp_auth_is_disabled() -> None:
     assert await adapter.visible_entries() == []
 
 
+def test_request_view_is_the_same_catalog_generation() -> None:
+    """A filtered view keeps the snapshot fingerprint and replaces only entries."""
+    snapshot = CatalogSnapshot(
+        (1, "gen", ()),
+        (_catalog_entry("ma_api:music/search", "Search"),),
+    )
+    hidden = snapshot.with_entries(())
+
+    assert hidden.fingerprint == snapshot.fingerprint
+    assert hidden.entries == ()
+    assert hidden.by_name == {}
+
+
 def test_every_migrated_command_has_an_executable_profile() -> None:
     """The migration matrix is backed by profiles, not aliases alone."""
     assert set(CURATED_PROFILE_MAPPINGS.values()).issubset(COMMAND_PROFILES)

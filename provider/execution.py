@@ -245,7 +245,7 @@ class DynamicAPIAdapter:
         require_auth = self._auth_required_provider()
         auth = await self._authentication() if require_auth else None
         if require_auth and auth is None:
-            return RequestCatalogContext(snapshot, CatalogView(snapshot.fingerprint, ()))
+            return RequestCatalogContext(snapshot, snapshot.with_entries(()))
 
         user = auth[1] if auth is not None else None
         policy = self._request_policy(auth)
@@ -261,7 +261,7 @@ class DynamicAPIAdapter:
             and entry.decision.effective_mode(policy) is not PolicyMode.DENY
         ]
         visible = tuple(sorted(entries, key=lambda entry: entry.name))
-        return RequestCatalogContext(snapshot, CatalogView(snapshot.fingerprint, visible))
+        return RequestCatalogContext(snapshot, snapshot.with_entries(visible))
 
     async def visible_entries(self) -> list[DynamicEntry]:
         """Return canonical commands visible to the current authenticated user."""
