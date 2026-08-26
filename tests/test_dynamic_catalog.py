@@ -22,7 +22,7 @@ from music_assistant_models.auth import AuthProviderType, Scope
 from music_assistant_models.config_entries import ConfigActionResult, ConfigEntry
 from music_assistant_models.enums import ConfigEntryType
 
-from provider import meta_discovery
+from provider import dynamic_serialization, meta_discovery
 from provider.capabilities import Capability
 from provider.catalog_pagination import (
     PaginationError,
@@ -41,6 +41,7 @@ from provider.dynamic_api import (
     DynamicEntry,
     RequestCatalogContext,
 )
+from provider.dynamic_serialization import _encoded_size, fit_json_envelope
 from provider.meta_discovery import DynamicAdapter, register_meta_discovery
 from provider.policy import PolicyMode, PolicyProfile, policy_snapshot
 
@@ -1356,7 +1357,7 @@ def test_byte_fitting_balances_equal_sibling_lists_by_original_policy() -> None:
     }
     assert result["truncated"] is True
     assert result["returned_count"] == 1
-    assert result["bytes"] == DynamicAPIAdapter._encoded_size(result)
+    assert result["bytes"] == _encoded_size(result)
     assert result["bytes"] <= 12_288
 
 
@@ -1371,7 +1372,7 @@ def test_byte_fitting_measures_trials_with_truncation_metadata() -> None:
         "applied": {"mode": "compact", "fields": [], "max_items": 25},
     }
 
-    DynamicAPIAdapter._fit_bytes(envelope, 142)
+    fit_json_envelope(envelope, 142)
 
     assert envelope["data"] == ["x"]
     assert envelope["returned_count"] == 1
@@ -1385,7 +1386,7 @@ def test_nested_sibling_response_uses_logarithmic_byte_fitting(
     payload = {
         f"group-{index:03}": [{"items": [f"row-{index}:" + ("x" * 500)]}] for index in range(200)
     }
-    encoded_size = DynamicAPIAdapter._encoded_size
+    encoded_size = _encoded_size
     measurements = 0
 
     def counted_size(value: Any) -> int:
@@ -1393,7 +1394,7 @@ def test_nested_sibling_response_uses_logarithmic_byte_fitting(
         measurements += 1
         return int(encoded_size(value))
 
-    monkeypatch.setattr(DynamicAPIAdapter, "_encoded_size", staticmethod(counted_size))
+    monkeypatch.setattr(dynamic_serialization, "_encoded_size", counted_size)
 
     result = DynamicAPIAdapter._bounded_envelope(
         "ma_api:test",
@@ -1418,7 +1419,7 @@ def test_large_top_level_response_uses_logarithmic_byte_fitting(
 ) -> None:
     """A large bounded response does not serialize once per removed row."""
     payload = [f"row-{index}:" + ("x" * 3000) for index in range(200)]
-    encoded_size = DynamicAPIAdapter._encoded_size
+    encoded_size = _encoded_size
     measurements = 0
 
     def counted_size(value: Any) -> int:
@@ -1426,7 +1427,7 @@ def test_large_top_level_response_uses_logarithmic_byte_fitting(
         measurements += 1
         return int(encoded_size(value))
 
-    monkeypatch.setattr(DynamicAPIAdapter, "_encoded_size", staticmethod(counted_size))
+    monkeypatch.setattr(dynamic_serialization, "_encoded_size", counted_size)
 
     result = DynamicAPIAdapter._bounded_envelope(
         "ma_api:test",
@@ -1468,7 +1469,7 @@ def test_oversized_echoed_fields_use_a_bounded_shape_preserving_fallback(
     assert "total_count" not in result
     assert result["returned_count"] == 0
     assert result["truncated"] is True
-    assert result["bytes"] == DynamicAPIAdapter._encoded_size(result)
+    assert result["bytes"] == _encoded_size(result)
     assert result["bytes"] <= byte_cap
 
 
@@ -1487,7 +1488,7 @@ def test_oversized_mapping_without_lists_uses_empty_mapping_fallback() -> None:
     assert result["data"] == {}
     assert result["returned_count"] == 1
     assert result["truncated"] is True
-    assert result["bytes"] == DynamicAPIAdapter._encoded_size(result)
+    assert result["bytes"] == _encoded_size(result)
     assert result["bytes"] <= 12_288
 
 

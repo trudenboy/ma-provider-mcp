@@ -4,10 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import copy
 import dataclasses
 import hashlib
-import heapq
 import inspect
 import json
 import re
@@ -55,7 +53,7 @@ from .command_profiles import (
 )
 from .commands.authorization import normalize_scope
 from .confirmation_context import _dispatcher_confirmation
-from .dynamic_serialization import bounded_json_value
+from .dynamic_serialization import bounded_json_value, fit_json_envelope
 from .dynamic_signatures import (
     UnsupportedSignatureError,
     compile_signature,
@@ -179,17 +177,6 @@ class _RegistryCapture:
     fingerprint: CatalogFingerprint
     registry_type: str
     items: tuple[tuple[str, Any], ...] | None
-
-
-@dataclass(slots=True)
-class _ListReductionCandidate:
-    """Mutable heap state for one list in a response-reduction trial."""
-
-    items: list[Any]
-    depth: int
-    order: int
-    active: bool = True
-    revision: int = 0
 
 
 class DynamicAPIAdapter:
@@ -1540,8 +1527,7 @@ class DynamicAPIAdapter:
         }
         if total_count is not None:
             envelope["total_count"] = total_count
-        cls._fit_bytes(envelope, byte_cap)
-        cls._set_measured_bytes(envelope)
+        fit_json_envelope(envelope, byte_cap)
         if envelope["bytes"] > byte_cap:
             mode = str(envelope["applied"]["mode"])
             raise ToolError(f"Response exceeds the {mode} byte budget")
@@ -1563,168 +1549,6 @@ class DynamicAPIAdapter:
                 for row in value
             ]
         return value
-
-    @classmethod
-    def _fit_bytes(cls, envelope: dict[str, Any], byte_cap: int) -> None:
-        """Apply the original global list-reduction policy within the byte cap."""
-        envelope["bytes"] = byte_cap
-        if cls._encoded_size(envelope) <= byte_cap:
-            return
-
-        original_data = envelope["data"]
-        max_removals = cls._count_list_items(original_data)
-        if max_removals:
-            envelope["truncated"] = True
-            smallest_data = cls._simulate_list_removals(original_data, max_removals)
-            envelope["data"] = smallest_data
-            cls._set_returned_count(envelope)
-            if cls._encoded_size(envelope) <= byte_cap:
-                low = 1
-                high = max_removals
-                best_data = smallest_data
-                while low < high:
-                    midpoint = (low + high) // 2
-                    candidate_data = cls._simulate_list_removals(original_data, midpoint)
-                    envelope["data"] = candidate_data
-                    cls._set_returned_count(envelope)
-                    if cls._encoded_size(envelope) <= byte_cap:
-                        high = midpoint
-                        best_data = candidate_data
-                    else:
-                        low = midpoint + 1
-                envelope["data"] = best_data
-                cls._set_returned_count(envelope)
-                return
-
-        envelope["data"] = cls._minimal_json_shape(original_data)
-        envelope["truncated"] = True
-        cls._set_returned_count(envelope)
-        envelope.pop("total_count", None)
-        if cls._encoded_size(envelope) <= byte_cap:
-            return
-        envelope["applied"]["fields"] = []
-        if cls._encoded_size(envelope) <= byte_cap:
-            return
-        mode = str(envelope["applied"]["mode"])
-        raise ToolError(f"Response exceeds the {mode} byte budget")
-
-    @classmethod
-    def _simulate_list_removals(cls, value: Any, removals: int) -> Any:
-        """Return a copy after a bounded number of original-policy list removals."""
-        reduced = copy.deepcopy(value)
-        candidates: list[_ListReductionCandidate] = []
-        candidates_by_id: dict[int, _ListReductionCandidate] = {}
-        heap: list[tuple[int, int, int, int, int]] = []
-
-        def collect(item: Any, depth: int) -> None:
-            if isinstance(item, list):
-                candidate_index = len(candidates)
-                candidate = _ListReductionCandidate(item, depth, candidate_index)
-                candidates.append(candidate)
-                candidates_by_id[id(item)] = candidate
-                if item:
-                    heap.append(
-                        (-len(item), depth, candidate.order, candidate.revision, candidate_index)
-                    )
-                for child in item:
-                    collect(child, depth + 1)
-            elif isinstance(item, dict):
-                for child in item.values():
-                    collect(child, depth + 1)
-
-        def invalidate(item: Any) -> None:
-            if isinstance(item, list):
-                candidate = candidates_by_id.get(id(item))
-                if candidate is not None:
-                    candidate.active = False
-                    candidate.revision += 1
-                for child in item:
-                    invalidate(child)
-            elif isinstance(item, dict):
-                for child in item.values():
-                    invalidate(child)
-
-        collect(reduced, 0)
-        heapq.heapify(heap)
-        removed = 0
-        while removed < removals and heap:
-            negative_length, _depth, _order, revision, candidate_index = heapq.heappop(heap)
-            candidate = candidates[candidate_index]
-            if (
-                not candidate.active
-                or candidate.revision != revision
-                or len(candidate.items) != -negative_length
-            ):
-                continue
-            removed_item = candidate.items.pop()
-            removed += 1
-            invalidate(removed_item)
-            candidate.revision += 1
-            if candidate.items:
-                heapq.heappush(
-                    heap,
-                    (
-                        -len(candidate.items),
-                        candidate.depth,
-                        candidate.order,
-                        candidate.revision,
-                        candidate_index,
-                    ),
-                )
-        return reduced
-
-    @classmethod
-    def _count_list_items(cls, value: Any) -> int:
-        """Return a safe upper bound on logical removals for a JSON tree."""
-        if isinstance(value, list):
-            return len(value) + sum(cls._count_list_items(item) for item in value)
-        if isinstance(value, dict):
-            return sum(cls._count_list_items(item) for item in value.values())
-        return 0
-
-    @staticmethod
-    def _minimal_json_shape(value: Any) -> Any:
-        """Return the smallest JSON value retaining the result's top-level type."""
-        if isinstance(value, dict):
-            return {}
-        if isinstance(value, list):
-            return []
-        if isinstance(value, str):
-            return ""
-        if isinstance(value, bool):
-            return False
-        if isinstance(value, int | float):
-            return 0
-        return None
-
-    @staticmethod
-    def _set_returned_count(envelope: dict[str, Any]) -> None:
-        """Refresh the envelope's top-level returned item count."""
-        data = envelope["data"]
-        envelope["returned_count"] = (
-            len(data) if isinstance(data, list) else (0 if data is None else 1)
-        )
-
-    @staticmethod
-    def _encoded_size(value: Any) -> int:
-        """Measure the compact UTF-8 JSON representation."""
-        return len(
-            json.dumps(
-                value,
-                ensure_ascii=False,
-                allow_nan=False,
-                separators=(",", ":"),
-            ).encode()
-        )
-
-    @classmethod
-    def _set_measured_bytes(cls, envelope: dict[str, Any]) -> None:
-        """Stabilize the self-referential encoded byte count."""
-        for _attempt in range(3):
-            measured = cls._encoded_size(envelope)
-            if envelope["bytes"] == measured:
-                return
-            envelope["bytes"] = measured
 
     def _scope_is_allowed(self, user: Any, scope: Any) -> bool:
         """Normalize one MA scope before delegating its authorization decision."""

@@ -13,6 +13,7 @@ from fastmcp.server.auth.auth import AccessToken
 from music_assistant_models.auth import Scope
 
 from provider.audit import AuditRecord
+from provider.auth import LOOKUP_FAILURE_CLIENT_ID
 from provider.capabilities import Capability
 from provider.policy import PolicyMode, PolicyProfile, policy_snapshot
 from provider.resource_authorization import ResourceAuthorizer
@@ -175,6 +176,32 @@ async def test_resource_user_disabled_during_token_id_lookup_is_denied() -> None
         auth_required_provider=lambda: True,
         token_provider=lambda: bearer,
         identity_provider=identities.lookup,
+        policy_provider=lambda _token: _policy(**{str(Capability.QUERY_PLAYERS): PolicyMode.ALLOW}),
+        default_policy_provider=lambda: _policy(),
+        scope_checker=lambda _user, _scope: True,
+    )
+
+    with pytest.raises(ResourceError, match="Authentication is required"):
+        await authorizer.authorize("player://player-1", {str(Capability.QUERY_PLAYERS)})
+
+
+async def test_lookup_failure_without_identity_cannot_read_resources() -> None:
+    """A token that never bound an identity cannot read player or library resources."""
+    bearer = AccessToken(token="lookup-failure", client_id=LOOKUP_FAILURE_CLIENT_ID, scopes=[])
+    authorizer = ResourceAuthorizer(
+        SimpleNamespace(
+            webserver=SimpleNamespace(
+                auth=SimpleNamespace(
+                    authenticate_with_token=AsyncMock(return_value=_user()),
+                    get_token_id_from_token=AsyncMock(
+                        side_effect=RuntimeError("lookup unavailable")
+                    ),
+                )
+            )
+        ),
+        auth_required_provider=lambda: True,
+        token_provider=lambda: bearer,
+        identity_provider=lambda _token: None,
         policy_provider=lambda _token: _policy(**{str(Capability.QUERY_PLAYERS): PolicyMode.ALLOW}),
         default_policy_provider=lambda: _policy(),
         scope_checker=lambda _user, _scope: True,

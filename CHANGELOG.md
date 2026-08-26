@@ -10,10 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Restricted users no longer see other players in the full player list.
 - Restricted users no longer see other providers' library and search rows.
-- Tokens that never bound an identity can no longer run commands as that user.
+- Tokens that never bound an identity can no longer run commands or read
+  resources as that user.
 - Successful playback, volume, and debug commands are recorded in the security
   audit.
 - Library item reads and library listings apply the same music-provider filter.
+- Command response envelopes share one byte-budget fitter.
 
 ## [2.1.9] - 2026-08-24
 

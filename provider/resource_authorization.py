@@ -19,7 +19,7 @@ from .audit import (
     AuditSink,
     emit_audit_record,
 )
-from .auth import LEGACY_TOKEN_CLIENT_ID, LOOKUP_FAILURE_CLIENT_ID
+from .auth import LEGACY_TOKEN_CLIENT_ID
 from .capabilities import Capability
 from .commands.authorization import normalize_scope
 from .policy import PolicyMode, PolicySnapshot
@@ -197,7 +197,7 @@ class ResourceAuthorizer:
             return False
         identity = self._identity(token.token)
         if identity is None:
-            return token.client_id == LOOKUP_FAILURE_CLIENT_ID and evidence.token_id_lookup_failed
+            return False
         if str(getattr(user, "user_id", "")) != identity.user_id:
             return False
         expected = identity.token_id or LEGACY_TOKEN_CLIENT_ID
