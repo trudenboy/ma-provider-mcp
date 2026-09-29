@@ -103,7 +103,7 @@ class ResourceAuthorizer:
         identity_provider: Callable[[str], TokenIdentity | None],
         policy_provider: Callable[[str], PolicySnapshot],
         default_policy_provider: Callable[[], PolicySnapshot],
-        scope_checker: Callable[[Any, Scope], bool] | None = None,
+        scope_checker: Callable[[Any, Scope | tuple[Scope, ...]], bool] | None = None,
         audit_sink: AuditSink | None = None,
     ) -> None:
         """Bind live MA authentication, policy, scope, and audit providers."""
@@ -231,7 +231,7 @@ class ResourceAuthorizer:
         return None
 
     @staticmethod
-    def _default_scope_checker(user: Any, scope: Scope) -> bool:
+    def _default_scope_checker(user: Any, scope: Scope | tuple[Scope, ...]) -> bool:
         from music_assistant.controllers.webserver.helpers.auth_middleware import (  # noqa: PLC0415
             has_scope,
         )

@@ -99,6 +99,7 @@ _HARD_DENIED_COMMANDS = frozenset(
     {"dashboard/register", "dashboard/unregister", "music/tracks/preview"}
 )
 _HARD_DENIED_PREFIXES = ("auth/",)
+_OPERATION_ORDER = ("read", "control", "write", "system")
 
 _PLAYBACK_COMMANDS = frozenset(
     {
@@ -240,6 +241,8 @@ FAMILY_POLICIES = (
         read=Capability.CONFIG_READ,
         write=Capability.CONFIG_WRITE_PLAYER,
     ),
+    _family("storage/", read=Capability.CONFIG_READ, write=Capability.CONFIG_WRITE_PROVIDER),
+    _family("streams/", read=Capability.CONFIG_READ, write=Capability.CONFIG_WRITE_CORE),
     _family(
         "diagnostics/",
         read=Capability.DEBUG_INSPECT,
@@ -535,6 +538,11 @@ def _operation(
 
 def _scope_operation(scope: Any) -> str | None:
     """Map current MA scope metadata to an operation column."""
+    if isinstance(scope, tuple):
+        # MA grants a tuple scope when any one member is held, so the
+        # command is only as privileged as its weakest member.
+        operations = [op for member in scope if (op := _scope_operation(member)) is not None]
+        return min(operations, key=_OPERATION_ORDER.index, default=None)
     value = str(getattr(scope, "value", scope) or "").casefold()
     if not value:
         return None
@@ -542,7 +550,7 @@ def _scope_operation(scope: Any) -> str | None:
         return "system"
     if value.endswith(".control"):
         return "control"
-    if value.endswith((".write", ".manage")):
+    if value.endswith((".write", ".manage", ".own")):
         return "write"
     if value.endswith(".read"):
         return "read"

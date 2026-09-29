@@ -29,8 +29,20 @@ if TYPE_CHECKING:
     from ..policy import PolicySnapshot
 
 
-def normalize_scope(required_scope: object) -> Scope | None:
-    """Return one known MA scope or fail closed for unknown runtime values."""
+def normalize_scope(required_scope: object) -> Scope | tuple[Scope, ...] | None:
+    """
+    Return known MA scopes or fail closed for unknown runtime values.
+
+    :param required_scope: One MA scope, its string value, or a tuple of which
+        any one suffices; unknown tuple members are dropped.
+    """
+    if isinstance(required_scope, tuple):
+        members = tuple(
+            scope
+            for member in required_scope
+            if isinstance(scope := normalize_scope(member), Scope)
+        )
+        return members or None
     if isinstance(required_scope, Scope):
         scope = required_scope
     elif isinstance(required_scope, str):
@@ -41,6 +53,17 @@ def normalize_scope(required_scope: object) -> Scope | None:
     else:
         return None
     return None if scope is Scope.UNKNOWN else scope
+
+
+def scope_label(required_scope: object) -> str:
+    """
+    Render one MA scope or any-of scope tuple for catalog metadata.
+
+    :param required_scope: Live MA required-scope value.
+    """
+    if isinstance(required_scope, tuple):
+        return "|".join(scope_label(member) for member in required_scope)
+    return str(getattr(required_scope, "value", required_scope))
 
 
 def scope_allowed(user: User, required_scope: object) -> bool:

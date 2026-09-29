@@ -234,6 +234,15 @@ def test_scope_allowed_rejects_unknown_scopes_without_calling_ma(
     assert checked == []
 
 
+def test_scope_allowed_accepts_any_of_scope_tuples() -> None:
+    """A tuple of MA scopes is satisfied by any one of them, and unknown members fail closed."""
+    user = _user(UserRole.USER)
+
+    assert scope_allowed(user, (Scope.CONFIG_PROVIDERS_OWN, Scope.CONFIG_PROVIDERS_READ)) is True
+    assert scope_allowed(user, (Scope.CONFIG_CORE_WRITE, "future.scope")) is False
+    assert scope_allowed(user, ("future.scope",)) is False
+
+
 def test_start_registers_exact_command_set_with_native_scopes() -> None:
     """No legacy or duplicate command leaks into MA's registry."""
     mass = CommandRegistry()
