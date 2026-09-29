@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.13] - 2026-09-29
+
+### Security
+- Music Assistant commands no longer accept a user selector (`userid`,
+  `all_users`), so a client cannot read or change another user's play history.
+- Provider identities embedded in URIs, media items, provider mappings, and
+  browse paths are checked against the user's music-provider filter before a
+  command runs.
+- Single library items and browse listings are hidden when they belong only to
+  a provider outside the user's filter.
+- Target-filter denials from provider-owned commands surface as Music
+  Assistant permission errors and are audited once.
+
 ## [2.1.12] - 2026-09-29
 
 ### Fixed
