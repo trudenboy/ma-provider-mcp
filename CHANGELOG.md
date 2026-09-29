@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.15] - 2026-09-29
+
+### Fixed
+- Users with a music-provider filter see the browse root folders of their
+  allowed providers again, along with the built-in library folders.
+
+### Security
+- Adding or updating a network share with a password now requires the
+  secret-write permission, like saving other secure settings.
+
 ## [2.1.14] - 2026-09-29
 
 ### Security
