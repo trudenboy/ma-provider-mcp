@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
@@ -172,6 +173,15 @@ def filter_collection_result(user: Any, command: str, result: Any) -> Any:
             )
             for key, value in result.items()
         }
+    if dataclasses.is_dataclass(result) and not isinstance(result, type):
+        return dataclasses.replace(
+            result,
+            **{
+                field.name: _filter_rows(value, allowed, rule.row_attributes)
+                for field in dataclasses.fields(result)
+                if field.init and isinstance(value := getattr(result, field.name), list | tuple)
+            },
+        )
     return _filter_rows(result, allowed, rule.row_attributes)
 
 

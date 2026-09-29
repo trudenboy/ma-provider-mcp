@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from fastmcp.exceptions import ToolError
+from music_assistant_models.media_items import ProviderMapping, SearchResults, Track
 
 from provider.target_filters import (
     TargetKind,
@@ -188,6 +189,31 @@ def test_search_collection_hides_items_outside_the_provider_filter() -> None:
         "tracks": [SimpleNamespace(provider_instance_id="spotify--user")],
         "albums": [],
     }
+
+
+def test_search_results_model_hides_items_outside_the_provider_filter() -> None:
+    """The real ``SearchResults`` shape returned by ``music/search`` is filtered too."""
+
+    def track(item_id: str, instance: str) -> Track:
+        domain = instance.split("--", 1)[0]
+        return Track(
+            item_id=item_id,
+            provider=instance,
+            name=item_id,
+            provider_mappings={
+                ProviderMapping(item_id=item_id, provider_domain=domain, provider_instance=instance)
+            },
+        )
+
+    allowed = track("a", "spotify--user")
+    result = filter_collection_result(
+        _user(),
+        "music/search",
+        SearchResults(tracks=[allowed, track("b", "qobuz--other")]),
+    )
+
+    assert isinstance(result, SearchResults)
+    assert list(result.tracks) == [allowed]
 
 
 def test_library_collection_reads_provider_mappings() -> None:

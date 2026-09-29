@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.11] - 2026-09-29
+
+### Security
+- The Connect Wizard no longer issues a session when the one-time bootstrap
+  token cannot be revoked, so the bootstrap cannot be reused.
+- The Connect Wizard no longer mints a new client token when the previous
+  `MCP — <Client>` token cannot be listed or revoked, keeping one token per
+  client.
+- Search results are filtered by the user's music-provider filter, including
+  items resolved from shareable provider URLs.
+- Provider preview audio URLs are removed from every returned media item, not
+  only from the blocked track-preview command.
+
 ## [2.1.10] - 2026-08-26
 
 ### Fixed

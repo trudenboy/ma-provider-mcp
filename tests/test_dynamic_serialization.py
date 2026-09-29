@@ -10,6 +10,9 @@ from random import Random
 from typing import Any
 from uuid import UUID
 
+from music_assistant_models.media_items import MediaItemMetadata, ProviderMapping
+from music_assistant_models.media_items import Track as MATrack
+
 from provider.dynamic_serialization import bounded_json_value, fit_json_envelope, json_value
 
 
@@ -215,3 +218,28 @@ def test_fit_json_envelope_reduces_lists_to_the_byte_cap() -> None:
     assert isinstance(envelope["bytes"], int)
     assert envelope["bytes"] <= 400
     assert envelope["returned_count"] == len(data)
+
+
+def _track_with_preview() -> MATrack:
+    return MATrack(
+        item_id="1",
+        provider="spotify--user",
+        name="Song",
+        provider_mappings={
+            ProviderMapping(
+                item_id="1", provider_domain="spotify", provider_instance="spotify--user"
+            )
+        },
+        metadata=MediaItemMetadata(preview="https://p.scdn.co/mp3-preview/secret"),
+    )
+
+
+def test_bounded_value_redacts_provider_preview_audio_urls() -> None:
+    """Provider preview audio URLs never leave the server in command results."""
+    normalized = bounded_json_value(
+        {"items": [_track_with_preview()]}, item_cap=50, string_cap=500, max_depth=12
+    )
+
+    value: Any = normalized.value
+    assert "p.scdn.co" not in repr(value)
+    assert value["items"][0]["metadata"]["preview"] is None

@@ -170,6 +170,24 @@ def test_safe_active_queue_swallows_upstream_lookup_errors() -> None:
     assert safe_active_queue(mass, "p1") is None
 
 
+def test_to_resource_text_redacts_provider_preview_audio_urls() -> None:
+    """Resource reads never expose a provider's preview audio URL."""
+    from music_assistant_models.media_items import MediaItemMetadata, Track  # noqa: PLC0415
+
+    track = Track(
+        item_id="1",
+        provider="spotify--user",
+        name="Song",
+        provider_mappings=set(),
+        metadata=MediaItemMetadata(preview="https://p.scdn.co/mp3-preview/secret"),
+    )
+
+    text = to_resource_text(track) or ""
+
+    assert "p.scdn.co" not in text
+    assert json.loads(text)["metadata"]["preview"] is None
+
+
 def test_to_resource_text_serializes_briefs_and_ma_objects() -> None:
     """Resource handlers return UTF-8 JSON text for both retained input shapes."""
     brief = PlayerBrief(player_id="p1", name="Кухня", state="idle")
