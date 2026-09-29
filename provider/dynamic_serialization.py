@@ -63,7 +63,29 @@ def bounded_json_value(
         string_cap=string_cap,
         depth=max_depth,
     )
-    return BoundedJSON(normalized, truncated, total_count)
+    return BoundedJSON(redact_media_previews(normalized), truncated, total_count)
+
+
+def redact_media_previews(value: JSONValue) -> JSONValue:
+    """
+    Blank provider preview audio URLs in serialized media-item metadata, in place.
+
+    Streaming providers populate ``metadata.preview`` with their own audio URL,
+    which must not leave the server.
+
+    :param value: JSON value produced from Music Assistant models.
+    """
+    pending: list[JSONValue] = [value]
+    while pending:
+        current = pending.pop()
+        if isinstance(current, dict):
+            metadata = current.get("metadata")
+            if isinstance(metadata, dict) and metadata.get("preview") is not None:
+                metadata["preview"] = None
+            pending.extend(current.values())
+        elif isinstance(current, list):
+            pending.extend(current)
+    return value
 
 
 def _json_value(value: Any, active_ids: set[int]) -> JSONValue:
