@@ -113,12 +113,12 @@ async def revoke_token_by_id(mass: MusicAssistant, user: User, token_id: str) ->
     return True
 
 
-async def list_user_tokens(mass: MusicAssistant, user: User) -> list[AuthToken]:
+async def list_user_tokens(mass: MusicAssistant, user: User) -> list[AuthToken] | None:
     """
     List ``user``'s auth tokens via the sanctioned ``auth.get_user_tokens`` API.
 
     Returns typed ``AuthToken`` dataclasses — no raw ``sqlite3.Row``
-    objects leak across the boundary. Best-effort: an error returns ``[]``.
+    objects leak across the boundary.
 
     Note: MA core caps the query at 100 rows. A user with > 100 active
     tokens will see some priors miss our dedup pass — acceptable for the
@@ -126,11 +126,11 @@ async def list_user_tokens(mass: MusicAssistant, user: User) -> list[AuthToken]:
 
     :param mass: MusicAssistant instance.
     :param user: User whose tokens to list (sets the auth context).
+    :return: The user's tokens, or ``None`` when the lookup failed.
     """
-    tokens: list[AuthToken] = []
     with _as_user(user):
         try:
-            tokens = await mass.webserver.auth.get_user_tokens()
+            return list(await mass.webserver.auth.get_user_tokens())
         except Exception:
             LOGGER.exception("Connect Wizard: get_user_tokens failed (user=%s)", user.user_id)
-    return tokens
+            return None

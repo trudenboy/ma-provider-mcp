@@ -285,17 +285,15 @@ def make_exchange(ctx: WizardContext) -> Callable[[web.Request], Any]:
             return web.json_response({"error": "invalid bootstrap"}, status=401)
 
         # Make the bootstrap single-use: revoke it BEFORE minting the session
-        # so a partial failure (revoke ok, mint fails) cannot leave both the
-        # bootstrap and a session valid. ``get_token_id_from_token`` handles
-        # both JWTs and legacy hash tokens; if it cannot resolve a token_id
-        # we skip the revoke — no regression vs prior behaviour.
+        # and fail closed when it cannot be resolved or revoked, so a session
+        # is never issued while the reusable bootstrap stays valid.
         try:
             bootstrap_id = await ctx.mass.webserver.auth.get_token_id_from_token(bootstrap)
         except Exception:
             LOGGER.exception("Connect Wizard: get_token_id_from_token raised for bootstrap")
             bootstrap_id = None
-        if bootstrap_id:
-            await revoke_token_by_id(ctx.mass, user, bootstrap_id)
+        if not bootstrap_id or not await revoke_token_by_id(ctx.mass, user, bootstrap_id):
+            return web.json_response({"error": "bootstrap revoke failed"}, status=500)
 
         try:
             session = await ctx.mass.webserver.auth.create_token(
@@ -415,14 +413,16 @@ def make_mint_token(ctx: WizardContext) -> Callable[[web.Request], Any]:
         new_name = f"MCP — {spec.label}"
 
         # Server-side dedup: revoke any existing tokens with this exact
-        # client-token name for the session user, via the sanctioned
-        # auth.get_user_tokens / auth.revoke_token API. Yields typed
-        # AuthToken dataclasses — no raw sqlite rows leak in. Idempotent
-        # across browser/server restarts: a stale `MCP — <Client>` row
-        # from any prior wizard session is reclaimed before the new mint.
-        for tok in await list_user_tokens(ctx.mass, user):
-            if tok.name == new_name:
-                await revoke_token_by_id(ctx.mass, user, tok.token_id)
+        # client-token name for the session user before minting, so a stale
+        # `MCP — <Client>` row from any prior wizard session is reclaimed.
+        # Abort when listing or revoking fails: minting anyway would leave
+        # two long-lived credentials for the same client.
+        existing = await list_user_tokens(ctx.mass, user)
+        if existing is None:
+            return web.json_response({"error": "token dedup failed"}, status=500)
+        for tok in existing:
+            if tok.name == new_name and not await revoke_token_by_id(ctx.mass, user, tok.token_id):
+                return web.json_response({"error": "token dedup failed"}, status=500)
 
         try:
             token = await ctx.mass.webserver.auth.create_token(

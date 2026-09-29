@@ -45,11 +45,11 @@ async def handle_open_connect_action(
     bootstrap: str | None = None
     if current_user is not None:
         # GC any prior wizard plumbing rows for this user before minting a
-        # new bootstrap, via the sanctioned auth API. Best-effort: lookup
-        # failures inside list_user_tokens return []; individual revoke
-        # failures are swallowed inside revoke_token_by_id. Per-client
-        # tokens (MCP — <Client>) are not touched.
-        for tok in await list_user_tokens(mass, current_user):
+        # new bootstrap, via the sanctioned auth API. Best-effort: a failed
+        # lookup skips GC; individual revoke failures are logged inside
+        # revoke_token_by_id. Per-client tokens (MCP — <Client>) are not
+        # touched.
+        for tok in await list_user_tokens(mass, current_user) or ():
             if tok.name in _GC_NAMES:
                 await revoke_token_by_id(mass, current_user, tok.token_id)
 

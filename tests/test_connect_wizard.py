@@ -479,10 +479,10 @@ async def test_exchange_invalid_bootstrap_does_not_revoke(
     wizard_mass.webserver.auth.revoke_token.assert_not_called()
 
 
-async def test_exchange_revoke_failure_still_returns_session(
+async def test_exchange_revoke_failure_does_not_issue_session(
     wizard_client: TestClient, wizard_mass: MagicMock
 ) -> None:
-    """A ``revoke_token`` exception is swallowed; the exchange still issues a session_token."""
+    """A failed bootstrap revoke fails closed: no session while the bootstrap stays valid."""
     auth = wizard_mass.webserver.auth
     auth.revoke_token = AsyncMock(side_effect=RuntimeError("revoke failed"))
 
@@ -491,16 +491,15 @@ async def test_exchange_revoke_failure_still_returns_session(
         json={"bootstrap": "boot-1"},
         headers={"Origin": "http://localhost:8095"},
     )
-    assert resp.status == 200
-    data = await resp.json()
-    assert data["session_token"] == "jwt-xyz"
-    auth.create_token.assert_awaited_once()
+    assert resp.status == 500
+    assert "session_token" not in await resp.json()
+    auth.create_token.assert_not_called()
 
 
-async def test_exchange_get_token_id_none_skips_revoke(
+async def test_exchange_unresolved_bootstrap_id_does_not_issue_session(
     wizard_client: TestClient, wizard_mass: MagicMock
 ) -> None:
-    """When ``get_token_id_from_token`` returns ``None`` the revoke is skipped, mint still happens."""
+    """A bootstrap whose token id cannot be resolved cannot be revoked, so no session is issued."""
     auth = wizard_mass.webserver.auth
     auth.get_token_id_from_token = AsyncMock(return_value=None)
 
@@ -509,9 +508,25 @@ async def test_exchange_get_token_id_none_skips_revoke(
         json={"bootstrap": "boot-1"},
         headers={"Origin": "http://localhost:8095"},
     )
-    assert resp.status == 200
+    assert resp.status == 500
     auth.revoke_token.assert_not_called()
-    auth.create_token.assert_awaited_once()
+    auth.create_token.assert_not_called()
+
+
+async def test_exchange_bootstrap_id_lookup_error_does_not_issue_session(
+    wizard_client: TestClient, wizard_mass: MagicMock
+) -> None:
+    """A raising token-id lookup fails closed instead of skipping the revoke."""
+    auth = wizard_mass.webserver.auth
+    auth.get_token_id_from_token = AsyncMock(side_effect=RuntimeError("db locked"))
+
+    resp = await wizard_client.post(
+        "/mcp/v1/connect/exchange",
+        json={"bootstrap": "boot-1"},
+        headers={"Origin": "http://localhost:8095"},
+    )
+    assert resp.status == 500
+    auth.create_token.assert_not_called()
 
 
 # ── Login form fallback ──────────────────────────────────────────────────────
@@ -707,10 +722,10 @@ async def test_token_endpoint_server_dedup_revokes_same_name(
     auth.create_token.assert_awaited_once()
 
 
-async def test_token_endpoint_dedup_lookup_failure_does_not_fail_mint(
+async def test_token_endpoint_dedup_lookup_failure_does_not_mint(
     wizard_client: TestClient, wizard_mass: MagicMock
 ) -> None:
-    """A ``get_user_tokens`` exception is logged but the mint still succeeds."""
+    """A failed token listing aborts before minting a second long-lived client token."""
     auth = wizard_mass.webserver.auth
     auth.get_user_tokens = AsyncMock(side_effect=RuntimeError("api down"))
 
@@ -719,8 +734,9 @@ async def test_token_endpoint_dedup_lookup_failure_does_not_fail_mint(
         json={"session_token": "sess-1", "client_id": "cursor"},
         headers={"Origin": "http://localhost:8095"},
     )
-    assert resp.status == 200
-    auth.create_token.assert_awaited_once()
+    assert resp.status == 500
+    assert "token" not in await resp.json()
+    auth.create_token.assert_not_called()
 
 
 async def test_token_endpoint_no_prior_no_revoke(
@@ -738,10 +754,10 @@ async def test_token_endpoint_no_prior_no_revoke(
     auth.revoke_token.assert_not_called()
 
 
-async def test_token_endpoint_revoke_failure_does_not_fail_mint(
+async def test_token_endpoint_revoke_failure_does_not_mint(
     wizard_client: TestClient, wizard_mass: MagicMock
 ) -> None:
-    """A ``revoke_token`` exception is swallowed; the new mint still happens."""
+    """A failed revoke of the prior client token leaves it as the only credential."""
     auth = wizard_mass.webserver.auth
     auth.get_user_tokens = AsyncMock(
         return_value=[SimpleNamespace(token_id="old", name="MCP — Cursor", user_id="u1")]
@@ -753,8 +769,9 @@ async def test_token_endpoint_revoke_failure_does_not_fail_mint(
         json={"session_token": "sess-1", "client_id": "cursor"},
         headers={"Origin": "http://localhost:8095"},
     )
-    assert resp.status == 200
-    auth.create_token.assert_awaited_once()
+    assert resp.status == 500
+    assert "token" not in await resp.json()
+    auth.create_token.assert_not_called()
 
 
 # ── Origin & mount ───────────────────────────────────────────────────────────
