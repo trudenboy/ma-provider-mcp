@@ -51,7 +51,7 @@ from .command_profiles import (
     CommandProfile,
     aliases_by_command,
 )
-from .commands.authorization import normalize_scope
+from .commands.authorization import normalize_scope, scope_label
 from .confirmation_context import _dispatcher_confirmation
 from .dynamic_serialization import bounded_json_value, fit_json_envelope
 from .dynamic_signatures import (
@@ -541,7 +541,7 @@ class DynamicAPIAdapter:
                     "target_id": id(target),
                     "target": cls._callable_identity(target),
                     "authenticated": bool(getattr(handler, "authenticated", True)),
-                    "required_scope": str(getattr(scope, "value", scope)),
+                    "required_scope": scope_label(scope),
                     "allow_impersonation": bool(getattr(handler, "allow_impersonation", False)),
                     "alias": str(getattr(handler, "alias", False)),
                     "signature": str(getattr(handler, "signature", None)),
@@ -702,7 +702,7 @@ class DynamicAPIAdapter:
                 profile,
                 allow_impersonation=bool(getattr(handler, "allow_impersonation", False)),
             ),
-            required_scope=str(getattr(scope, "value", scope)) if scope is not None else None,
+            required_scope=scope_label(scope) if scope is not None else None,
             allow_impersonation=bool(getattr(handler, "allow_impersonation", False)),
             handler=handler,
             search_aliases=(

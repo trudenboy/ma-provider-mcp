@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.12] - 2026-09-29
+
+### Fixed
+- Commands that Music Assistant now guards with the own-provider scope, such
+  as setting up, saving, or reconfiguring your own music sources, are
+  available again under provider-config permissions instead of being blocked.
+- Commands that accept any one of several Music Assistant scopes, such as
+  storage info and share candidates, are no longer refused for every user.
+- New storage and stream-server commands are classified under the config
+  permissions.
+
 ## [2.1.11] - 2026-09-29
 
 ### Security

@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, create_autospec
 
 import pytest
 from fastmcp.exceptions import ToolError
+from music_assistant_models.auth import Scope
 from music_assistant_models.config_entries import ConfigEntry
 from music_assistant_models.enums import ConfigEntryType
 
@@ -587,3 +588,41 @@ async def test_unknown_setup_flow_fails_closed() -> None:
 
     with pytest.raises(ToolError, match="setup flow"):
         await preflight_command(mass, decision, {"flow_id": "missing-flow", "values": {}})
+
+
+@pytest.mark.parametrize(
+    ("command", "scope", "capability"),
+    [
+        ("config/providers/setup", Scope.CONFIG_PROVIDERS_OWN, Capability.CONFIG_WRITE_PROVIDER),
+        ("config/providers/save", Scope.CONFIG_PROVIDERS_OWN, Capability.CONFIG_WRITE_PROVIDER),
+        (
+            "config/providers/share_candidates",
+            (Scope.CONFIG_PROVIDERS_OWN, Scope.LIBRARY_WRITE),
+            Capability.CONFIG_WRITE_PROVIDER,
+        ),
+        (
+            "storage/info",
+            (Scope.CONFIG_PROVIDERS_OWN, Scope.CONFIG_PROVIDERS_READ),
+            Capability.CONFIG_READ,
+        ),
+        (
+            "storage/network_shares/add",
+            Scope.CONFIG_PROVIDERS_WRITE,
+            Capability.CONFIG_WRITE_PROVIDER,
+        ),
+        (
+            "storage/local_folders/remove",
+            Scope.CONFIG_PROVIDERS_WRITE,
+            Capability.CONFIG_WRITE_PROVIDER,
+        ),
+        ("streams/info", Scope.CONFIG_CORE_READ, Capability.CONFIG_READ),
+    ],
+)
+def test_own_provider_scope_and_scope_tuples_are_classified(
+    command: str, scope: Any, capability: Capability
+) -> None:
+    """Own-provider scopes, any-of scope tuples, and storage/stream commands map to config."""
+    decision = resolve_command_policy(command, scope, profile=None)
+
+    assert not decision.hard_denied
+    assert decision.required_capabilities == frozenset({str(capability)})
