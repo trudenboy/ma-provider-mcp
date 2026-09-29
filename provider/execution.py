@@ -1431,12 +1431,10 @@ class DynamicAPIAdapter:
         auth: tuple[AccessToken, Any] | None,
     ) -> list[tuple[Any, Any]]:
         """Set task-local MA authentication context variables."""
-        try:
-            from music_assistant.controllers.webserver.helpers import (  # noqa: PLC0415
-                auth_middleware,
-            )
-        except ImportError:
-            return []
+        from music_assistant.controllers.webserver.helpers import (  # noqa: PLC0415
+            auth_middleware,
+        )
+
         token, user = auth if auth is not None else (None, None)
         values = {
             "current_user": user,

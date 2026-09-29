@@ -25,6 +25,13 @@ import logging
 from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
+from music_assistant.controllers.webserver.helpers.auth_middleware import (
+    get_current_user as _ma_get_current_user,
+)
+from music_assistant.controllers.webserver.helpers.auth_middleware import (
+    set_current_user as _ma_set_current_user,
+)
+
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
@@ -33,36 +40,6 @@ if TYPE_CHECKING:
     from music_assistant.mass import MusicAssistant
 
 LOGGER = logging.getLogger(__name__)
-
-# Sanctioned contextvar helpers live in an MA-internal module. In a real MA
-# install the import succeeds (it's the same module MA's own tests use —
-# tests/test_webserver_auth.py:19-22). In this repo's minimal dev venv the
-# transitive ``music_assistant.controllers.webserver`` package can't be
-# loaded (frontend / chardet / torch are not installed), so fall back to
-# no-op shims for collect-time imports. Tests mock the API methods that
-# would actually read ``current_user``, so a no-op context manager is safe
-# there. Production always hits the real branch.
-try:
-    from music_assistant.controllers.webserver.helpers.auth_middleware import (
-        get_current_user as _ma_get_current_user,
-    )
-    from music_assistant.controllers.webserver.helpers.auth_middleware import (
-        set_current_user as _ma_set_current_user,
-    )
-except ImportError:
-    # Narrow on purpose: only swallow ``ImportError`` (which covers
-    # ``ModuleNotFoundError``) — the case is the minimal dev venv missing
-    # a transitive MA dep. Anything else (e.g. ``AttributeError`` from a
-    # renamed symbol) must propagate so MA-side breakage surfaces loudly
-    # instead of silently disabling token revocation.
-    # Signatures must match the real MA helpers exactly — mypy on CI sees
-    # both branches with the full MA install and rejects any drift.
-
-    def _ma_get_current_user() -> User | None:
-        return None
-
-    def _ma_set_current_user(user: User | None) -> None:  # noqa: ARG001
-        return None
 
 
 @contextmanager

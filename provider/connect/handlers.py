@@ -89,19 +89,12 @@ def _is_request_via_ha_ingress(request: web.Request) -> bool:
     transport on MA's side is plain HTTP — but the bytes never crossed the
     public network. MA's ``is_request_from_ingress`` helper verifies that
     by checking the trusted ingress socket; we mirror its
-    ``ImportError → fail closed`` / ``unexpected → log and fail closed``
-    contract here (same pattern as :func:`provider.origins.is_origin_allowed_for_request`).
+    by checking the trusted ingress socket and fails closed when it raises.
     """
-    try:
-        from music_assistant.controllers.webserver.helpers.auth_middleware import (  # noqa: PLC0415
-            is_request_from_ingress,
-        )
-    except ImportError, ModuleNotFoundError:
-        # Bare provider venv — MA helper unavailable. Fail closed without noise.
-        return False
-    except Exception:
-        LOGGER.exception("Connect Wizard: unexpected error importing ingress helper")
-        return False
+    from music_assistant.controllers.webserver.helpers.auth_middleware import (  # noqa: PLC0415
+        is_request_from_ingress,
+    )
+
     try:
         return bool(is_request_from_ingress(request))
     except Exception:
