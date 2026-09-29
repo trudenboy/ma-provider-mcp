@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 
 from music_assistant_models.enums import MediaType
 
+from .dynamic_serialization import redact_media_previews
 from .models import PlayerBrief, QueueBrief, QueueItemBrief
 
 if TYPE_CHECKING:
@@ -170,7 +171,7 @@ def to_resource_text(value: Any) -> str | None:
     if value is None:
         return None
     if hasattr(value, "to_dict"):
-        return json.dumps(value.to_dict(), ensure_ascii=False, default=str)
+        return json.dumps(redact_media_previews(value.to_dict()), ensure_ascii=False, default=str)
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
         return json.dumps(dataclasses.asdict(value), ensure_ascii=False, default=str)
     return json.dumps(value, ensure_ascii=False, default=str)
