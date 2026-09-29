@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.16] - 2026-09-29
+
+### Security
+- A failed impersonation lookup no longer echoes Music Assistant's internal
+  error text to the MCP client; denied or unknown users get a fixed "not found
+  or not permitted" result, and unexpected failures report a generic
+  execution error.
+
 ## [2.1.15] - 2026-09-29
 
 ### Fixed
