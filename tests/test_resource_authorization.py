@@ -280,3 +280,38 @@ async def test_library_resource_provider_filter_accepts_one_allowed_mapping() ->
         provider_mappings=(SimpleNamespace(provider_instance="spotify--1"),),
     )
     assert request.library_item_allowed(item) is True
+
+
+async def test_resource_handlers_run_as_the_authenticated_ma_user() -> None:
+    """MA controllers see the request user, so private-playlist checks are not skipped."""
+    from fastmcp import Client, FastMCP  # noqa: PLC0415
+
+    from music_assistant.controllers.webserver.helpers.auth_middleware import (  # noqa: PLC0415
+        get_current_token,
+        get_current_user,
+    )
+    from provider.middleware import TagFilterMiddleware  # noqa: PLC0415
+    from provider.server import build_tag_lookup  # noqa: PLC0415
+
+    user = _user()
+    seen: list[tuple[Any, Any]] = []
+    mcp = FastMCP("t")
+
+    @mcp.resource("library://playlist/{playlist_id}", tags={str(Capability.QUERY_LIBRARY)})  # type: ignore[untyped-decorator, unused-ignore]
+    async def playlist(playlist_id: str) -> str:
+        """Record which MA user the controller would see."""
+        seen.append((get_current_user(), get_current_token()))
+        return playlist_id
+
+    mcp.add_middleware(
+        TagFilterMiddleware(
+            build_tag_lookup(mcp),
+            lambda: _policy(**{str(Capability.QUERY_LIBRARY): PolicyMode.ALLOW}),
+            resource_authorizer=_authorizer(user=user),
+        )
+    )
+    async with Client(mcp) as client:
+        await client.read_resource("library://playlist/42")
+
+    assert seen == [(user, "bearer")]
+    assert get_current_user() is None
