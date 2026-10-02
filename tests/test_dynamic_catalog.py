@@ -757,6 +757,32 @@ async def test_unexpected_impersonation_failure_propagates_to_the_sanitizer(
         await adapter._resolve_impersonated_user(None, "listener")
 
 
+async def test_provider_owned_denial_through_call_tool_is_forbidden_and_audited_once() -> None:
+    """A provider command that refuses the caller reports not_found_or_forbidden, not a failure."""
+    records: list[Any] = []
+
+    async def tail_log() -> None:
+        raise InsufficientPermissions("Server-wide diagnostics are not available")
+
+    adapter = _real_adapter(
+        _handler("fastmcp/debug/tail_log", tail_log, "system.read"),
+        allowed_capabilities={str(Capability.DEBUG_LOGS)},
+        audit_sink=records.append,
+    )
+
+    with pytest.raises(ToolError, match=r"\[not_found_or_forbidden\]"):
+        await adapter.call(
+            "ma_api:fastmcp/debug/tail_log",
+            {},
+            response_mode="compact",
+            fields=None,
+            max_items=None,
+            ctx=MagicMock(),
+        )
+
+    assert [record.outcome for record in records if record.outcome != "execution.succeeded"] == []
+
+
 async def test_adapter_discovers_handler_and_compiles_schema() -> None:
     """The runtime registry becomes a canonical ma_api catalog entry."""
 

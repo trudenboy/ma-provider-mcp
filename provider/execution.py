@@ -18,7 +18,11 @@ from fastmcp.exceptions import ToolError
 from mcp.shared.exceptions import McpError
 from mcp.types import INVALID_REQUEST, METHOD_NOT_FOUND
 from music_assistant_models.auth import AuthProviderType, Scope
-from music_assistant_models.errors import InsufficientPermissions, UserNotFoundError
+from music_assistant_models.errors import (
+    AuthenticationRequired,
+    InsufficientPermissions,
+    UserNotFoundError,
+)
 from music_assistant_models.translations import TRANSLATION_RESOLVER
 
 from .audit import (
@@ -75,6 +79,7 @@ _ALIASES_BY_COMMAND = aliases_by_command()
 _COMPACT_ITEMS = 25
 _FULL_ITEMS = 200
 _MAPPING_KEYS = 200
+_PROVIDER_COMMAND_PREFIX = "fastmcp/"
 _COMPACT_BYTES = 12_288
 _FULL_BYTES = 65_536
 _COMPACT_STRING = 2_048
@@ -492,6 +497,23 @@ class DynamicAPIAdapter:
             if execution_started:
                 self._audit_execution(invocation, "execution.failed", impersonating=impersonating)
             raise
+        except (AuthenticationRequired, InsufficientPermissions) as exc:
+            # A handler refusing the caller is a denial, not a failure. Provider-owned
+            # commands already audited it in their own guard.
+            if execution_started and not invocation.entry.command.startswith(
+                _PROVIDER_COMMAND_PREFIX
+            ):
+                self._audit_execution(
+                    invocation, "authorization.denied", impersonating=impersonating
+                )
+            if isinstance(exc, AuthenticationRequired):
+                raise tool_failure(
+                    ToolFailureCode.AUTHENTICATION_REQUIRED, "Authentication is required"
+                ) from exc
+            raise tool_failure(
+                ToolFailureCode.NOT_FOUND_OR_FORBIDDEN,
+                "Tool was not found or is not permitted",
+            ) from exc
         except Exception as exc:
             if execution_started:
                 self._audit_execution(invocation, "execution.failed", impersonating=impersonating)
