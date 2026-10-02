@@ -475,19 +475,25 @@ def revalidate_preflight_command_sync(
     Reclassify request-dependent state synchronously after final authentication.
 
     A live getter that only returns an awaitable cannot prove that its earlier
-    result survived the final authentication await. Such cases are classified
-    conservatively: reads remain masked and writes require the secret
-    capability. Setup-flow category is required to have a synchronous proof.
+    result survived the final authentication await. MA's config-entry getters
+    are async, so config reads and writes then keep the classification ``preflight``
+    computed from live entries just before the final authentication (a key's entry
+    type is static per provider). Setup-flow category is required to have a
+    synchronous proof.
     """
     if decision.preflight == "config_secret_read":
         secure = _config_value_is_secure_sync(mass, arguments)
-        return CommandPreflight(secure_config_value=True if secure is None else secure)
+        return CommandPreflight(
+            secure_config_value=preflight.secure_config_value if secure is None else secure
+        )
     if decision.preflight == "config_secret_write":
         values = arguments.get("values")
         if not isinstance(values, Mapping):
             return CommandPreflight()
         entries = _config_entries_sync(mass, arguments)
-        requires_secret = entries is None or any(is_secret_key(entries, str(key)) for key in values)
+        if entries is None:
+            return preflight
+        requires_secret = any(is_secret_key(entries, str(key)) for key in values)
         return CommandPreflight(
             additional_required=(
                 frozenset({str(Capability.CONFIG_WRITE_SECRET)}) if requires_secret else frozenset()

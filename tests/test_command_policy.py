@@ -706,3 +706,43 @@ async def test_setup_flow_is_classified_through_mas_flow_access(
 
     assert submit.additional_required == frozenset({str(capability)})
     assert abort.additional_required == frozenset({str(capability)})
+
+
+async def test_final_revalidation_keeps_the_async_classification_of_plain_config_values() -> None:
+    """MA's config-entry getters are async, so the final seal reuses the fresh preflight result."""
+    mass = _config_mass()
+    read = resolve_command_policy("config/providers/get_value", "config.read", None)
+    save = resolve_command_policy("config/providers/save", "config.providers.write", None)
+    read_args = {"instance_id": "demo--1", "key": "name"}
+    save_args = {"provider_domain": "demo", "instance_id": "demo--1", "values": {"name": "Kitchen"}}
+
+    read_preflight = await preflight_command(mass, read, read_args)
+    save_preflight = await preflight_command(mass, save, save_args)
+
+    assert (
+        revalidate_preflight_command_sync(mass, read, read_args, read_preflight).secure_config_value
+        is False
+    )
+    assert (
+        revalidate_preflight_command_sync(mass, save, save_args, save_preflight).additional_required
+        == frozenset()
+    )
+
+
+async def test_final_revalidation_keeps_secret_values_protected() -> None:
+    """A secure value stays masked and a secret write still needs the secret capability."""
+    mass = _config_mass()
+    read = resolve_command_policy("config/providers/get_value", "config.read", None)
+    save = resolve_command_policy("config/providers/save", "config.providers.write", None)
+    read_args = {"instance_id": "demo--1", "key": "token"}
+    save_args = {"provider_domain": "demo", "instance_id": "demo--1", "values": {"token": "s"}}
+
+    read_preflight = await preflight_command(mass, read, read_args)
+    save_preflight = await preflight_command(mass, save, save_args)
+
+    assert revalidate_preflight_command_sync(
+        mass, read, read_args, read_preflight
+    ).secure_config_value
+    assert revalidate_preflight_command_sync(
+        mass, save, save_args, save_preflight
+    ).additional_required == frozenset({str(Capability.CONFIG_WRITE_SECRET)})
