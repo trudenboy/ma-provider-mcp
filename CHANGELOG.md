@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.17] - 2026-10-02
+
+### Fixed
+- `max_items` now limits only how many rows are returned; rows keep all their
+  fields, so a small `max_items` together with `fields` no longer returns empty
+  objects, and wide objects are no longer cut down to their first 25 keys.
+- The routes diagnostic works again on current Music Assistant and lists the
+  MCP endpoint, discovery, and Connect Wizard routes.
+
+### Security
+- Streaming share links (Spotify, TIDAL, Qobuz, YouTube Music, Apple Music and
+  iTunes) are checked against the user's music-provider filter instead of
+  being treated as plain web streams.
+- A request whose token was revoked while being authorized is refused instead
+  of running under the stale token binding.
+- Opening the Connect Wizard no longer issues a new sign-in link while older
+  wizard links could not be revoked; the wizard opens on its sign-in form.
+
 ## [2.1.16] - 2026-09-29
 
 ### Security
