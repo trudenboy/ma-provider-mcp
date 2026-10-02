@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.18] - 2026-10-02
+
+### Security
+- The Connect Wizard no longer issues a client token or sign-in link when the
+  user has so many tokens that older ones may be missing from Music
+  Assistant's token list, keeping one token per client.
+
 ## [2.1.17] - 2026-10-02
 
 ### Fixed
