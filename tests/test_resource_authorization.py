@@ -8,15 +8,22 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
+from fastmcp import Client, FastMCP
 from fastmcp.exceptions import ResourceError
 from fastmcp.server.auth.auth import AccessToken
 from music_assistant_models.auth import Scope
 
+from music_assistant.controllers.webserver.helpers.auth_middleware import (
+    get_current_token,
+    get_current_user,
+)
 from provider.audit import AuditRecord
 from provider.auth import LOOKUP_FAILURE_CLIENT_ID
 from provider.capabilities import Capability
+from provider.middleware import TagFilterMiddleware
 from provider.policy import PolicyMode, PolicyProfile, policy_snapshot
 from provider.resource_authorization import ResourceAuthorizer
+from provider.server import build_tag_lookup
 from provider.target_filters import filter_collection_result
 from provider.token_identity import TokenIdentityRegistry
 
@@ -284,15 +291,6 @@ async def test_library_resource_provider_filter_accepts_one_allowed_mapping() ->
 
 async def test_resource_handlers_run_as_the_authenticated_ma_user() -> None:
     """MA controllers see the request user, so private-playlist checks are not skipped."""
-    from fastmcp import Client, FastMCP  # noqa: PLC0415
-
-    from music_assistant.controllers.webserver.helpers.auth_middleware import (  # noqa: PLC0415
-        get_current_token,
-        get_current_user,
-    )
-    from provider.middleware import TagFilterMiddleware  # noqa: PLC0415
-    from provider.server import build_tag_lookup  # noqa: PLC0415
-
     user = _user()
     seen: list[tuple[Any, Any]] = []
     mcp = FastMCP("t")
