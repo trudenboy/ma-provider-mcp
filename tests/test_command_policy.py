@@ -348,7 +348,9 @@ def _flow_mass(
 ) -> SimpleNamespace:
     """Build the current MA setup-flow API surface needed by request preflight."""
     config = SimpleNamespace(
-        get_setup_flow_required_scope=lambda _flow_id: scope,
+        get_setup_flow_access=lambda _flow_id: (
+            None if scope is None else SimpleNamespace(required_scope=scope)
+        ),
         get_setup_flow=AsyncMock(return_value=SimpleNamespace(entries=entries)),
     )
     return SimpleNamespace(config=config)
@@ -671,3 +673,36 @@ def test_former_metadata_tools_keep_the_metadata_capability(command: str) -> Non
     decision = resolve_command_policy(command, Scope.LIBRARY_READ, None)
 
     assert decision.required_capabilities == frozenset({str(Capability.QUERY_METADATA)})
+
+
+@pytest.mark.parametrize(
+    ("scope", "capability"),
+    [
+        (Scope.CONFIG_PROVIDERS_OWN, Capability.CONFIG_WRITE_PROVIDER),
+        (Scope.CONFIG_PROVIDERS_WRITE, Capability.CONFIG_WRITE_PROVIDER),
+        (Scope.CONFIG_PLAYERS_WRITE, Capability.CONFIG_WRITE_PLAYER),
+    ],
+)
+async def test_setup_flow_is_classified_through_mas_flow_access(
+    scope: Scope, capability: Capability
+) -> None:
+    """Submit and abort read MA's real setup-flow access record, including own-provider flows."""
+    from music_assistant.controllers.config.flows import SetupFlowAccess  # noqa: PLC0415
+
+    config = SimpleNamespace(
+        get_setup_flow_access=lambda _flow_id: SetupFlowAccess(required_scope=scope),
+        get_setup_flow=AsyncMock(return_value=SimpleNamespace(entries=[])),
+    )
+    mass = SimpleNamespace(config=config)
+
+    submit = await preflight_command(
+        mass,
+        resolve_command_policy("config/flows/submit", None, None),
+        {"flow_id": "f1", "values": {"name": "x"}},
+    )
+    abort = await preflight_command(
+        mass, resolve_command_policy("config/flows/abort", None, None), {"flow_id": "f1"}
+    )
+
+    assert submit.additional_required == frozenset({str(capability)})
+    assert abort.additional_required == frozenset({str(capability)})

@@ -747,8 +747,10 @@ async def test_setup_flow_category_changed_during_final_auth_is_recomputed() -> 
         return user
 
     adapter.mass.webserver.auth.authenticate_with_token = authenticate_then_change_category
-    adapter.mass.config.get_setup_flow_required_scope = lambda _flow_id: flow_scope
-    adapter.mass.config.get_setup_flow = lambda _flow_id: SimpleNamespace(entries=[])
+    adapter.mass.config.get_setup_flow_access = lambda _flow_id: SimpleNamespace(
+        required_scope=flow_scope
+    )
+    adapter.mass.config.get_setup_flow = AsyncMock(return_value=SimpleNamespace(entries=[]))
 
     with pytest.raises(ToolError, match=r"\[not_found_or_forbidden\]"):
         await adapter.call(
@@ -1366,7 +1368,9 @@ async def test_flow_abort_requires_its_exact_category(
         },
         audit_sink=records.append,
     )
-    adapter.mass.config.get_setup_flow_required_scope = lambda _flow_id: flow_scope
+    adapter.mass.config.get_setup_flow_access = lambda _flow_id: SimpleNamespace(
+        required_scope=flow_scope
+    )
 
     with pytest.raises(ToolError, match=r"\[not_found_or_forbidden\]"):
         await adapter.call(

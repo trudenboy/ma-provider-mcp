@@ -2757,7 +2757,9 @@ async def test_flow_category_revoked_during_confirmation_prevents_execution(
         str(Capability.CONFIG_WRITE_PLAYER),
         *({str(Capability.CONFIG_WRITE_PROVIDER)} if state["provider"] else set()),
     }
-    adapter.mass.config.get_setup_flow_required_scope = lambda _flow_id: "config.providers.write"
+    adapter.mass.config.get_setup_flow_access = lambda _flow_id: SimpleNamespace(
+        required_scope="config.providers.write"
+    )
     step = SimpleNamespace(
         entries=[ConfigEntry(key="name", type=ConfigEntryType.STRING, label="Name")]
     )
@@ -2801,7 +2803,9 @@ async def test_player_only_tag_executes_a_player_setup_flow(
         _handler("config/flows/submit", submit_flow),
         allowed_capabilities={str(Capability.CONFIG_WRITE_PLAYER)},
     )
-    adapter.mass.config.get_setup_flow_required_scope = lambda _flow_id: "config.players.write"
+    adapter.mass.config.get_setup_flow_access = lambda _flow_id: SimpleNamespace(
+        required_scope="config.players.write"
+    )
     step = SimpleNamespace(
         entries=[ConfigEntry(key="name", type=ConfigEntryType.STRING, label="Name")]
     )
@@ -2834,7 +2838,9 @@ async def test_provider_setup_flow_rejects_player_only_tag_before_confirmation(
         _handler("config/flows/submit", submit_flow),
         allowed_capabilities={str(Capability.CONFIG_WRITE_PLAYER)},
     )
-    adapter.mass.config.get_setup_flow_required_scope = lambda _flow_id: "config.providers.write"
+    adapter.mass.config.get_setup_flow_access = lambda _flow_id: SimpleNamespace(
+        required_scope="config.providers.write"
+    )
     adapter.mass.config.get_setup_flow = AsyncMock(
         return_value=SimpleNamespace(
             entries=[ConfigEntry(key="name", type=ConfigEntryType.STRING, label="Name")]
