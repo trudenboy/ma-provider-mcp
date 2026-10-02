@@ -783,6 +783,42 @@ async def test_provider_owned_denial_through_call_tool_is_forbidden_and_audited_
     assert [record.outcome for record in records if record.outcome != "execution.succeeded"] == []
 
 
+async def test_music_source_visibility_comes_from_ma_provider_access(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MA derives a user's visible music sources; collection visibility applies them."""
+    from music_assistant_models.auth import User, UserRole  # noqa: PLC0415
+
+    from music_assistant.helpers import provider_access  # noqa: PLC0415
+
+    monkeypatch.setattr(
+        provider_access, "visible_music_sources", lambda _mass, _user: ["spotify--mine"]
+    )
+
+    async def search(search_query: str) -> dict[str, list[dict[str, str]]]:
+        del search_query
+        return {
+            "tracks": [
+                {"name": "mine", "provider_instance_id": "spotify--mine"},
+                {"name": "theirs", "provider_instance_id": "spotify--theirs"},
+            ]
+        }
+
+    member = User(user_id="u1", username="member", role=UserRole.USER, enabled=True)
+    adapter = _real_adapter(_handler("music/search", search), user=member)
+
+    result = await adapter.call(
+        "ma_api:music/search",
+        {"search_query": "x"},
+        response_mode="compact",
+        fields=None,
+        max_items=None,
+        ctx=MagicMock(),
+    )
+
+    assert [row["name"] for row in result["data"]["tracks"]] == ["mine"]
+
+
 async def test_adapter_discovers_handler_and_compiles_schema() -> None:
     """The runtime registry becomes a canonical ma_api catalog entry."""
 

@@ -66,7 +66,11 @@ from .dynamic_signatures import (
 from .errors import ToolFailureCode, tool_failure
 from .performance import PerformanceTracker
 from .policy import PolicyMode, PolicySnapshot
-from .target_filters import enforce_target_filters, filter_collection_result
+from .target_filters import (
+    enforce_target_filters,
+    filter_collection_result,
+    with_visible_music_sources,
+)
 
 if TYPE_CHECKING:
     from fastmcp import Context
@@ -693,7 +697,7 @@ class DynamicAPIAdapter:
             return None
         if not request_identity_holds(token, user, identity, live_token_id=live_token_id):
             return None
-        return token, user
+        return token, with_visible_music_sources(self.mass, user)
 
     @staticmethod
     def _command_is_denied(command: str) -> bool:
@@ -1435,11 +1439,12 @@ class DynamicAPIAdapter:
                 auth_middleware,
             )
 
-            return await auth_middleware.resolve_impersonated_user(
+            target = await auth_middleware.resolve_impersonated_user(
                 self.mass,
                 AuthProviderType.BUILTIN,
                 requested_user,
             )
+            return with_visible_music_sources(self.mass, target)
         except (InsufficientPermissions, UserNotFoundError) as exc:
             raise ToolError("Requested user was not found or is not permitted") from exc
         finally:
