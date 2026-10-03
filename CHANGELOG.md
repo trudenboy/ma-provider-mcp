@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A command that refuses the caller reports "not found or not permitted"
   instead of a generic execution failure, and is audited once.
 - The health diagnostic reports disabled providers and provider errors.
+- A long search query no longer breaks the first page of results; queries
+  over 200 characters are refused up front.
 
 ### Security
 - Music-source visibility comes from Music Assistant's provider access
@@ -22,6 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not see.
 - A token revoked during sign-in falls back to the safe-queries policy instead
   of being treated as a legacy token.
+- Very long keys in command results and debug events are truncated like
+  values, keeping responses within their size limits.
 
 ## [2.1.19] - 2026-10-02
 
