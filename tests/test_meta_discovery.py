@@ -19,6 +19,7 @@ from provider.catalog import (
     DynamicEntry,
     RequestCatalogContext,
 )
+from provider.catalog_pagination import MAX_QUERY_LENGTH
 from provider.config import build_config_entries
 from provider.constants import DEFAULT_MOUNT_PATH
 from provider.meta_discovery import register_meta_discovery
@@ -434,8 +435,6 @@ def test_dynamic_entry_type_carries_no_classifier_risk_gate() -> None:
 
 async def test_search_rejects_a_query_too_long_for_a_cursor_up_front() -> None:
     """An over-long query is refused with invalid_arguments instead of failing on the cursor."""
-    from provider.catalog_pagination import MAX_QUERY_LENGTH  # noqa: PLC0415
-
     mcp, _adapter = _recording_server()
     async with Client(mcp) as client:
         with pytest.raises(ToolError) as raised:
