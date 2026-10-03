@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.20] - 2026-10-03
+
+### Fixed
+- Submitting or aborting a setup flow works again, including flows for your
+  own music providers.
+- Reading a plain config value no longer returns a masked value, and saving
+  plain config values no longer requires the secret-write permission.
+- A command that refuses the caller reports "not found or not permitted"
+  instead of a generic execution failure, and is audited once.
+- The health diagnostic reports disabled providers and provider errors.
+
+### Security
+- Music-source visibility comes from Music Assistant's provider access
+  records, so search, library and other listings hide sources the user may
+  not see.
+- A token revoked during sign-in falls back to the safe-queries policy instead
+  of being treated as a legacy token.
+
 ## [2.1.19] - 2026-10-02
 
 ### Security
