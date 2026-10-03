@@ -430,3 +430,15 @@ def test_dynamic_risk_gate_entries_are_removed(mock_mass: Any) -> None:
 def test_dynamic_entry_type_carries_no_classifier_risk_gate() -> None:
     """Discovery descriptors do not expose the removed v1 risk class."""
     assert "risk" not in DynamicEntry.__dataclass_fields__
+
+
+async def test_search_rejects_a_query_too_long_for_a_cursor_up_front() -> None:
+    """An over-long query is refused with invalid_arguments instead of failing on the cursor."""
+    from provider.catalog_pagination import MAX_QUERY_LENGTH  # noqa: PLC0415
+
+    mcp, _adapter = _recording_server()
+    async with Client(mcp) as client:
+        with pytest.raises(ToolError) as raised:
+            await client.call_tool("search_tools", {"query": "music " * MAX_QUERY_LENGTH})
+
+    assert str(raised.value).startswith("[invalid_arguments]")
