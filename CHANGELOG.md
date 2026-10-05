@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.22] - 2026-10-03
+
+### Security
+- A confirmation prompt now names every permission it grants, including
+  impersonation of another user, instead of only one of them.
+
 ## [2.1.21] - 2026-10-03
 
 ### Fixed
