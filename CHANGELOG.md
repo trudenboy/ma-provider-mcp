@@ -1664,3 +1664,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   resources; canned prompts.
 - Reverse-synced upstream PR #6136 (WIP)
 - Reverse-synced upstream PR #6333 (WIP)
+- Reverse-synced upstream PR #6827 (WIP)
