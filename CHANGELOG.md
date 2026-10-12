@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.25] - 2026-10-12
+
+### Changed
+- The Connect Wizard link uses the server's External URL when one is
+  configured, before falling back to the advertised base URL, and browser
+  requests from that External URL origin are accepted.
+
 ## [2.1.24] - 2026-10-07
 
 ### Changed
@@ -1664,4 +1671,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   resources; canned prompts.
 - Reverse-synced upstream PR #6136 (WIP)
 - Reverse-synced upstream PR #6333 (WIP)
-- Reverse-synced upstream PR #6827 (WIP)
