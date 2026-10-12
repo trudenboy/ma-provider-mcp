@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] - 2026-10-12
+
+### Changed
+- Requires `fastmcp==4.1.0` (MCP Python SDK v2). Clients on the sessionless
+  `2026-07-28` MCP protocol revision are now served alongside clients on
+  earlier revisions.
+
+### Fixed
+- A Confirm-policy command called from a client whose connection cannot
+  carry confirmation prompts (such as the `2026-07-28` protocol) now names
+  the capability and the remedy (set it to Allow or use an
+  elicitation-capable client) instead of a generic execution failure.
+
 ## [2.1.25] - 2026-10-12
 
 ### Changed
