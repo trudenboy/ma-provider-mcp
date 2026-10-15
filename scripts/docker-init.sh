@@ -11,23 +11,14 @@ case "$SOURCE_FILE" in
   *) echo "ERROR: MA source overlay is inactive ($SOURCE_FILE)" >&2; exit 1 ;;
 esac
 
-# Install provider-specific runtime dependencies (skips music_assistant itself)
-DEPS=$(/app/venv/bin/python3 - <<'PYEOF'
+# Install the same provider-specific runtime dependencies as the MA loader.
+DEPS=$(/app/venv/bin/python3 - /ma-server/music_assistant/providers/fastmcp_server/manifest.json <<'PYEOF'
+import json
 import sys
-try:
-    import tomllib
-except ImportError:
-    import tomli as tomllib
-try:
-    with open("/tmp/pyproject.toml", "rb") as f:
-        data = tomllib.load(f)
-    deps = [
-        d for d in data.get("project", {}).get("dependencies", [])
-        if not d.lower().startswith("music_assistant")
-    ]
-    print(" ".join(deps))
-except Exception:
-    pass
+
+with open(sys.argv[1], encoding="utf-8") as manifest_file:
+    manifest = json.load(manifest_file)
+print("\n".join(manifest.get("requirements", [])))
 PYEOF
 )
 if [ -n "$DEPS" ]; then
@@ -37,9 +28,9 @@ if [ -n "$DEPS" ]; then
     # `/app/venv/bin/pip: not found`. Prefer uv when available; fall back
     # to pip for any image that still has it.
     if [ -x /app/venv/bin/uv ]; then
-        /app/venv/bin/uv pip install --quiet --index-strategy unsafe-best-match --python /app/venv/bin/python $DEPS
+        printf '%s\n' "$DEPS" | /app/venv/bin/uv pip install --quiet --index-strategy unsafe-best-match --python /app/venv/bin/python -r -
     else
-        /app/venv/bin/pip install --quiet $DEPS
+        printf '%s\n' "$DEPS" | /app/venv/bin/pip install --quiet -r -
     fi
 fi
 
