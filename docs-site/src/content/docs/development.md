@@ -103,5 +103,5 @@ python3 scripts/dev-workspace.py run --dir ~/ma-workspace
 python3 scripts/dev-workspace.py status --dir ~/ma-workspace
 ```
 
-The workspace uses a single `trudenboy/ma-server` fork and shared `.venv`.
+The workspace uses official `music-assistant/server@dev` and a shared Python 3.14 `.venv`. Existing checkouts and environments are reused; migrate older workspaces separately.
 Each provider is connected via symlink into `ma-server/music_assistant/providers/`.

@@ -27,6 +27,5 @@ services:
       - ${MA_SERVER_ROOT:-../ma-server}:/ma-server:ro
       - ./provider/:/ma-server/music_assistant/providers/fastmcp_server:ro
       - ./tests/:/tmp/provider-tests:ro
-      - ./pyproject.toml:/tmp/pyproject.toml:ro
       - ./scripts/docker-init.sh:/init.sh:ro
     entrypoint: ["/bin/sh", "/init.sh"]
