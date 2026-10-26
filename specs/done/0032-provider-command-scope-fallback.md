@@ -2,7 +2,7 @@
 id: "0032"
 title: "Classify provider-registered commands by their Music Assistant scope"
 size: S
-status: inprogress
+status: done
 priority: P1
 effort_minutes: 20
 feature_id:
