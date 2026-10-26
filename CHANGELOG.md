@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the library query permission. Each call returns only the calling user's
   own history.
 
+### Changed
+- Requires `fastmcp==4.1.3`, which carries upstream security fixes for
+  component authorization and resource-template fallback, and needs
+  `certifi` 2026.10.19 or later.
+
 ### Security
 - A call that acts on behalf of another user is rejected unless that user
   holds the command's own Music Assistant scope, the same rule Music
