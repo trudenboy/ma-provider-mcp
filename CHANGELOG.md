@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.6] - 2026-10-26
+
+### Security
+- `party/skip`, `party/add_to_queue` and `party/boost_queue_item` require
+  playback control, as the equivalent core queue commands do. Skipping a
+  track or starting a stopped party queue is no longer possible for a token
+  that may edit the queue but not control playback.
+
 ## [2.2.5] - 2026-10-26
 
 ### Security
