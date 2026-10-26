@@ -40,6 +40,8 @@ its declared `players.control` scope understates its reach.
    `config.core.write`, `system.read` and `system.manage` each map to one
    fixed capability; a destructive verb in the command name selects the
    delete capability where the scope has one and marks the tool destructive.
+   A destructive command under a read-only scope stays hard-denied rather
+   than inheriting the read capability.
 3. A command in an unknown family with no scope, a `users.*` scope, `*`, or
    an unrecognised scope stays hard-denied.
 4. A tuple scope is classified by its weakest member, matching how Music

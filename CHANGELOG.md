@@ -13,7 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now appear in the `ma_api` catalog without changes to this provider. Each
   one is guarded by the capability that matches the Music Assistant scope it
   declares, for example `control:players` for `players.control`. Commands
-  with no scope or with a `users.*` scope stay hidden.
+  with no scope or with a `users.*` scope stay hidden, and so does a
+  destructive command that declares only a read scope.
 
 ### Security
 - `yandex_station/command`, which passes free text to Alice and can control
