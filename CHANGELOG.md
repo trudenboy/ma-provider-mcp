@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.4] - 2026-10-26
+
+### Added
+- Commands that other Music Assistant providers register at runtime, such as
+  `party/*`, `smart_playlists/*`, `sonic_similarity/*` or `yandex_station/*`,
+  now appear in the `ma_api` catalog without changes to this provider. Each
+  one is guarded by the capability that matches the Music Assistant scope it
+  declares, for example `control:players` for `players.control`. Commands
+  with no scope or with a `users.*` scope stay hidden.
+
+### Security
+- `yandex_station/command`, which passes free text to Alice and can control
+  the whole Yandex smart home, requires `system:admin`.
+
 ## [2.2.3] - 2026-10-26
 
 ### Added
