@@ -14,6 +14,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the library query permission. Each call returns only the calling user's
   own history.
 
+### Fixed
+- Unauthenticated MCP requests are answered with a `WWW-Authenticate`
+  challenge that names the protected resource metadata URL again
+  (`resource_metadata="…/.well-known/oauth-protected-resource/mcp/v1"`), so
+  MCP clients can discover how to authenticate. It had been missing since
+  2.2.0.
+
 ### Security
 - A call that acts on behalf of another user is rejected unless that user
   holds the command's own Music Assistant scope, the same rule Music
