@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.5] - 2026-10-26
+
+### Security
+- Smart playlist commands that create, regenerate or edit a playlist
+  (`smart_playlists/create`, `smart_playlists/generate`,
+  `smart_playlists/update_rules`) require the playlist editing permission,
+  not only library editing, so a token that may not edit playlists cannot
+  change them through these commands.
+- `party/url` requires `system:admin`. Fetching the party URL creates a guest
+  user and a join code, so it is no longer treated as a read.
+
 ## [2.2.4] - 2026-10-26
 
 ### Added
