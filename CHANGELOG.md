@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.2.3] - 2026-10-26
 
+### Added
+- Music Assistant's play-history statistics (`statistics/*`: play history,
+  top items, genre and decade distribution, play counts, listening activity
+  and time) are available through `ma_api` as read-only commands that need
+  the library query permission. Each call returns only the calling user's
+  own history.
+
 ### Security
 - A call that acts on behalf of another user is rejected unless that user
   holds the command's own Music Assistant scope, the same rule Music
