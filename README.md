@@ -177,7 +177,7 @@ docker compose -f docker-compose.dev.yml exec -T \
   -e MA_MCP_URL=http://127.0.0.1:8095/mcp/v1 \
   -e MA_MCP_TOKEN="$MA_MCP_TOKEN" \
   -e MA_TEST_PLAYER_ID="$MA_TEST_PLAYER_ID" \
-  ma /app/venv/bin/python -m pytest -o addopts= -p no:cacheprovider \
+  ma /app/venv/bin/python -m pytest -o addopts= -o asyncio_mode=auto -p no:cacheprovider \
   --confcutdir=/tmp/provider-tests/integration \
   /tmp/provider-tests/integration/test_live_catalog.py -m integration -v -s
 ```
