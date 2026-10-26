@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A call that acts on behalf of another user is rejected unless that user
   holds the command's own Music Assistant scope, the same rule Music
   Assistant applies on its own API transports.
+- The Connect Wizard no longer issues long-lived client tokens to guest
+  accounts. It answers with the same refusal Music Assistant uses for its
+  own token API, so guest access stays temporary.
 
 ## [2.2.2] - 2026-10-12
 
