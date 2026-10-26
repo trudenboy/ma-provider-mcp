@@ -131,6 +131,47 @@ and exception text are never included.
 The Connect Wizard shows only the selected default policy profile. It intentionally
 does not expose capability counts, mode lists, Custom matrices, or per-token overrides.
 
+### Commands registered by other providers
+
+A command outside the core command families (`music/`, `players/`,
+`player_queues/`, `config/`, ...) is one that another provider registered with
+`mass.register_api_command`, for example `party/*`, `smart_playlists/*` or
+`yandex_station/*`. Such a command is classified by the Music Assistant scope it
+registers with, so it appears in the catalog without changes to this provider.
+Each scope maps to the capability that already guards the matching core family:
+
+| Declared scope | Capability |
+|---|---|
+| `library.read` | `query:library` |
+| `library.write`, `library.manage` | `edit:library`; a destructive verb needs `delete:library` |
+| `players.read` / `players.control` | `query:players` / `control:players` |
+| `queues.read` / `queues.control` | `query:queue` / `edit:queue`; a destructive verb needs `delete:queue` |
+| `providers.read` | `debug:providers` |
+| `config.*.read` | `config:read` |
+| `config.players.write` / `config.providers.write`, `.own` / `config.core.write` | `config:write:player` / `config:write:provider` / `config:write:core` |
+| `system.read`, `system.manage` | `system:admin` |
+
+These stay hidden and denied:
+
+- commands with no scope, or with `*`, `users.*` or an unknown scope;
+- tuple scopes with any unmapped member;
+- a destructive verb (`remove`, `clear`, ...) under a read-only scope.
+
+Core families, exact policies and the `auth/` and `dashboard/register` denies take
+priority over the scope mapping. Music Assistant still enforces the caller's own scope
+on every call, so the capability is an extra per-token layer on top of it.
+
+Where a declared scope understates what a command does, the command has an explicit
+policy instead:
+
+- `smart_playlists/*` writes need `edit:playlists`.
+- `party/skip` needs `control:playback`. `party/add_to_queue` and
+  `party/boost_queue_item` need `edit:queue` plus `control:playback`, because they
+  can skip a track or start a stopped queue, as the core queue commands can.
+- `party/url` creates a guest user and a join code, so it needs `system:admin`.
+- `yandex_station/command` passes free text to Alice and can drive the whole Yandex
+  smart home, so it needs `system:admin`.
+
 ## Spec compliance (MCP 2025-06-18 / draft)
 
 - **Streamable HTTP transport** with mandatory `Origin` validation
