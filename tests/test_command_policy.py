@@ -187,6 +187,21 @@ def test_destructive_provider_command_uses_the_scope_delete_capability(
     assert decision.annotations["destructiveHint"] is True
 
 
+@pytest.mark.parametrize(
+    ("command", "scope"),
+    [
+        ("future_provider/clear_cache", Scope.LIBRARY_READ),
+        ("future_provider/remove_pairing", Scope.PLAYERS_READ),
+    ],
+)
+def test_destructive_provider_command_never_falls_back_to_a_read_capability(
+    command: str, scope: Scope
+) -> None:
+    """A read-only scope cannot guard a destructive command, so it stays hidden."""
+    decision = resolve_command_policy(command, scope, None)
+    assert decision.hard_denied is True
+
+
 def test_tuple_scope_provider_command_uses_its_weakest_member() -> None:
     """MA grants a tuple scope when any member is held, so the weakest one classifies it."""
     decision = resolve_command_policy(

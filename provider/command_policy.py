@@ -583,7 +583,13 @@ def _scope_fallback_policy(
     if family is None:
         return CommandDecision({}, hard_denied=True)
     operation = _operation(command, scope, profile, family)
-    capability = family.capabilities.get(operation) or next(iter(family.capabilities.values()))
+    capability = family.capabilities.get(operation)
+    scope_operation, scope_capability = next(iter(family.capabilities.items()))
+    # A mutating command never inherits a read column: a read scope cannot guard it.
+    if capability is None and (operation == "read" or scope_operation != "read"):
+        capability = scope_capability
+    if capability is None:
+        return CommandDecision({}, hard_denied=True)
     annotations = dict(_annotations(operation, destructive=operation == "delete"))
     if profile is not None:
         annotations.update(profile.annotations)
