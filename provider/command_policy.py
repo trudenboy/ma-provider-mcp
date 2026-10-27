@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -17,6 +18,9 @@ from .policy import PolicyMode, PolicySnapshot, combine_policy_modes
 
 if TYPE_CHECKING:
     from .command_profiles import CommandProfile
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -731,7 +735,8 @@ def _config_entries_sync(mass: Any, arguments: Mapping[str, Any]) -> Any | None:
     try:
         getter_name, target = _config_entries_target(arguments)
         entries = getattr(mass.config, getter_name)(target)
-    except Exception:
+    except Exception as err:
+        LOGGER.debug("Config entries are not readable synchronously: %s", err)
         return None
     if inspect.isawaitable(entries):
         _close_awaitable(entries)
@@ -836,7 +841,8 @@ def _setup_flow_step_sync(mass: Any, flow_id: str) -> Any | None:
     if callable(getter):
         try:
             step = getter(flow_id)
-        except Exception:
+        except Exception as err:
+            LOGGER.debug("Setup flow %s is not readable synchronously: %s", flow_id, err)
             step = None
         if inspect.isawaitable(step):
             _close_awaitable(step)

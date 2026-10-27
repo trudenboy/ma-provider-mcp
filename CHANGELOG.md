@@ -11,7 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Failures that were previously ignored silently are now written to the
   debug log: MCP token authentication and token-id lookups for tools and
   resources, JSON-schema generation for command parameters, and tag lookups
-  for tools, resources and prompts. Behaviour is unchanged; the debug log
+  for tools, resources and prompts, setup-flow and config-entry reads used
+  by the command policy, session-token checks in the connect wizard, and the
+  recent-log-error count. Behaviour is unchanged; the debug log
   now explains why a request was treated as unauthenticated or a parameter
   fell back to a generic schema.
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib.metadata
+import logging
 from collections.abc import Callable, Mapping
 from datetime import datetime
 from typing import Any
@@ -25,6 +26,8 @@ from ..models import (
     RouteEntry,
     RouteList,
 )
+
+LOGGER = logging.getLogger(__name__)
 
 _TRACKED_PACKAGES = (
     "music_assistant",
@@ -170,7 +173,8 @@ async def health(
     else:
         try:
             log_errors = await asyncio.to_thread(SafeLogTail(mass).count_errors_last_5min)
-        except Exception:
+        except Exception as err:
+            LOGGER.debug("Counting recent log errors failed: %s", err)
             disabled_capabilities.append("DEBUG_LOGS")
     dynamic_diagnostics = (
         dict(dynamic_diagnostics_provider()) if dynamic_diagnostics_provider is not None else None
