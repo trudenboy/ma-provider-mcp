@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import UnionType
@@ -11,6 +12,8 @@ from typing import Any, Union, get_args, get_origin
 from pydantic import TypeAdapter
 
 from .dynamic_serialization import json_value
+
+LOGGER = logging.getLogger(__name__)
 
 
 class UnsupportedSignatureError(ValueError):
@@ -117,5 +120,6 @@ def _type_schema(annotation: Any) -> dict[str, Any]:
         return {}
     try:
         return TypeAdapter(annotation).json_schema()
-    except Exception:
+    except Exception as err:
+        LOGGER.debug("No JSON schema for annotation %s: %s", annotation, err)
         return {"x-python-type": str(annotation)}

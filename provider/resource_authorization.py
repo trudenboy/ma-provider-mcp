@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from contextvars import ContextVar
 from contextvars import Token as ContextToken
@@ -30,6 +31,8 @@ if TYPE_CHECKING:
 
     from .token_identity import TokenIdentity
 
+
+LOGGER = logging.getLogger(__name__)
 
 _SCOPE_BY_TAG = {
     str(Capability.QUERY_LIBRARY): Scope.LIBRARY_READ,
@@ -169,13 +172,15 @@ class ResourceAuthorizer:
             return _AuthenticationEvidence(None)
         try:
             user = await self.mass.webserver.auth.authenticate_with_token(token.token)
-        except Exception:
+        except Exception as err:
+            LOGGER.debug("MCP resource token authentication failed: %s", err)
             return _AuthenticationEvidence(None)
         if user is None:
             return _AuthenticationEvidence(None)
         try:
             live_token_id = await self.mass.webserver.auth.get_token_id_from_token(token.token)
-        except Exception:
+        except Exception as err:
+            LOGGER.debug("MCP resource token id lookup failed: %s", err)
             return _AuthenticationEvidence(user, token_id_lookup_failed=True)
         return _AuthenticationEvidence(
             with_visible_music_sources(self.mass, user), live_token_id=live_token_id

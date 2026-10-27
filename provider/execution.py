@@ -8,6 +8,7 @@ import dataclasses
 import hashlib
 import inspect
 import json
+import logging
 import re
 import time
 from collections.abc import AsyncGenerator, Callable, Mapping
@@ -76,6 +77,8 @@ if TYPE_CHECKING:
     from fastmcp.server.auth import AccessToken
 
     from .token_identity import TokenIdentity
+
+LOGGER = logging.getLogger(__name__)
 
 _ALIASES_BY_COMMAND = aliases_by_command()
 
@@ -697,14 +700,16 @@ class DynamicAPIAdapter:
             return None
         try:
             user = await self.mass.webserver.auth.authenticate_with_token(token.token)
-        except Exception:
+        except Exception as err:
+            LOGGER.debug("MCP token authentication failed: %s", err)
             return None
         if user is None or getattr(user, "enabled", True) is False:
             return None
         identity = self._identity_provider(token.token)
         try:
             live_token_id = await self.mass.webserver.auth.get_token_id_from_token(token.token)
-        except Exception:
+        except Exception as err:
+            LOGGER.debug("MCP token id lookup failed: %s", err)
             return None
         if not request_identity_holds(token, user, identity, live_token_id=live_token_id):
             return None
