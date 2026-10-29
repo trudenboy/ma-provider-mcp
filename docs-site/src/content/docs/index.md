@@ -21,7 +21,7 @@ description: Documentation for the FastMCP Server provider for Music Assistant
 
 
 
-Music Assistant supports [FastMCP Server](https://github.com/trudenboy/ma-provider-mcp) player.
+Music Assistant supports [FastMCP Server](https://github.com/trudenboy/ma-provider-mcp) plugin provider.
 Provider created and maintained by [TrudenBoy](https://github.com/TrudenBoy).
 
 
