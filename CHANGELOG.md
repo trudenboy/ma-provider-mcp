@@ -1768,3 +1768,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `volume`, `media`, `metadata`); `library://`, `player://`, `queue://`
   resources; canned prompts.
 - Reverse-synced upstream PR #7383 (WIP)
+- Reverse-synced upstream PR #7447 (WIP)
