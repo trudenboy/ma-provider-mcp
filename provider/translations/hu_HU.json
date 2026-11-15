@@ -1,0 +1,103 @@
+{
+  "config_categories": {
+    "mcp_config": "Konfiguráció",
+    "mcp_resources": "MCP erőforrások",
+    "policy": "Engedélyek és megerősítések"
+  },
+  "config_entries": {
+    "connect_external_url": {
+      "description": "Opcionális, explicit alap-URL, amelyet a Csatlakozás varázslónak meg kell nyitnia (pl. `https://ha.example.com/<addon-slug>` Home Assistant bővítmény ingresshez). Csak akkor használatos, ha a varázsló nem tudja automatikusan felismerni a külső URL-t az aktív kliens kapcsolatból — állítsa be, ha a fordított proxy eltávolítja az `X-Forwarded-Host` / `X-Ingress-Path` fejléceket.",
+      "label": "Csatlakozás varázsló külső URL-je (tartalék)"
+    },
+    "debug_event_buffer_capacity": {
+      "description": "A megőrzött legutóbbi események maximális száma, amíg legalább egy feloldható szabályzat megadja vagy megerősíti a `debug:events` jogosultságot. A régebbi események FIFO-sorrendben törlődnek.",
+      "label": "Hibakeresés: eseménypuffer kapacitása"
+    },
+    "enforce_audience": {
+      "description": "Elutasítja azokat a Bearer tokeneket, amelyek `aud` mezője nem egyezik az MCP-szerver kanonikus URI-jával. Véd az OAuth confused-deputy támadás ellen, ahol egy MA végponthoz kiállított tokent egy másik ellen játszanak vissza. Szükség van arra, hogy a Music Assistant támogassa az `aud` mező JWT-be írását (folyamatban) — addig engedélyezve minden meglévő tokent elutasít. Hagyja kikapcsolva, hacsak az MA-build nem állít ki audience-kötött tokeneket.",
+      "label": "Token-célközönség érvényesítése (RFC 8707)"
+    },
+    "extra_allowed_origins": {
+      "description": "Vesszővel elválasztott lista az elfogadandó további `Origin` fejlécekről (pl. `https://ha.example.com` Home Assistant ingresshez vagy fordított proxy hosztnévhez). Alapértelmezetten a szerver csak a `localhost`, `127.0.0.1`, az MA `base_url` hosztját és a `publish_ip`-t fogadja el. Az eltérő originek 403-as hibával kerülnek elutasításra a DNS-újrakötéses támadások megelőzése érdekében.",
+      "label": "További engedélyezett originek (CSV)"
+    },
+    "mount_path": {
+      "description": "A HTTP útvonal előtag, ahol az MCP-szerver csatlakoztatva van az MA webszerveréhez. Csak akkor módosítsa, ha ütközik egy másik útvonallal.",
+      "label": "Csatlakoztatási útvonal"
+    },
+    "open_connect": {
+      "description": "Vezetett beállítás a Claude Code, Cursor, OpenCode, VSCode és egyéb statikus tokent használó MCP-kliensekhez. Kliensenként külön tokent állít ki `MCP — <Kliens>` névvel (visszavonható a Profil → Hosszú élettartamú hozzáférési tokenek menüben), és ellenőrzött csatlakozási módszereket biztosít.",
+      "label": "Csatlakozás varázsló megnyitása"
+    },
+    "policy_capability": {
+      "description": "Engedélyezési mód a(z) {0} képességhez.",
+      "options": {
+        "allow": "Engedélyezés",
+        "confirm": "Megerősítés",
+        "deny": "Tiltás"
+      }
+    },
+    "policy_default": {
+      "description": "Az a szabályzat, amelyet a rendszer akkor használ, ha egy tokenhez nincs kifejezett felülbírálás megadva. A hiányzó v2 konfiguráció alapértelmezés szerint a Biztonságos lekérdezések szabályzatot használja. Az egyes képességek módjainak szerkesztéséhez válassza az Egyéni lehetőséget, és engedélyezze a Speciális módot.",
+      "label": "Alapértelmezett szabályzat",
+      "options": {
+        "Custom": "Egyéni (Speciális mód szükséges)",
+        "Home control": "Otthonvezérlés",
+        "Interactive admin": "Interaktív rendszergazda",
+        "Safe queries": "Biztonságos lekérdezések",
+        "Trusted": "Megbízható"
+      }
+    },
+    "policy_manual_token_ids": {
+      "description": "Opcionális Music Assistant tokenazonosítók, amelyeket akkor kell beállítani, ha azok nem fedezhetők fel az aktuális beállításokat használó felhasználóhoz. A tokenazonosítók nem bearer titkos kulcsok.",
+      "label": "Manuális MCP-tokenazonosítók"
+    },
+    "policy_token": {
+      "description": "Az egyes képességek módjainak szerkesztéséhez válassza az Egyéni lehetőséget, és engedélyezze a Speciális módot.",
+      "options": {
+        "Custom": "Egyéni (Speciális mód szükséges)",
+        "Home control": "Otthonvezérlés",
+        "Inherit": "Öröklés",
+        "Interactive admin": "Interaktív rendszergazda",
+        "Safe queries": "Biztonságos lekérdezések",
+        "Trusted": "Megbízható"
+      }
+    },
+    "policy_token_suffixes": {
+      "description": "Belső, visszafordíthatatlan hivatkozások, amelyek újraindítás után is elérhetővé teszik a tokenenkénti szabályzatokat. A bearer tokeneket és a tokenazonosítókat a rendszer soha nem tárolja itt.",
+      "label": "Tárolt tokenszabályzat-hivatkozások"
+    },
+    "require_auth": {
+      "description": "Az MCP-kérésekhez érvényes, engedélyezett Music Assistant-felhasználó és token szükséges. Normál működéshez tartsa engedélyezve a hitelesítést.",
+      "label": "Hitelesítés megkövetelése"
+    },
+    "res_library": {
+      "description": "URI-n keresztül elérhető, csak olvasható nézetek az előadókról, albumokról, számokról és lejátszási listákról.",
+      "label": "library:// erőforrások közzététele"
+    },
+    "res_player": {
+      "description": "URI-n keresztül elérhető nézetek a lejátszókról és a lejátszási sorokról.",
+      "label": "player:// és queue:// erőforrások közzététele"
+    },
+    "res_prompts": {
+      "description": "Előre definiált promptok: find_and_play, party_playlist, now_playing_summary.",
+      "label": "Előre elkészített promptok közzététele"
+    },
+    "trust_forwarded_proto": {
+      "description": "Kezelje a Csatlakozás varázsló kérését HTTPS-ként, ha egy megbízható fordított proxy jelzi az `X-Forwarded-Proto: https` (vagy `X-Forwarded-Scheme: https`) fejlécet, még akkor is, ha a proxy és az MA közötti kapcsolat egyszerű HTTP. Csak akkor engedélyezze ezt, ha az MA egy fordított proxy (nginx, Nginx Proxy Manager, Traefik, Caddy, ...) mögött található, amely lezárja a TLS-kapcsolatot, és be van állítva, hogy beállítsa ezt a fejlécet, valamint eltávolítsa a kliens által küldött verziót. Enélkül a varázsló megtagadja a hitelesítő adatok kiadását a proxyn keresztül, mivel egyszerű HTTP-t érzékel egy nem loopback hosztól. Hagyja KIKAPCSOLVA, ha az MA közvetlenül elérhető – ellenkező esetben bármely LAN-kliens meghamisíthatja a fejlécet.",
+      "label": "A fordított proxy által továbbított séma elfogadása"
+    }
+  },
+  "errors": {
+    "connect_wizard_unavailable": "A Csatlakozási varázslót nem sikerült megnyitni; ellenőrizze a szolgáltató naplóit."
+  },
+  "manifest": {
+    "description": "A Music Assistantot Model Context Protocol (MCP) szerverként teszi elérhetővé Claude, Codex és más MCP-kompatibilis LLM-kliensek számára."
+  },
+  "setup_flow": {
+    "connect": {
+      "description": "Nyissa meg a Csatlakozási varázslót, válassza ki az AI-kliensét, és hozza létre hozzá a Music Assistant konfigurációját. A beállítás automatikusan befejeződik, amint a konfiguráció elkészült.",
+      "title": "MCP-kliens csatlakoztatása"
+    }
+  }
+}

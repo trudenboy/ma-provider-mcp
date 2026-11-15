@@ -1,0 +1,103 @@
+{
+  "config_categories": {
+    "mcp_config": "Konfiguration",
+    "mcp_resources": "MCP-Ressourcen",
+    "policy": "Berechtigungen & Bestätigungen"
+  },
+  "config_entries": {
+    "connect_external_url": {
+      "description": "Optionale explizite Basis-URL, unter der der Verbindungsassistent geöffnet werden soll (z.B. `https://ha.example.com/<addon-slug>` für den Ingress des Home Assistant-Add-ons). Wird nur verwendet, wenn der Assistent die externe URL nicht automatisch aus der aktiven Client-Verbindung erkennen kann – lege sie fest, wenn dein Reverse-Proxy die Header `X-Forwarded-Host` / `X-Ingress-Path` entfernt.",
+      "label": "Externe URL des Verbindungsassistenten (Ausweichlösung)"
+    },
+    "debug_event_buffer_capacity": {
+      "description": "Maximale Anzahl der gespeicherten Ereignisse, solange mindestens eine auflösbare Richtlinie `debug:events` gewährt oder bestätigt. Ältere Ereignisse werden nach dem FIFO-Prinzip verworfen.",
+      "label": "Debug: Kapazität des Ereignispuffers"
+    },
+    "enforce_audience": {
+      "description": "Bearer-Token zurückweisen, deren `aud`-Claim nicht mit der kanonischen URI dieses MCP-Servers übereinstimmt. Dies schützt vor dem OAuth-Confused-Deputy-Angriff, bei dem ein für einen MA-Endpunkt ausgestelltes Token bei einem anderen Endpunkt erneut verwendet wird. Erfordert Upstream-Unterstützung von Music Assistant für das Schreiben von `aud` in JWT (in Arbeit) – bis dahin werden durch die Aktivierung dieser Option alle vorhandenen Token abgelehnt. Deaktiviere diese Option, es sei denn, dein MA-Build stellt zielgruppengebundene Token aus.",
+      "label": "Token-Zielgruppe erzwingen (RFC 8707)"
+    },
+    "extra_allowed_origins": {
+      "description": "Durch Kommas getrennte Liste zusätzlicher `Origin` Header, die akzeptiert werden sollen (z.B. `https://ha.example.com` für den Home Assistant-Ingress oder ein Reverse-Proxy-Hostname). Standardmäßig akzeptiert der Server nur `localhost`, `127.0.0.1`, den MA-Host `base_url` und `publish_ip`. Nicht übereinstimmende Origins werden mit einem 403-Fehler abgelehnt, um DNS-Rebinding zu verhindern.",
+      "label": "Weitere zulässige Herkunftsländer (CSV)"
+    },
+    "mount_path": {
+      "description": "HTTP-Pfadpräfix, unter dem der MCP-Server auf dem Webserver von MA eingebunden ist. Ändere diesen Wert nur, wenn es zu Konflikten mit einer anderen Route kommt.",
+      "label": "Einbindepfad"
+    },
+    "open_connect": {
+      "description": "Schritt-für-Schritt-Anleitung zur Einrichtung von Claude Code, Cursor, OpenCode, VSCode und anderen MCP-Clients mit statischen Tokens. Erstellt einen client-spezifischen Token mit der Bezeichnung „MCP — <Client>“ (widerrufbar unter „Profil“ → „Langfristige Zugriffstokens“) und stellt geprüfte Verbindungsmethoden bereit.",
+      "label": "Open Connect-Assistent"
+    },
+    "policy_capability": {
+      "description": "Berechtigungsmodus für die Funktion {0}",
+      "options": {
+        "allow": "Zulassen",
+        "confirm": "Bestätigen",
+        "deny": "Ablehnen"
+      }
+    },
+    "policy_default": {
+      "description": "Diese Richtlinie wird verwendet, wenn für einen Token keine explizite Überschreibung existiert. Fehlende v2-Konfigurationen führen standardmäßig zu sicheren Abfragen. Wähle „Benutzerdefiniert“ und aktiviere den erweiterten Modus, um einzelne Funktionsmodi zu bearbeiten.",
+      "label": "Standardrichtlinie",
+      "options": {
+        "Custom": "Benutzerdefiniert (Erweiterter Modus erforderlich)",
+        "Home control": "Hausautomation",
+        "Interactive admin": "Interaktive Administration",
+        "Safe queries": "Sichere Abfragen",
+        "Trusted": "Vertrauenswürdig"
+      }
+    },
+    "policy_manual_token_ids": {
+      "description": "Optionale Token-IDs für Music Assistant zur Konfiguration, falls diese für den aktuellen Benutzer der Einstellungen nicht ermittelt werden können. Token-IDs sind keine Bearer Secrets.",
+      "label": "Manuelle MCP-Token-IDs"
+    },
+    "policy_token": {
+      "description": "Wähle „Benutzerdefiniert“ und aktiviere den erweiterten Modus, um einzelne Funktionsmodi zu bearbeiten.",
+      "options": {
+        "Custom": "Benutzerdefiniert (Erweiterter Modus erforderlich)",
+        "Home control": "Hausautomation",
+        "Inherit": "Erben",
+        "Interactive admin": "Interaktive Administration",
+        "Safe queries": "Sichere Abfragen",
+        "Trusted": "Vertrauenswürdig"
+      }
+    },
+    "policy_token_suffixes": {
+      "description": "Interne, nicht umkehrbare Referenzen, die sicherstellen, dass die tokenbezogenen Richtlinien nach einem Neustart verfügbar bleiben. Bearer-Token und Token-IDs werden hier niemals gespeichert.",
+      "label": "Referenzen auf gespeicherte Tokenrichtlinien"
+    },
+    "require_auth": {
+      "description": "Für MCP-Anfragen sind ein neuer, aktivierter Music Assistant-Benutzer und ein neuer Token erforderlich. Lass die Authentifizierung für den normalen Betrieb aktiviert.",
+      "label": "Authentifizierung erforderlich"
+    },
+    "res_library": {
+      "description": "URI-adressierbare, schreibgeschützte Ansichten von Interpreten, Alben, Titeln und Wiedergabelisten.",
+      "label": "library://-Ressourcen bereitstellen"
+    },
+    "res_player": {
+      "description": "Über URI aufrufbare Ansichten von Wiedergabegeräten und Warteschlangen.",
+      "label": "player://- und queue://-Ressourcen verfügbar machen"
+    },
+    "res_prompts": {
+      "description": "Vordefinierte Sprachbefehle: find_and_play, party_playlist, now_playing_summary.",
+      "label": "Vorgefertigte Eingabeaufforderungen anzeigen"
+    },
+    "trust_forwarded_proto": {
+      "description": "Behandele die Anfrage des Verbindungsassistenten als HTTPS, wenn ein vertrauenswürdiger Reverse-Proxy `X-Forwarded-Proto: https` (oder `X-Forwarded-Scheme: https`) meldet, auch wenn der Sprung vom Proxy zu MA über einfaches HTTP erfolgt. Aktiviere diese Option nur, wenn sich MA hinter einem Reverse-Proxy (nginx, Nginx Proxy Manager, Traefik, Caddy, …) befindet, der TLS beendet und so konfiguriert ist, dass er diesen Header setzt und alle vom Client bereitgestellten Kopien entfernt. Ohne diese Einstellung weigert sich der Assistent, Anmeldedaten über den Proxy zu generieren, da er unverschlüsseltes HTTP von einem Nicht-Loopback-Host erkennt. Lass die Option auf AUS, wenn MA direkt erreichbar ist – andernfalls könnte jeder LAN-Client den Header fälschen.",
+      "label": "Reverse-Proxy-Weiterleitungsschema vertrauen"
+    }
+  },
+  "errors": {
+    "connect_wizard_unavailable": "Der Verbindungsassistent konnte nicht geöffnet werden; überprüfe die Protokolle des Anbieters."
+  },
+  "manifest": {
+    "description": "Der erweiterte, von der Community gepflegte MCP-Server mit eigenen Token-Richtlinien, einem Verbindungsassistenten für KI-Clients und dem vollständigen Befehlskatalog des Music Assistant."
+  },
+  "setup_flow": {
+    "connect": {
+      "description": "Öffne den Verbindungsassistenten, wähle deinen KI-Client aus und generiere dessen Music Assistant-Konfiguration. Die Einrichtung wird automatisch abgeschlossen, sobald die Konfiguration fertig ist.",
+      "title": "Einen MCP-Client verbinden"
+    }
+  }
+}
