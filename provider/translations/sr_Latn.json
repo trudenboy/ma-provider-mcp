@@ -1,0 +1,103 @@
+{
+  "config_categories": {
+    "mcp_config": "Konfiguracija",
+    "mcp_resources": "MCP resursi",
+    "policy": "Dozvole i potvrde"
+  },
+  "config_entries": {
+    "connect_external_url": {
+      "description": "Opciona eksplicitna osnovna URL adresa na kojoj bi čarobnjak za povezivanje trebalo da se otvori (npr. https://ha.example.com/<addon-slug> za Home Assistant add-on ingress). Koristi se samo kada čarobnjak ne može automatski da prepozna spoljnu URL adresu iz aktivne veze sa klijentom — podesite je ako vaš reverzni proksi uklanja X-Forwarded-Host / X-Ingress-Path zaglavlja.",
+      "label": "Spoljna URL adresa čarobnjaka za povezivanje (rezervna opcija)"
+    },
+    "debug_event_buffer_capacity": {
+      "description": "Maksimalan broj nedavnih događaja koji se zadržavaju dok god barem jedno važeće pravilo odobrava ili potvrđuje debug:events. Stariji događaji se odbacuju po FIFO principu (prvi unutra – prvi napolje).",
+      "label": "Otklanjanje grešaka: kapacitet bafera događaja"
+    },
+    "enforce_audience": {
+      "description": "Odbijte Bearer tokene čija se „aud” tvrdnja ne poklapa sa kanonskom URI adresom ovog MCP servera. Ublažava OAuth napad zamene identiteta (confused-deputy) gde se token izdat za jednu MA krajnju tačku zloupotrebljava na drugoj. Zahteva podršku same aplikacije Music Assistant za upisivanje „aud” vrednosti u JWT tokene (u izradi) — do tada, uključivanje ove opcije odbijaće sve postojeće tokene. Ostavite isključeno osim ako vaša verzija aplikacije ne izdaje tokene vezane za publiku.",
+      "label": "Zahtevaj namensku publiku tokena (RFC 8707)"
+    },
+    "extra_allowed_origins": {
+      "description": "Zarezom odvojena lista dodatnih „Origin” zaglavlja koje treba prihvatiti (npr. example.com za pristup iz Home Assistant-a ili naziv hosta reverznog proksija). Server podrazumevano prihvata samo „localhost”, „127.0.0.1”, domaćina osnovne URL adrese i objavljenu IP adresu. Nepodudarni izvori se odbijaju sa greškom 403 radi sprečavanja DNS rebinding napada.",
+      "label": "Dodatni dozvoljeni izvori (CSV)"
+    },
+    "mount_path": {
+      "description": "HTTP prefiks putanje gde je MCP server montiran na veb-serveru aplikacije Music Assistant. Promenite ovo samo ako je u konfliktu sa nekom drugom rutom.",
+      "label": "Putanja montiranja"
+    },
+    "open_connect": {
+      "description": "Vođeno podešavanje za Claude Code, Cursor, OpenCode, VSCode i druge MCP klijente sa statičkim tokenom. Generiše token po klijentu sa oznakom MCP - <Client> (može se opozvati u Profil -> Dugotrajni tokeni za pristup) i pruža proverene metode povezivanja.",
+      "label": "Otvorite čarobnjak za povezivanje"
+    },
+    "policy_capability": {
+      "description": "Režim dozvole za mogućnost {0}.",
+      "options": {
+        "allow": "Dozvoli",
+        "confirm": "Potvrdi",
+        "deny": "Odbij"
+      }
+    },
+    "policy_default": {
+      "description": "Pravilo koje se koristi kada token nema eksplicitno poništavanje. Nedostajuća v2 konfiguracija se podrazumevano postavlja na Bezbedne upite. Izaberite Prilagođeno i omogućite napredni režim da biste uredili pojedinačne režime mogućnosti.",
+      "label": "Podrazumevano pravilo",
+      "options": {
+        "Custom": "Prilagođeno (zahteva napredni režim)",
+        "Home control": "Upravljanje domom",
+        "Interactive admin": "Interaktivni administrator",
+        "Safe queries": "Bezbedni upiti",
+        "Trusted": "Pouzdano"
+      }
+    },
+    "policy_manual_token_ids": {
+      "description": "Opcioni ID-jevi tokena za Music Assistant koje treba konfigurisati kada se ne mogu automatski pronaći za trenutnog korisnika podešavanja. ID-jevi tokena nisu tajni podaci nosioca.",
+      "label": "Ručni ID-jevi MCP tokena"
+    },
+    "policy_token": {
+      "description": "Izaberite Prilagođeno i omogućite napredni režim da biste uredili pojedinačne režime mogućnosti.",
+      "options": {
+        "Custom": "Prilagođeno (zahteva napredni režim)",
+        "Home control": "Upravljanje domom",
+        "Inherit": "Nasledi",
+        "Interactive admin": "Interaktivni administrator",
+        "Safe queries": "Bezbedni upiti",
+        "Trusted": "Pouzdano"
+      }
+    },
+    "policy_token_suffixes": {
+      "description": "Interne nepovratne reference koje omogućavaju da pravila po tokenu ostanu dostupna nakon ponovnog pokretanja. Bearer tokeni i ID-jevi tokena se nikada ne čuvaju ovde.",
+      "label": "Sačuvane reference pravila za tokene"
+    },
+    "require_auth": {
+      "description": "Zahteva novog, aktivnog Music Assistant korisnika i token za MCP zahteve. Ostavite autentifikaciju omogućenu za normalan rad.",
+      "label": "Zahtevaj prijavu"
+    },
+    "res_library": {
+      "description": "Prikazite izvođača, albuma, numera i plejlisti samo za čitanje, adresatibilni preko URI-ja.",
+      "label": "Izloži library:// resurse"
+    },
+    "res_player": {
+      "description": "Prikazite plejera i redova čekanja koji su adresatibilni preko URI-ja.",
+      "label": "Izloži player:// i queue:// resurse"
+    },
+    "res_prompts": {
+      "description": "Unapred definisani upiti: find_and_play, party_playlist, now_playing_summary.",
+      "label": "Izloži unapred definisane upite"
+    },
+    "trust_forwarded_proto": {
+      "description": "Tretirajte zahteve čarobnjaka za povezivanje kao HTTPS kada pouzdani reverzni proksi prosledi „X-Forwarded-Proto: https“ (ili „X-Forwarded-Scheme: https“), iako je veza između proksija i MA aplikacije običan HTTP. Omogućite ovo samo kada se MA nalazi iza reverznog proksija (Nginx, Nginx Proxy Manager, Traefik, Caddy...) koji završava TLS i koji je konfigurisan da postavi ovo zaglavlje i ukloni svaku kopiju koju dostavi klijent. Bez ovoga, čarobnjak odbija da generiše akreditacije preko proksija jer detektuje običan tekstualni HTTP sa hosta koji nije povratna petlja (non-loopback host). Ostavite ISKLJUČENO ako je MA direktno dostupan – u suprotnom bi bilo koji klijent na lokalnoj mreži mogao da lažira zaglavlje.",
+      "label": "Prihvatite prosleđeni protokol reverznog proksija"
+    }
+  },
+  "errors": {
+    "connect_wizard_unavailable": "Čarobnjak za povezivanje se ne može otvoriti; proverite logove provajdera."
+  },
+  "manifest": {
+    "description": "Prošireni MCP server koji održava zajednica, sa sopstvenim smernicama za tokene, čarobnjakom za povezivanje AI klijenata i kompletnim katalogom komandi za Music Assistant."
+  },
+  "setup_flow": {
+    "connect": {
+      "description": "Otvorite čarobnjak za povezivanje, izaberite svoj AI klijent i generišite njegovu konfiguraciju za Music Assistant. Podešavanje se završava automatski kada konfiguracija bude spremna.",
+      "title": "Povezivanje MCP klijenta"
+    }
+  }
+}

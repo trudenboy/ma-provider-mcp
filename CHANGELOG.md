@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.2.9] - 2026-10-27
 
+### Added
+- The settings of the provider come in Dutch, German, Hungarian, Russian,
+  Serbian, Slovak and Spanish, and partly in Chinese and Portuguese: the
+  translations Music Assistant kept so far now ship with the provider.
+
 ### Changed
 - Failures that were previously ignored silently are now written to the
   debug log: MCP token authentication and token-id lookups for tools and
@@ -16,6 +21,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   recent-log-error count. Behaviour is unchanged; the debug log
   now explains why a request was treated as unauthenticated or a parameter
   fell back to a generic schema.
+- Player resources follow the player state of Music Assistant 2.11, where
+  speakers can be linked into one player.
+- The documentation link of the provider opens
+  [its own site](https://trudenboy.github.io/ma-provider-mcp/).
+
+### Security
+- A command that names a player protocol (`protocol_id`) is only allowed for
+  the players the token may use, and an old player id is resolved to the
+  player it now belongs to before that check.
 
 ## [2.2.6] - 2026-10-26
 

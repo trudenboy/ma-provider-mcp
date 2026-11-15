@@ -1,0 +1,101 @@
+{
+  "config_categories": {
+    "mcp_config": "Configuratie",
+    "mcp_resources": "MCP-bronnen",
+    "policy": "Toestemmingen & bevestigingen"
+  },
+  "config_entries": {
+    "connect_external_url": {
+      "description": "Optionele expliciete basis-URL waarop de Connect Wizard geopend moet worden  (bijv. `https://ha.example.com/<addon-slug>` voor Home Assistant-App-ingress). Deze wordt alleen gebruikt wanneer de wizard de externe URL van de actieve clientverbinding niet automatisch kan detecteren. Stel deze in als je reverse proxy de headers `X-Forwarded-Host` / `X-Ingress-Path` verwijdert.",
+      "label": "Externe URL van de verbindingswizard (terugvaloptie)"
+    },
+    "debug_event_buffer_capacity": {
+      "description": "Het maximale aantal recente gebeurtenissen dat in het geheugen wordt bewaard wanneer `Debug: read recent MA events` is ingeschakeld. Oudere gebeurtenissen worden in de FIFO-volgorde verwijderd. Heeft geen effect wanneer gebeurtenissen zijn uitgeschakeld.",
+      "label": "Foutopsporing: capaciteit van de gebeurtenisbuffer"
+    },
+    "enforce_audience": {
+      "description": "Weiger Bearer-tokens waarvan de `aud`-claim niet overeenkomt met de canonieke URI van deze MCP-server. Dit beperkt de OAuth-aanval via ‘confused deputy’, waarbij een token dat voor één MA-endpoint is uitgegeven, bij een andere endpoint wordt hergebruikt. Vereist upstream Music Assistant-ondersteuning voor het schrijven van `aud` in JWT's (in ontwikkeling) — tot die tijd worden alle bestaande tokens geweigerd als je dit inschakelt. Laat dit uitgeschakeld, tenzij je MA-build publieksgebonden tokens uitgeeft.",
+      "label": "Token audience afdwingen (RFC 8707)"
+    },
+    "extra_allowed_origins": {
+      "description": "Komma-gescheiden lijst met extra `Origin`-headers die geaccepteerd worden (bijvoorbeeld `https://ha.example.com` voor Home Assistant ingress, of de hostnaam van een reverse proxy). Standaard accepteert de server alleen `localhost`, `127.0.0.1`, de host van de MA `base_url`, en `publish_ip`. Komt de Origin niet overeen, dan wordt het verzoek afgewezen met een 403-foutmelding, ter bescherming tegen DNS-rebinding.",
+      "label": "Aanvullende toegestane Origins (CSV)"
+    },
+    "mount_path": {
+      "description": "HTTP-padprefix waar de MCP-server is gemount op de webserver van MA. Wijzig deze alleen als deze een conflict veroorzaakt met een andere route.",
+      "label": "Mount-pad"
+    },
+    "open_connect": {
+      "description": "Eenvoudige installatie (met één klik) voor Claude Desktop, Claude Code, Cursor, Windsurf, VSCode, ChatGPT en andere MCP-clients. Er wordt automatisch een eigen token per client aangemaakt, met als naam `MCP — <Client>` (te vinden via Profile → Long-lived access tokens) en deze wordt meteen als direct te plakken stukje code voor je gekopieerd.",
+      "label": "Open de Connect Wizard"
+    },
+    "policy_capability": {
+      "description": "Toestemmingsmodus voor de bevoegdheid {0}.",
+      "options": {
+        "allow": "Toestaan",
+        "confirm": "Bevestigen",
+        "deny": "Ontkennen"
+      }
+    },
+    "policy_default": {
+      "description": "Dit beleid wordt toegepast wanneer een token geen expliciete overschrijving heeft. Als de v2-configuratie ontbreekt, wordt standaard ‘Veilige zoekopdrachten’ gebruikt. Selecteer ‘Aangepast’ en schakel de ‘Geavanceerde modus’ in om afzonderlijke functionaliteitsmodi te bewerken.",
+      "label": "Standaardbeleid",
+      "options": {
+        "Custom": "Aangepast (Geavanceerde modus vereist)",
+        "Home control": "Huisbesturing",
+        "Interactive admin": "Interactieve beheerder",
+        "Safe queries": "Veilige opdrachten",
+        "Trusted": "Vertrouwd"
+      }
+    },
+    "policy_manual_token_ids": {
+      "description": "Optionele token-ID's van Music Assistant die moeten worden geconfigureerd wanneer ze niet kunnen worden gedetecteerd voor de huidige gebruiker. Token-ID's zijn geen ‘bearer secrets’.",
+      "label": "Handmatige MCP-token-ID's"
+    },
+    "policy_token": {
+      "description": "Selecteer ‘Aangepast’ en schakel de geavanceerde modus in om afzonderlijke functionaliteitsmodi te bewerken.",
+      "options": {
+        "Custom": "Aangepast (Geavanceerde modus vereist)",
+        "Inherit": "Overnemen",
+        "Interactive admin": "Interactieve beheerder",
+        "Safe queries": "Veilige opdrachten",
+        "Trusted": "Vertrouwd"
+      }
+    },
+    "policy_token_suffixes": {
+      "label": "Opgeslagen tokenbeleidsreferenties"
+    },
+    "require_auth": {
+      "description": "Niet-geauthenticeerde MCP-clients weigeren. Sterk aanbevolen: met uitgeschakelde authenticatie kan elke MCP-client in het netwerk de weergave aansturen.",
+      "label": "Vereis authenticatie"
+    },
+    "res_library": {
+      "description": "Via URI toegankelijke, alleen-lezen weergaven van artiesten, albums, nummers en afspeellijsten.",
+      "label": "Toon library:// bronnen"
+    },
+    "res_player": {
+      "description": "Via URI toegankelijke weergaven van spelers en wachtrijen.",
+      "label": "Toon player:// en queue:// bronnen"
+    },
+    "res_prompts": {
+      "description": "Vooraf gedefinieerde opdrachten: find_and_play, party_playlist, now_playing_summary.",
+      "label": "Laat standaard opdrachten zien"
+    },
+    "trust_forwarded_proto": {
+      "description": "Behandel het verzoek van de Connect Wizard als HTTPS wanneer een vertrouwde reverse proxy de header X-Forwarded-Proto: https (of X-Forwarded-Scheme: https) meestuurt, ook al is de verbinding tussen de proxy en MA gewoon HTTP. Schakel dit alleen in wanneer MA achter een reverse proxy staat (nginx, Nginx Proxy Manager, Traefik, Caddy, ...) die TLS termineert en zo geconfigureerd is dat deze header wordt ingesteld én elke door de client meegestuurde kopie wordt verwijderd. Zonder deze instelling weigert de wizard om credentials aan te maken via de proxy, omdat het platte HTTP-verkeer detecteert vanaf een non-loopback host. Laat deze optie UIT staan als MA rechtstreeks bereikbaar is — anders zou elke LAN-client de header kunnen vervalsen (spoofen).",
+      "label": "Vertrouw het door de reverse-proxy doorgestuurde schema"
+    }
+  },
+  "errors": {
+    "connect_wizard_unavailable": "De verbindingswizard kon niet worden geopend, controleer de logboeken van de provider."
+  },
+  "manifest": {
+    "description": "Hiermee wordt Music Assistant toegankelijk als een Model Context Protocol (MCP)-server voor Claude, Codex en andere MCP-compatibele LLM-clients."
+  },
+  "setup_flow": {
+    "connect": {
+      "description": "Open de Connect-wizard, kies je AI-client en genereer de configuratie voor Music Assistant. De installatie wordt automatisch voltooid zodra de configuratie klaar is.",
+      "title": "Een MCP-client verbinden"
+    }
+  }
+}

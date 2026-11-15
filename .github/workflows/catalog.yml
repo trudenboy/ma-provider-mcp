@@ -1,0 +1,20 @@
+name: Community catalog
+
+on:
+  pull_request:
+    branches: [main, dev]
+  push:
+    branches: [dev]
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  catalog:
+    # the checks the community catalog runs on every release, on the provider folder
+    permissions:
+      contents: read
+    uses: music-assistant/community-catalog/.github/workflows/check-provider.yml@2e4fcb2ed7545f64cba447f39a214fd32977db98 # main
+    with:
+      folder: provider
+      server-line: nightly

@@ -1,0 +1,103 @@
+{
+  "config_categories": {
+    "mcp_config": "Konfigurácia",
+    "mcp_resources": "Prostriedky MCP",
+    "policy": "Oprávnenia a potvrdenia"
+  },
+  "config_entries": {
+    "connect_external_url": {
+      "description": "Voliteľná výslovná základná adresa URL, na ktorej sa má otvoriť Sprievodca pripojením (napr. `https://ha.example.com/<addon-slug>` pre ingress doplnku Home Assistant). Použije sa len vtedy, keď sprievodca nedokáže externú adresu URL automaticky zistiť z aktívneho pripojenia klienta – nastavte ju, ak váš reverzný proxy odstraňuje hlavičky `X-Forwarded-Host` / `X-Ingress-Path`.",
+      "label": "Externá adresa URL Sprievodcu pripojením (záložná)"
+    },
+    "debug_event_buffer_capacity": {
+      "description": "Maximálny počet nedávnych udalostí uchovávaných, kým aspoň jedna vyhodnotiteľná politika udeľuje alebo potvrdzuje `debug:events`. Staršie udalosti sa zahadzujú v poradí FIFO.",
+      "label": "Ladenie: kapacita vyrovnávacej pamäte udalostí"
+    },
+    "enforce_audience": {
+      "description": "Odmietať Bearer tokeny, ktorých údaj `aud` sa nezhoduje s kanonickým URI tohto servera MCP. Zmierňuje útok OAuth typu confused deputy, pri ktorom sa token vydaný pre jeden koncový bod MA zneužije voči inému. Vyžaduje podporu zapisovania `aud` do JWT v samotnom Music Assistant (rozpracované) – dovtedy zapnutie tejto možnosti odmietne všetky existujúce tokeny. Nechajte vypnuté, pokiaľ vaše zostavenie MA nevydáva tokeny viazané na príjemcu.",
+      "label": "Vynucovať príjemcu tokenu (RFC 8707)"
+    },
+    "extra_allowed_origins": {
+      "description": "Čiarkami oddelený zoznam ďalších hlavičiek `Origin`, ktoré sa majú akceptovať (napr. `https://ha.example.com` pre ingress Home Assistant alebo názov hostiteľa reverzného proxy). Server predvolene akceptuje iba `localhost`, `127.0.0.1`, hostiteľa z `base_url` MA a `publish_ip`. Nezhodné hlavičky Origin sa odmietajú s kódom 403, aby sa zmiernil útok DNS rebinding.",
+      "label": "Ďalšie povolené hlavičky Origin (CSV)"
+    },
+    "mount_path": {
+      "description": "Predpona cesty HTTP, na ktorej je server MCP pripojený na webovom serveri MA. Meňte len vtedy, ak koliduje s inou cestou.",
+      "label": "Cesta pripojenia"
+    },
+    "open_connect": {
+      "description": "Nastavenie so sprievodcom pre Claude Code, Cursor, OpenCode, VSCode a ďalších klientov MCP so statickým tokenom. Vytvorí token pre každého klienta s označením `MCP — <Client>` (odvolateľný v časti Profil → Dlhodobé prístupové tokeny) a ponúkne overené spôsoby pripojenia.",
+      "label": "Otvoriť Sprievodcu pripojením"
+    },
+    "policy_capability": {
+      "description": "Režim oprávnenia pre schopnosť {0}.",
+      "options": {
+        "allow": "Povoliť",
+        "confirm": "Potvrdiť",
+        "deny": "Zamietnuť"
+      }
+    },
+    "policy_default": {
+      "description": "Politika použitá, keď token nemá výslovné prepísanie. Chýbajúca konfigurácia v2 sa predvolene nastaví na Bezpečné dopyty. Ak chcete upravovať režimy jednotlivých schopností, vyberte Vlastná a zapnite pokročilý režim.",
+      "label": "Predvolená politika",
+      "options": {
+        "Custom": "Vlastná (vyžaduje pokročilý režim)",
+        "Home control": "Ovládanie domácnosti",
+        "Interactive admin": "Interaktívny správca",
+        "Safe queries": "Bezpečné dopyty",
+        "Trusted": "Dôveryhodný"
+      }
+    },
+    "policy_manual_token_ids": {
+      "description": "Voliteľné ID tokenov Music Assistant, ktoré sa majú nastaviť, keď ich pre aktuálneho používateľa nastavení nemožno zistiť. ID tokenov nie sú tajné údaje typu bearer.",
+      "label": "Ručne zadané ID tokenov MCP"
+    },
+    "policy_token": {
+      "description": "Ak chcete upravovať režimy jednotlivých schopností, vyberte Vlastná a zapnite pokročilý režim.",
+      "options": {
+        "Custom": "Vlastná (vyžaduje pokročilý režim)",
+        "Home control": "Ovládanie domácnosti",
+        "Inherit": "Zdediť",
+        "Interactive admin": "Interaktívny správca",
+        "Safe queries": "Bezpečné dopyty",
+        "Trusted": "Dôveryhodný"
+      }
+    },
+    "policy_token_suffixes": {
+      "description": "Interné nevratné odkazy, vďaka ktorým zostávajú politiky jednotlivých tokenov dostupné aj po reštarte. Bearer tokeny ani ID tokenov sa tu nikdy neukladajú.",
+      "label": "Uložené odkazy na politiky tokenov"
+    },
+    "require_auth": {
+      "description": "Pri požiadavkách MCP vyžadovať aktuálneho, aktívneho používateľa Music Assistant a token. Pri bežnej prevádzke nechajte overovanie zapnuté.",
+      "label": "Vyžadovať overenie"
+    },
+    "res_library": {
+      "description": "Zobrazenia interpretov, albumov, skladieb a zoznamov skladieb iba na čítanie, adresovateľné cez URI.",
+      "label": "Sprístupniť prostriedky library://"
+    },
+    "res_player": {
+      "description": "Zobrazenia prehrávačov a poradí adresovateľné cez URI.",
+      "label": "Sprístupniť prostriedky player:// a queue://"
+    },
+    "res_prompts": {
+      "description": "Preddefinované prompty: find_and_play, party_playlist, now_playing_summary.",
+      "label": "Sprístupniť pripravené prompty"
+    },
+    "trust_forwarded_proto": {
+      "description": "Považovať požiadavku Sprievodcu pripojením za HTTPS, keď dôveryhodný reverzný proxy hlási `X-Forwarded-Proto: https` (alebo `X-Forwarded-Scheme: https`), aj keď úsek medzi proxy a MA je obyčajné HTTP. Zapnite len vtedy, keď je MA za reverzným proxy (nginx, Nginx Proxy Manager, Traefik, Caddy, ...), ktorý ukončuje TLS a je nastavený tak, aby túto hlavičku nastavoval a odstraňoval jej kópiu zaslanú klientom. Bez toho sprievodca odmietne vytvoriť prihlasovacie údaje cez proxy, pretože vidí nešifrované HTTP z hostiteľa, ktorý nie je loopback. Nechajte VYPNUTÉ, ak je MA dostupný priamo – hlavičku by inak mohol sfalšovať ktorýkoľvek klient v LAN.",
+      "label": "Dôverovať schéme preposlanej reverzným proxy"
+    }
+  },
+  "errors": {
+    "connect_wizard_unavailable": "Sprievodcu pripojením sa nepodarilo otvoriť; skontrolujte logy poskytovateľa."
+  },
+  "manifest": {
+    "description": "Sprístupňuje Music Assistant ako server Model Context Protocol (MCP) pre Claude, Codex a ďalších LLM klientov s podporou MCP."
+  },
+  "setup_flow": {
+    "connect": {
+      "description": "Otvorte Sprievodcu pripojením, vyberte svojho AI klienta a vygenerujte preň konfiguráciu Music Assistant. Nastavenie sa dokončí automaticky, keď je konfigurácia pripravená.",
+      "title": "Pripojiť klienta MCP"
+    }
+  }
+}

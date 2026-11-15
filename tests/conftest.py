@@ -22,12 +22,18 @@ from __future__ import annotations
 import importlib.util
 import shutil
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from music_assistant_models.enums import PlayerType
+from music_assistant_models.player import DeviceInfo
+from music_assistant_models.player import Player as PlayerState
 
 from provider.debug import log_reader
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 class FakeWebserver:
@@ -247,6 +253,23 @@ def mock_config() -> MagicMock:
 
     config.get_value = MagicMock(side_effect=_get)
     return config
+
+
+@pytest.fixture
+def make_player_state() -> Callable[..., PlayerState]:
+    """A factory of the published state of an idle, available player, with the given changes."""
+
+    def _make(player_id: str = "player_1", **values: Any) -> PlayerState:
+        defaults: dict[str, Any] = {
+            "provider": "test_prov",
+            "type": PlayerType.PLAYER,
+            "name": player_id,
+            "available": True,
+            "device_info": DeviceInfo(),
+        }
+        return PlayerState(player_id=player_id, **(defaults | values))
+
+    return _make
 
 
 @pytest.fixture
