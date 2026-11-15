@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 from functools import partial
 from types import SimpleNamespace
+from typing import TYPE_CHECKING
 from unittest.mock import MagicMock
 
 import pytest
@@ -27,9 +28,13 @@ from fastmcp import Client, FastMCP
 from fastmcp.exceptions import McpError
 from music_assistant_models.access import PlaylistAccess
 from music_assistant_models.auth import UserRole
-from music_assistant_models.enums import ProviderSharing
+from music_assistant_models.enums import PlaybackState, ProviderSharing
+from music_assistant_models.player_queue import PlayerQueue
+from music_assistant_models.queue_item import QueueItem
 
 from music_assistant.controllers.music.media.playlists import PlaylistController
+from music_assistant.controllers.player_queues import PlayerQueuesController
+from music_assistant.controllers.player_queues.state import PlayerQueueData
 from music_assistant.controllers.webserver.helpers import auth_middleware
 from provider.resource_helpers import (
     to_brief_player,
@@ -38,6 +43,11 @@ from provider.resource_helpers import (
 )
 from provider.resources.library_resources import register_library_resources
 from provider.resources.player_resources import register_player_resources
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from music_assistant_models.player import Player as PlayerState
 
 # (kind, mass-controller-attr, uri-stem) — keyed by library resource kind.
 _LIBRARY_KINDS = [
@@ -91,30 +101,30 @@ async def test_library_resource_returns_null_for_missing(
     assert text_blocks == ["null"], kind
 
 
-async def test_player_resource_returns_json_text_for_brief(mock_mass: MagicMock) -> None:
+async def test_player_resource_returns_json_text_for_brief(
+    mock_mass: MagicMock, make_player_state: Callable[..., PlayerState]
+) -> None:
     """A ``PlayerBrief`` returned by the player handler is JSON-serialised."""
     player = SimpleNamespace(
-        player_id="p1",
-        display_name="P1",
         name="P1",
-        playback_state=SimpleNamespace(value="playing"),
-        volume_level=100,
-        powered=True,
-        current_media=None,
-        state=SimpleNamespace(powered=True, current_media=None),
+        state=make_player_state(
+            "pl_p1", name="P1", playback_state=PlaybackState.PLAYING, volume_level=100
+        ),
     )
     mock_mass.players.get_player.return_value = player
+    mock_mass.player_queues.get_active_queue.return_value = None
 
     mcp: FastMCP = FastMCP(name="t")
     register_player_resources(mcp, mock_mass)
     async with Client(mcp) as client:
-        contents = await client.read_resource("player://p1")
+        contents = await client.read_resource("player://pl_p1")
 
     text_blocks = [c.text for c in contents if hasattr(c, "text")]
     assert text_blocks, "no text content returned"
     parsed = json.loads(text_blocks[0])
-    assert parsed["player_id"] == "p1"
+    assert parsed["player_id"] == "pl_p1"
     assert parsed["state"] == "playing"
+    assert parsed["volume_level"] == 100
     assert parsed["powered"] is True
 
 
@@ -123,7 +133,7 @@ async def test_player_resource_does_not_hide_queue_controller_failures(
 ) -> None:
     """An unexpected queue-controller failure surfaces instead of a plausible snapshot."""
     mock_mass.players.get_player.return_value = SimpleNamespace(
-        player_id="p1", display_name="P1", name="P1", state=None
+        player_id="p1", name="P1", state=None
     )
     mock_mass.player_queues.get_active_queue.side_effect = RuntimeError("queue controller bug")
 
@@ -134,7 +144,9 @@ async def test_player_resource_does_not_hide_queue_controller_failures(
             await client.read_resource("player://p1")
 
 
-async def test_player_resource_reports_synced_state(mock_mass: MagicMock) -> None:
+async def test_player_resource_reports_synced_state(
+    mock_mass: MagicMock, make_player_state: Callable[..., PlayerState]
+) -> None:
     """
     A sync follower fetched by URI carries the synthesised ``state="synced"``.
 
@@ -145,16 +157,8 @@ async def test_player_resource_reports_synced_state(mock_mass: MagicMock) -> Non
     would be caught here.
     """
     player = SimpleNamespace(
-        player_id="follower",
-        display_name="Lenco",
         name="Lenco",
-        playback_state=SimpleNamespace(value="idle"),
-        volume_level=None,
-        powered=True,
-        current_media=None,
-        available=True,
-        enabled=True,
-        active_group="group-leader",
+        state=make_player_state("pl_follower", name="Lenco", active_group="pl_group"),
     )
     mock_mass.players.get_player.return_value = player
 
@@ -165,22 +169,15 @@ async def test_player_resource_reports_synced_state(mock_mass: MagicMock) -> Non
 
     parsed = json.loads(next(c.text for c in contents if hasattr(c, "text")))
     assert parsed["state"] == "synced"
-    assert parsed["active_group"] == "group-leader"
+    assert parsed["active_group"] == "pl_group"
 
 
-async def test_player_resource_reports_needs_setup_state(mock_mass: MagicMock) -> None:
+async def test_player_resource_reports_needs_setup_state(
+    mock_mass: MagicMock, make_player_state: Callable[..., PlayerState]
+) -> None:
     """An unconfigured player fetched by URI carries ``state="needs_setup"``."""
     player = SimpleNamespace(
-        player_id="raw",
-        display_name="Unboxed",
-        name="Unboxed",
-        playback_state=SimpleNamespace(value="idle"),
-        volume_level=None,
-        powered=True,
-        current_media=None,
-        available=True,
-        enabled=True,
-        needs_setup=True,
+        name="Unboxed", state=make_player_state("pl_raw", name="Unboxed", needs_setup=True)
     )
     mock_mass.players.get_player.return_value = player
 
@@ -195,7 +192,7 @@ async def test_player_resource_reports_needs_setup_state(mock_mass: MagicMock) -
 
 
 async def test_player_resource_reflects_external_source_playback(
-    mock_mass: MagicMock,
+    mock_mass: MagicMock, make_player_state: Callable[..., PlayerState]
 ) -> None:
     """
     ``player://`` resource passes the active queue so external-source state is visible.
@@ -207,15 +204,8 @@ async def test_player_resource_reflects_external_source_playback(
     ``current_item`` identically to what ``players_get_player`` returns.
     """
     player = SimpleNamespace(
-        player_id="ext1",
-        display_name="Ynison Player",
         name="Ynison Player",
-        playback_state=SimpleNamespace(value="idle"),
-        volume_level=80,
-        powered=True,
-        current_media=None,
-        available=True,
-        enabled=True,
+        state=make_player_state("pl_ext1", name="Ynison Player", volume_level=80),
     )
     mock_mass.players.get_player.return_value = player
 
@@ -275,6 +265,37 @@ async def test_queue_resource_returns_json_text_for_brief(mock_mass: MagicMock) 
     assert len(parsed["items"]) == 3
     # The handler is documented to cap at MA's default page size of 500.
     mock_mass.player_queues.items.assert_called_once_with("q1", limit=500)
+
+
+async def test_queue_resource_takes_a_legacy_id_of_the_player(mock_mass: MagicMock) -> None:
+    """A queue URI naming the player by a legacy id returns that player's queue and items."""
+    queues = PlayerQueuesController.__new__(PlayerQueuesController)
+    queues.mass = SimpleNamespace(
+        players=SimpleNamespace(
+            resolve_player_id=lambda player_id: {"old-q1": "q1"}.get(player_id, player_id)
+        )
+    )
+    queues._queue_data = {
+        "q1": PlayerQueueData(
+            queue=PlayerQueue(
+                queue_id="q1", active=True, display_name="Kitchen", available=True, items=2
+            ),
+            items=[
+                QueueItem(queue_id="q1", queue_item_id=str(i), name=f"track-{i}", duration=180)
+                for i in range(2)
+            ],
+        )
+    }
+    mock_mass.player_queues = queues
+
+    mcp: FastMCP = FastMCP(name="t")
+    register_player_resources(mcp, mock_mass)
+    async with Client(mcp) as client:
+        contents = await client.read_resource("queue://old-q1")
+
+    parsed = json.loads(next(c.text for c in contents if hasattr(c, "text")))
+    assert parsed["queue_id"] == "q1"
+    assert [item["name"] for item in parsed["items"]] == ["track-0", "track-1"]
 
 
 async def test_queue_resource_returns_null_for_missing(mock_mass: MagicMock) -> None:

@@ -21,6 +21,8 @@ from provider.target_filters import (
     target_rule,
 )
 
+_NOT_PERMITTED = r"^Command target is not permitted for the current user$"
+
 
 def _user(
     *,
@@ -43,6 +45,9 @@ def _user(
         ("players/cmd/set_members", "player_ids_to_add", TargetKind.PLAYERS),
         ("players/cmd/set_members", "player_ids_to_remove", TargetKind.PLAYERS),
         ("players/create_group_player", "members", TargetKind.PLAYERS),
+        ("players/merge", "player_id", TargetKind.PLAYER),
+        ("players/merge", "target_player", TargetKind.PLAYER),
+        ("players/unlink_protocol", "protocol_id", TargetKind.PROTOCOL),
         (
             "audio_analysis/wave_form",
             "provider_instance_id_or_domain",
@@ -443,3 +448,53 @@ def test_browse_roots_are_matched_by_the_instance_in_their_uri() -> None:
     )
 
     assert result == [allowed, library]
+
+
+# ap_kitchen is attached to kitchen; ap_den belongs to den, a disabled player, so it is detached
+_PROTOCOL_MASS = SimpleNamespace(
+    players=SimpleNamespace(
+        get_protocol={
+            "ap_kitchen": SimpleNamespace(player=SimpleNamespace(player_id="kitchen"))
+        }.get,
+        get_player_id_of_protocol={"ap_kitchen": "kitchen", "ap_den": "den"}.get,
+    )
+)
+
+
+def test_unlink_protocol_of_a_player_of_the_caller_is_permitted() -> None:
+    """A protocol is checked as the player it is attached to."""
+    enforce_target_filters(
+        _PROTOCOL_MASS,
+        _user(players=("kitchen",)),
+        "players/unlink_protocol",
+        {"protocol_id": "ap_kitchen"},
+    )
+
+
+@pytest.mark.parametrize("protocol_id", ["ap_den", "ap_unknown"])
+def test_unlink_protocol_outside_the_players_of_the_caller_is_refused(protocol_id: str) -> None:
+    """A protocol of another player, or of no player, is refused like a player outside the list."""
+    with pytest.raises(InsufficientPermissions, match=_NOT_PERMITTED):
+        enforce_target_filters(
+            _PROTOCOL_MASS,
+            _user(players=("kitchen",)),
+            "players/unlink_protocol",
+            {"protocol_id": protocol_id},
+        )
+
+
+def test_unlink_protocol_that_is_not_attached_is_checked_as_its_stored_player() -> None:
+    """The protocol of a disabled player is detached: the player its config names counts."""
+    enforce_target_filters(
+        _PROTOCOL_MASS,
+        _user(players=("den",)),
+        "players/unlink_protocol",
+        {"protocol_id": "ap_den"},
+    )
+    with pytest.raises(InsufficientPermissions, match=_NOT_PERMITTED):
+        enforce_target_filters(
+            _PROTOCOL_MASS,
+            _user(players=("kitchen",)),
+            "players/unlink_protocol",
+            {"protocol_id": "ap_den"},
+        )
