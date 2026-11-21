@@ -443,3 +443,157 @@ def test_browse_roots_are_matched_by_the_instance_in_their_uri() -> None:
     )
 
     assert result == [allowed, library]
+<<<<<<< provider
+||||||| upstream-base
+
+
+async def _kitchen_and_den(scenario: Scenario) -> tuple[str, str]:
+    """Attach the AirPlay protocols ap_kitchen and ap_den, and return the ids of their players."""
+    airplay = await scenario.add_provider("airplay")
+    for protocol_id, name, mac in (
+        ("ap_kitchen", "Kitchen", "54:78:C9:E6:0D:A0"),
+        ("ap_den", "Den", "54:78:C9:E6:0D:B0"),
+    ):
+        protocol = airplay.protocol(
+            protocol_id, name, role="audio", identifiers={IdentifierType.MAC_ADDRESS: mac}
+        )
+        await scenario.register(protocol)
+    return (
+        scenario.single_player(scenario.protocol("ap_kitchen")).player_id,
+        scenario.single_player(scenario.protocol("ap_den")).player_id,
+    )
+
+
+async def test_unlink_protocol_of_a_player_of_the_caller_is_permitted(scenario: Scenario) -> None:
+    """A protocol is checked as the player it is attached to."""
+    kitchen_id, _den_id = await _kitchen_and_den(scenario)
+
+    enforce_target_filters(
+        scenario.mass,
+        _user(players=(kitchen_id,)),
+        "players/unlink_protocol",
+        {"protocol_id": "ap_kitchen"},
+    )
+
+
+@pytest.mark.parametrize("protocol_id", ["ap_den", "ap_unknown"])
+async def test_unlink_protocol_outside_the_players_of_the_caller_is_refused(
+    scenario: Scenario, protocol_id: str
+) -> None:
+    """A protocol of another player, or of no player, is refused like a player outside the list."""
+    kitchen_id, _den_id = await _kitchen_and_den(scenario)
+
+    with pytest.raises(InsufficientPermissions, match=_NOT_PERMITTED):
+        enforce_target_filters(
+            scenario.mass,
+            _user(players=(kitchen_id,)),
+            "players/unlink_protocol",
+            {"protocol_id": protocol_id},
+        )
+
+
+async def test_unlink_protocol_that_is_not_attached_is_checked_as_its_stored_player(
+    scenario: Scenario,
+) -> None:
+    """The protocol of a disabled player is detached: the player its config names counts."""
+    kitchen_id, den_id = await _kitchen_and_den(scenario)
+    await scenario.disable(den_id)
+    assert scenario.mass.players.get_protocol("ap_den") is None
+
+    enforce_target_filters(
+        scenario.mass,
+        _user(players=(den_id,)),
+        "players/unlink_protocol",
+        {"protocol_id": "ap_den"},
+    )
+    with pytest.raises(InsufficientPermissions, match=_NOT_PERMITTED):
+        enforce_target_filters(
+            scenario.mass,
+            _user(players=(kitchen_id,)),
+            "players/unlink_protocol",
+            {"protocol_id": "ap_den"},
+        )
+=======
+
+
+def test_the_live_sources_folder_is_open_to_a_filtered_user() -> None:
+    """The folder of the live sources is no music source, so the provider filter lets it through."""
+    folder = BrowseFolder(
+        item_id="root",
+        provider="live_sources",
+        path="live_sources://",
+        name="Live sources",
+        uri="live_sources://",
+    )
+
+    enforce_target_filters(MagicMock(), _user(), "music/browse", {"path": "live_sources://"})
+    assert filter_collection_result(_user(), "music/browse", [folder]) == [folder]
+
+
+async def _kitchen_and_den(scenario: Scenario) -> tuple[str, str]:
+    """Attach the AirPlay protocols ap_kitchen and ap_den, and return the ids of their players."""
+    airplay = await scenario.add_provider("airplay")
+    for protocol_id, name, mac in (
+        ("ap_kitchen", "Kitchen", "54:78:C9:E6:0D:A0"),
+        ("ap_den", "Den", "54:78:C9:E6:0D:B0"),
+    ):
+        protocol = airplay.protocol(
+            protocol_id, name, role="audio", identifiers={IdentifierType.MAC_ADDRESS: mac}
+        )
+        await scenario.register(protocol)
+    return (
+        scenario.single_player(scenario.protocol("ap_kitchen")).player_id,
+        scenario.single_player(scenario.protocol("ap_den")).player_id,
+    )
+
+
+async def test_unlink_protocol_of_a_player_of_the_caller_is_permitted(scenario: Scenario) -> None:
+    """A protocol is checked as the player it is attached to."""
+    kitchen_id, _den_id = await _kitchen_and_den(scenario)
+
+    enforce_target_filters(
+        scenario.mass,
+        _user(players=(kitchen_id,)),
+        "players/unlink_protocol",
+        {"protocol_id": "ap_kitchen"},
+    )
+
+
+@pytest.mark.parametrize("protocol_id", ["ap_den", "ap_unknown"])
+async def test_unlink_protocol_outside_the_players_of_the_caller_is_refused(
+    scenario: Scenario, protocol_id: str
+) -> None:
+    """A protocol of another player, or of no player, is refused like a player outside the list."""
+    kitchen_id, _den_id = await _kitchen_and_den(scenario)
+
+    with pytest.raises(InsufficientPermissions, match=_NOT_PERMITTED):
+        enforce_target_filters(
+            scenario.mass,
+            _user(players=(kitchen_id,)),
+            "players/unlink_protocol",
+            {"protocol_id": protocol_id},
+        )
+
+
+async def test_unlink_protocol_that_is_not_attached_is_checked_as_its_stored_player(
+    scenario: Scenario,
+) -> None:
+    """The protocol of a disabled player is detached: the player its config names counts."""
+    kitchen_id, den_id = await _kitchen_and_den(scenario)
+    await scenario.disable(den_id)
+    assert scenario.mass.players.get_protocol("ap_den") is None
+
+    enforce_target_filters(
+        scenario.mass,
+        _user(players=(den_id,)),
+        "players/unlink_protocol",
+        {"protocol_id": "ap_den"},
+    )
+    with pytest.raises(InsufficientPermissions, match=_NOT_PERMITTED):
+        enforce_target_filters(
+            scenario.mass,
+            _user(players=(kitchen_id,)),
+            "players/unlink_protocol",
+            {"protocol_id": "ap_den"},
+        )
+>>>>>>> upstream-head
