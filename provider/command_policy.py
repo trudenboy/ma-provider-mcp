@@ -365,6 +365,14 @@ EXACT_POLICIES: dict[str, CommandDecision] = {
         _CONTROL_ANNOTATIONS,
         frozenset({str(Capability.CONFIG_WRITE_PLAYER)}),
     ),
+<<<<<<< provider
+||||||| upstream-base
+    "players/create_multi_channel_player": _destructive_write(Capability.CONFIG_WRITE_PLAYER),
+=======
+    "players/create_multi_channel_player": _destructive_write(Capability.CONFIG_WRITE_PLAYER),
+    "players/add_multi_channel_speaker": _destructive_write(Capability.CONFIG_WRITE_PLAYER),
+    "players/remove_multi_channel_speaker": _destructive_write(Capability.CONFIG_WRITE_PLAYER),
+>>>>>>> upstream-head
     "players/remove_group_player": _destructive_write(Capability.CONFIG_WRITE_PLAYER),
     "players/remove": _destructive_write(Capability.CONFIG_WRITE_PLAYER),
     "players/add_currently_playing_to_favorites": CommandDecision(
