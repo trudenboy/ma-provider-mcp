@@ -735,8 +735,14 @@ def _config_entries_sync(mass: Any, arguments: Mapping[str, Any]) -> Any | None:
     try:
         getter_name, target = _config_entries_target(arguments)
         entries = getattr(mass.config, getter_name)(target)
+<<<<<<< provider
     except Exception as err:
         LOGGER.debug("Config entries are not readable synchronously: %s", err)
+||||||| upstream-base
+    except Exception:
+=======
+    except ValueError, AttributeError:
+>>>>>>> upstream-head
         return None
     if inspect.isawaitable(entries):
         _close_awaitable(entries)
@@ -841,8 +847,14 @@ def _setup_flow_step_sync(mass: Any, flow_id: str) -> Any | None:
     if callable(getter):
         try:
             step = getter(flow_id)
+<<<<<<< provider
         except Exception as err:
             LOGGER.debug("Setup flow %s is not readable synchronously: %s", flow_id, err)
+||||||| upstream-base
+        except Exception:
+=======
+        except Exception:  # noqa: BLE001 - getter is any callable, failure means no step
+>>>>>>> upstream-head
             step = None
         if inspect.isawaitable(step):
             _close_awaitable(step)

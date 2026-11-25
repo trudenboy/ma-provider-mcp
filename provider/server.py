@@ -400,8 +400,14 @@ async def _tag_lookup(mcp: Any, kind: str, key: str) -> set[str] | None:
             obj = await mcp.get_prompt(key)
         else:  # pragma: no cover - kind is Literal-typed at the caller
             return None
+<<<<<<< provider
     except Exception as err:
         LOGGER.debug("Could not resolve MCP %s %r for tag lookup: %s", kind, key, err)
+||||||| upstream-base
+    except Exception:
+=======
+    except Exception:  # noqa: BLE001 - any lookup failure hides the component
+>>>>>>> upstream-head
         return None
     if obj is None:
         return None

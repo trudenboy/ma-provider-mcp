@@ -152,7 +152,13 @@ def _bounded_event_data(value: Any) -> Any:
             string_cap=1024,
             max_depth=4,
         ).value
+<<<<<<< provider
     except Exception:  # ma-allow: MA002 debug event buffer must never break the event callback
+||||||| upstream-base
+    except Exception:
+=======
+    except Exception:  # noqa: BLE001 - event payloads are arbitrary objects
+>>>>>>> upstream-head
         return "<unserializable event data>"
 
 
@@ -176,7 +182,13 @@ def _event_data(event: Any) -> Any:
         value = event.data
     except AttributeError:
         value = None
+<<<<<<< provider
     except Exception:  # ma-allow: MA002 event data getter must not break the callback
+||||||| upstream-base
+    except Exception:
+=======
+    except Exception:  # noqa: BLE001 - event payloads are arbitrary objects
+>>>>>>> upstream-head
         return "<unserializable event data>"
     return _bounded_event_data(value)
 
@@ -185,7 +197,13 @@ def _safe_attr(value: Any, name: str, default: Any) -> Any:
     """Read one event attribute while isolating custom descriptors."""
     try:
         return getattr(value, name, default)
+<<<<<<< provider
     except Exception:  # ma-allow: MA002 custom event descriptor must not break the event callback
+||||||| upstream-base
+    except Exception:
+=======
+    except Exception:  # noqa: BLE001 - event attributes can run arbitrary code
+>>>>>>> upstream-head
         return default
 
 
@@ -193,6 +211,12 @@ def _safe_text(value: Any) -> str:
     """Convert event metadata to a bounded string without invoking a failing repr."""
     try:
         text = str(value)
+<<<<<<< provider
     except Exception:  # ma-allow: MA002 failing __str__ must not break the event callback
+||||||| upstream-base
+    except Exception:
+=======
+    except Exception:  # noqa: BLE001 - event values can run arbitrary code
+>>>>>>> upstream-head
         return "<unavailable>"
     return text if len(text) <= 1024 else f"{text[:1024]}…({len(text) - 1024} more chars)"
