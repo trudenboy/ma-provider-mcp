@@ -277,6 +277,91 @@ async def test_queue_resource_returns_json_text_for_brief(mock_mass: MagicMock) 
     mock_mass.player_queues.items.assert_called_once_with("q1", limit=500)
 
 
+<<<<<<< provider
+||||||| upstream-base
+async def test_queue_resource_takes_a_legacy_id_of_the_player(mock_mass: MagicMock) -> None:
+    """A queue URI naming the player by a legacy id returns that player's queue and items."""
+    queues = PlayerQueuesController.__new__(PlayerQueuesController)
+    queues.mass = SimpleNamespace(
+        players=SimpleNamespace(
+            resolve_player_id=lambda player_id: {"old-q1": "q1"}.get(player_id, player_id)
+        )
+    )
+    queues._queue_data = {
+        "q1": PlayerQueueData(
+            queue=PlayerQueue(
+                queue_id="q1", active=True, display_name="Kitchen", available=True, items=2
+            ),
+            items=[
+                QueueItem(queue_id="q1", queue_item_id=str(i), name=f"track-{i}", duration=180)
+                for i in range(2)
+            ],
+        )
+    }
+    mock_mass.player_queues = queues
+
+    mcp: FastMCP = FastMCP(name="t")
+    register_player_resources(mcp, mock_mass)
+    async with Client(mcp) as client:
+        contents = await client.read_resource("queue://old-q1")
+
+    parsed = json.loads(next(c.text for c in contents if hasattr(c, "text")))
+    assert parsed["queue_id"] == "q1"
+    assert [item["name"] for item in parsed["items"]] == ["track-0", "track-1"]
+
+
+=======
+@pytest.mark.parametrize(
+    ("index_in_buffer", "last_locked_index", "expected"),
+    [(None, None, 3), (3, 2, 3), (3, 3, 4)],
+    ids=["nothing buffered", "a replaceable buffered row", "a locked buffered row"],
+)
+def test_queue_brief_inserts_behind_the_rows_the_player_locked(
+    index_in_buffer: int | None, last_locked_index: int | None, expected: int
+) -> None:
+    """New rows can go right behind the playing row and every row the player locked."""
+    queue = SimpleNamespace(
+        queue_id="q1",
+        current_index=2,
+        index_in_buffer=index_in_buffer,
+        last_locked_index=last_locked_index,
+    )
+
+    assert to_brief_queue(queue).next_insertable_index == expected
+
+
+async def test_queue_resource_takes_a_legacy_id_of_the_player(mock_mass: MagicMock) -> None:
+    """A queue URI naming the player by a legacy id returns that player's queue and items."""
+    queues = PlayerQueuesController.__new__(PlayerQueuesController)
+    queues.mass = SimpleNamespace(
+        players=SimpleNamespace(
+            resolve_player_id=lambda player_id: {"old-q1": "q1"}.get(player_id, player_id)
+        )
+    )
+    queues._queue_data = {
+        "q1": PlayerQueueData(
+            queue=PlayerQueue(
+                queue_id="q1", active=True, display_name="Kitchen", available=True, items=2
+            ),
+            items=[
+                QueueItem(queue_id="q1", queue_item_id=str(i), name=f"track-{i}", duration=180)
+                for i in range(2)
+            ],
+        )
+    }
+    mock_mass.player_queues = queues
+
+    mcp: FastMCP = FastMCP(name="t")
+    register_player_resources(mcp, mock_mass)
+    async with Client(mcp) as client:
+        contents = await client.read_resource("queue://old-q1")
+
+    parsed = json.loads(next(c.text for c in contents if hasattr(c, "text")))
+    assert parsed["queue_id"] == "q1"
+    assert [item["name"] for item in parsed["items"]] == ["track-0", "track-1"]
+
+
+>>>>>>> upstream-head
 async def test_queue_resource_returns_null_for_missing(mock_mass: MagicMock) -> None:
     """A missing queue resolves to the literal ``"null"`` — no follow-up MA calls."""
     mock_mass.player_queues.get.return_value = None
